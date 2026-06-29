@@ -61,7 +61,7 @@ let coingeckoInterval: ReturnType<typeof setInterval> | null = null;
 // ── Socket.IO server ────────────────────────────────────────────────
 const io = new Server({
   cors: {
-    origin: true, // Allow all origins (preview panel uses space-z.ai domain)
+    origin: true,
     methods: ["GET", "POST"],
   },
 });

@@ -82,7 +82,6 @@ export default function AITradeSignals() {
     setCountdown(60);
   }, []);
 
-  // Auto-refresh countdown
   useEffect(() => {
     const timer = setInterval(() => {
       setCountdown((prev) => {
@@ -98,7 +97,6 @@ export default function AITradeSignals() {
 
   return (
     <div className="space-y-8 animate-fade-in-up">
-      {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
           <h1 className="text-4xl font-bold gradient-text-2">AI Trade Signals</h1>
@@ -114,18 +112,14 @@ export default function AITradeSignals() {
           </Button>
         </div>
       </div>
-
       <Separator className="opacity-20" />
 
-      {/* Signal Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5 stagger-children">
         {signals.map((s) => {
           const macdBullish = s.macdValue > s.macdSignal;
           const rsiColor = s.rsi > 70 ? '#ef4444' : s.rsi < 30 ? '#10b981' : '#f59e0b';
-
           return (
             <div key={s.symbol} className="glass-card-3d p-5 flex flex-col gap-4">
-              {/* Coin header + signal badge */}
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-foreground text-lg font-bold">{s.symbol}</p>
@@ -136,7 +130,6 @@ export default function AITradeSignals() {
                 </Badge>
               </div>
 
-              {/* RSI */}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground text-xs uppercase tracking-wider">RSI</span>
@@ -154,14 +147,11 @@ export default function AITradeSignals() {
                 </div>
               </div>
 
-              {/* MACD */}
               <div className="space-y-1">
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground text-xs uppercase tracking-wider">MACD</span>
                   <div className="flex items-center gap-1.5">
-                    <span
-                      className={`w-2 h-2 rounded-full ${macdBullish ? 'bg-emerald-400' : 'bg-red-400'}`}
-                    />
+                    <span className={`w-2 h-2 rounded-full ${macdBullish ? 'bg-emerald-400' : 'bg-red-400'}`} />
                     <span className={`text-sm font-semibold tabular-nums ${macdBullish ? 'price-up' : 'price-down'}`}>
                       {s.macdValue.toFixed(2)}
                     </span>
@@ -172,7 +162,6 @@ export default function AITradeSignals() {
                 </p>
               </div>
 
-              {/* Confidence */}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground text-xs uppercase tracking-wider">Confidence</span>

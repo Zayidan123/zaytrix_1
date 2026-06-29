@@ -15,36 +15,30 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-
 const HOLDING_COLORS: Record<string, string> = {
   BTC: '#f59e0b',
   ETH: '#10b981',
   SOL: '#06b6d4',
   BNB: '#f43f5e',
 };
-
 export default function CryptoHub() {
   const { holdings, assets, addTransaction } = useCryptoStore();
   const [tradeType, setTradeType] = useState<'BUY' | 'SELL'>('BUY');
   const [tradeCoin, setTradeCoin] = useState('BTC');
   const [tradeAmount, setTradeAmount] = useState('');
-
   const totalValue = useMemo(
     () => holdings.reduce((s, h) => s + h.value, 0),
     [holdings]
   );
-
   const totalPnL = useMemo(
     () => holdings.reduce((s, h) => s + h.pnl, 0),
     [holdings]
   );
-
   const bestPerformer = useMemo(
     () =>
       [...holdings].sort((a, b) => b.pnlPercent - a.pnlPercent)[0] ?? null,
     [holdings]
   );
-
   // Donut chart data
   const donutData = useMemo(() => {
     const total = holdings.reduce((s, h) => s + h.value, 0);
@@ -52,21 +46,18 @@ export default function CryptoHub() {
       symbol: h.symbol,
       value: h.value,
       pct: total > 0 ? (h.value / total) * 100 : 0,
-      color: HOLDING_COLORS[h.symbol] ?? '#f59e0b',
+      color: HOLDING_COLORS[h.symbol] ?? '#8b5cf6',
     }));
   }, [holdings]);
-
   const radius = 80;
   const circumference = 2 * Math.PI * radius;
-
-  const donutSegments = useMemo(() => {
-    return donutData.reduce((acc, d) => {
-      const segLen = (d.pct / 100) * circumference;
-      const offset = -(acc.length > 0 ? acc[acc.length - 1].offset + acc[acc.length - 1].segLen : 0);
-      return [...acc, { ...d, segLen, offset }];
-    }, [] as { symbol: string; value: number; pct: number; color: string; segLen: number; offset: number }[]);
-  }, [donutData, circumference]);
-
+  let cumulativeOffset = 0;
+  const donutSegments = donutData.map((d) => {
+    const segLen = (d.pct / 100) * circumference;
+    const offset = -cumulativeOffset;
+    cumulativeOffset += segLen;
+    return { ...d, segLen, offset };
+  });
   const handleSubmitTrade = () => {
     const amount = parseFloat(tradeAmount);
     if (!amount || amount <= 0) return;
@@ -84,12 +75,6 @@ export default function CryptoHub() {
     });
     setTradeAmount('');
   };
-
-  const estimatedTotal =
-    tradeAmount && !isNaN(parseFloat(tradeAmount))
-      ? parseFloat(tradeAmount) * (assets.find((a) => a.symbol === tradeCoin)?.price ?? 0)
-      : 0;
-
   return (
     <div className="space-y-8 animate-fade-in-up">
       {/* Header */}
@@ -97,34 +82,32 @@ export default function CryptoHub() {
         <h1 className="text-4xl font-bold gradient-text-1">Portfolio</h1>
         <p className="text-muted-foreground mt-1">Manage your crypto holdings and trades</p>
       </div>
-
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 stagger-children">
         <div className="glass-card-3d p-6">
           <p className="text-muted-foreground text-sm mb-1">Total Value</p>
-          <p className="text-3xl font-bold text-foreground tabular-nums">{formatPrice(totalValue)}</p>
+          <p className="text-foreground text-3xl font-bold">{formatPrice(totalValue)}</p>
         </div>
         <div className="glass-card-3d p-6">
           <p className="text-muted-foreground text-sm mb-1">Total PnL</p>
-          <p className={`text-3xl font-bold text-foreground tabular-nums ${totalPnL >= 0 ? 'price-up' : 'price-down'}`}>
-            {totalPnL >= 0 ? '+' : '-'}{formatPrice(Math.abs(totalPnL))}
+          <p className={`text-foreground text-3xl font-bold ${totalPnL >= 0 ? 'price-up' : 'price-down'}`}>
+            {formatPrice(Math.abs(totalPnL))}
           </p>
         </div>
         <div className="glass-card-3d p-6">
           <p className="text-muted-foreground text-sm mb-1">Best Performer</p>
           {bestPerformer ? (
-            <p className="text-3xl font-bold text-foreground">
+            <p className="text-foreground text-3xl font-bold">
               {bestPerformer.symbol}
-              <span className={`text-lg ml-2 tabular-nums ${bestPerformer.pnlPercent >= 0 ? 'price-up' : 'price-down'}`}>
+              <span className={`text-lg ml-2 ${bestPerformer.pnlPercent >= 0 ? 'price-up' : 'price-down'}`}>
                 {formatPercent(bestPerformer.pnlPercent)}
               </span>
             </p>
           ) : (
-            <p className="text-3xl font-bold text-foreground">—</p>
+            <p className="text-foreground text-3xl font-bold">—</p>
           )}
         </div>
       </div>
-
       {/* Chart + Table Row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Donut Chart */}
@@ -147,10 +130,10 @@ export default function CryptoHub() {
                 className="transition-all duration-700"
               />
             ))}
-            <text x="100" y="96" textAnchor="middle" fill="#f5f5f7" fontSize="16" fontWeight="700">
+            <text x="100" y="96" textAnchor="middle" className="fill-foreground text-2xl font-bold" fontSize="20" fontWeight="700">
               {formatPrice(totalValue)}
             </text>
-            <text x="100" y="114" textAnchor="middle" fill="#9ca3af" fontSize="10">
+            <text x="100" y="116" textAnchor="middle" className="fill-muted-foreground" fontSize="10">
               Total Value
             </text>
           </svg>
@@ -165,7 +148,6 @@ export default function CryptoHub() {
             ))}
           </div>
         </div>
-
         {/* Holdings Table */}
         <div className="glass-card-3d p-6 lg:col-span-2 overflow-x-auto">
           <p className="text-muted-foreground text-sm mb-4">Holdings</p>
@@ -187,7 +169,7 @@ export default function CryptoHub() {
                     <div className="flex items-center gap-2">
                       <span
                         className="w-2.5 h-2.5 rounded-full inline-block"
-                        style={{ backgroundColor: HOLDING_COLORS[h.symbol] ?? '#f59e0b' }}
+                        style={{ backgroundColor: HOLDING_COLORS[h.symbol] ?? '#8b5cf6' }}
                       />
                       <span className="text-foreground font-medium">{h.symbol}</span>
                       <span className="text-muted-foreground text-xs">{h.name}</span>
@@ -203,7 +185,7 @@ export default function CryptoHub() {
                     {formatPrice(h.currentPrice)}
                   </td>
                   <td className={`text-right py-3 pr-4 tabular-nums font-medium ${h.pnl >= 0 ? 'price-up' : 'price-down'}`}>
-                    {h.pnl >= 0 ? '+' : ''}{formatPrice(h.pnl)}
+                    {formatPrice(Math.abs(h.pnl))}
                   </td>
                   <td className={`text-right py-3 tabular-nums font-medium ${h.pnlPercent >= 0 ? 'price-up' : 'price-down'}`}>
                     {formatPercent(h.pnlPercent)}
@@ -214,9 +196,7 @@ export default function CryptoHub() {
           </table>
         </div>
       </div>
-
       <Separator className="opacity-20" />
-
       {/* Quick Trade Panel */}
       <div className="glass-card-3d p-6 max-w-2xl">
         <p className="text-foreground text-lg font-semibold mb-4">Quick Trade</p>
@@ -227,21 +207,19 @@ export default function CryptoHub() {
             <div className="flex gap-2">
               <Button
                 variant={tradeType === 'BUY' ? 'default' : 'outline'}
-                className={tradeType === 'BUY' ? 'bg-emerald-600 hover:bg-emerald-700 text-foreground' : 'border-white/10 text-foreground'}
+                className={tradeType === 'BUY' ? 'bg-emerald-600 hover:bg-emerald-700 text-foreground' : ''}
                 onClick={() => setTradeType('BUY')}
               >
                 BUY
               </Button>
               <Button
                 variant={tradeType === 'SELL' ? 'destructive' : 'outline'}
-                className={tradeType === 'SELL' ? 'text-foreground' : 'border-white/10 text-foreground'}
                 onClick={() => setTradeType('SELL')}
               >
                 SELL
               </Button>
             </div>
           </div>
-
           {/* Coin Selector */}
           <div className="space-y-2">
             <Label className="text-muted-foreground">Coin</Label>
@@ -258,7 +236,6 @@ export default function CryptoHub() {
               </SelectContent>
             </Select>
           </div>
-
           {/* Amount */}
           <div className="space-y-2">
             <Label className="text-muted-foreground">Amount</Label>
@@ -272,16 +249,16 @@ export default function CryptoHub() {
               className="bg-transparent border-white/10 text-foreground"
             />
           </div>
-
           {/* Estimated Total */}
           <div className="space-y-2 flex flex-col justify-end">
             <p className="text-muted-foreground text-sm">Estimated Total</p>
             <p className="text-foreground text-xl font-bold tabular-nums">
-              {estimatedTotal > 0 ? formatPrice(estimatedTotal) : '$0.00'}
+              {tradeAmount && !isNaN(parseFloat(tradeAmount))
+                ? formatPrice(parseFloat(tradeAmount) * (assets.find((a) => a.symbol === tradeCoin)?.price ?? 0))
+                : '$0.00'}
             </p>
           </div>
         </div>
-
         <div className="mt-4">
           <Button
             onClick={handleSubmitTrade}

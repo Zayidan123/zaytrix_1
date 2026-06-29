@@ -49,7 +49,6 @@ interface CompareResult {
 }
 
 const DEFAULT_DOC_1 = `Bitcoin is the first decentralized cryptocurrency created in 2009 by Satoshi Nakamoto. It uses a proof-of-work consensus mechanism and has a fixed supply of 21 million coins. Bitcoin transactions are verified by network nodes through cryptography and recorded on a public blockchain.`;
-
 const DEFAULT_DOC_2 = `Ethereum is a decentralized blockchain platform that enables smart contracts and decentralized applications. Created by Vitalik Buterin in 2015, it uses proof-of-stake consensus. Ethereum transactions are verified by validators and recorded on a distributed ledger. The platform supports programmable money and token creation.`;
 
 export default function AIDocCompare() {
@@ -72,7 +71,6 @@ export default function AIDocCompare() {
     });
   };
 
-  // Comparison matrix data: top words from both docs
   const matrixData = useMemo(() => {
     if (!result) return null;
     const allWords = Array.from(
@@ -90,13 +88,11 @@ export default function AIDocCompare() {
 
   return (
     <div className="space-y-8 animate-fade-in-up">
-      {/* Header */}
       <div>
         <h1 className="text-4xl font-bold gradient-text-3">Document Compare</h1>
         <p className="text-muted-foreground mt-1">Analyze similarity and word patterns between two documents</p>
       </div>
 
-      {/* Text Areas */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <div className="glass-card-3d p-5 space-y-3">
           <Label className="text-muted-foreground text-sm">Document A</Label>
@@ -120,29 +116,23 @@ export default function AIDocCompare() {
         </div>
       </div>
 
-      {/* Compare Button */}
-      <div className="flex justify-center">
-        <Button
-          onClick={handleCompare}
-          size="lg"
-          className="gradient-bg-3 text-foreground font-bold px-12"
-        >
-          Compare Documents
-        </Button>
-      </div>
+      <Button
+        onClick={handleCompare}
+        size="lg"
+        className="gradient-bg-3 text-foreground font-bold"
+      >
+        Compare Documents
+      </Button>
 
-      {/* Results */}
       {result && (
         <div className="space-y-6 stagger-children animate-fade-in-up">
           <Separator className="opacity-20" />
 
-          {/* Similarity Score */}
           <div className="glass-card-3d p-8 flex flex-col items-center text-center">
             <p className="text-muted-foreground text-sm uppercase tracking-wider mb-2">Jaccard Similarity</p>
             <p className="text-foreground text-7xl font-bold tabular-nums">
               {(result.similarity * 100).toFixed(1)}%
             </p>
-            {/* Similarity Bar */}
             <div className="w-full max-w-md h-3 rounded-full bg-white/5 mt-4 overflow-hidden">
               <div
                 className="h-full rounded-full transition-all duration-1000"
@@ -154,9 +144,7 @@ export default function AIDocCompare() {
             </div>
           </div>
 
-          {/* Word Frequency + Matrix */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-            {/* Doc A freq */}
             <div className="glass-card-3d p-5">
               <p className="text-foreground text-sm font-semibold mb-3">Top Words — Doc A</p>
               <div className="space-y-2">
@@ -169,7 +157,6 @@ export default function AIDocCompare() {
               </div>
             </div>
 
-            {/* Comparison Matrix */}
             <div className="glass-card-3d p-5 overflow-x-auto">
               <p className="text-foreground text-sm font-semibold mb-3">Comparison Matrix</p>
               <table className="w-full text-xs">
@@ -204,7 +191,6 @@ export default function AIDocCompare() {
               )}
             </div>
 
-            {/* Doc B freq */}
             <div className="glass-card-3d p-5">
               <p className="text-foreground text-sm font-semibold mb-3">Top Words — Doc B</p>
               <div className="space-y-2">
