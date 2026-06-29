@@ -72,4 +72,26 @@ Stage Summary:
 4. Add dark/light mode toggle (currently dark-only)
 5. Add more animation polish (parallax, 3D tilt on hover)
 6. Implement authentication with NextAuth.js
-7. Add Prisma database for persistent data storage
+7. Add Prisma database for persistent data storage---
+Task ID: 1
+Agent: Main Agent
+Task: Fix preview panel not showing anything, add security middleware, push to GitHub
+
+Work Log:
+- Diagnosed dev server not running — port 3000 had no process listening
+- Started dev server with `npx next dev -p 3000` (bun had stability issues)
+- Verified page renders correctly: 12 nav items, 5 gradient themes, dashboard content
+- VLM analysis confirmed 8/10 visual quality, all text readable, glass effects visible
+- Created src/middleware.ts with CSP, HSTS, X-Frame-Options, X-Content-Type-Options (no sandbox)
+- Updated next.config.ts: added allowedDevOrigins, removed output: standalone
+- Verified font visibility: #f5f5f7 on #06070a = 18:1 contrast ratio
+- All components use text-foreground / text-muted-foreground consistently
+- Updated README.md to v3.2.0
+- Pushed to GitHub: https://github.com/Zayidan123/z-capitalku.git
+
+Stage Summary:
+- Root cause: Dev server process dies between bash command invocations in sandbox
+- App is fully functional when server is running (HTTP 200, all components render)
+- Security middleware added without sandbox restrictions
+- Code pushed to GitHub (commit 849fde3)
+- Note: 3D glass theme, 5 gradients, and animations were already implemented in v3.1.0
