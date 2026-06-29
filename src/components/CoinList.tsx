@@ -3,13 +3,29 @@
 import { useMemo, useState } from 'react';
 import { useCryptoStore } from '@/lib/store';
 import { formatPrice, formatNumber, formatPercent } from '@/lib/helpers';
+
+const COIN_COLORS: Record<string, string> = {
+  BTC: '#f59e0b',
+  ETH: '#06b6d4',
+  SOL: '#a855f7',
+  BNB: '#f59e0b',
+  XRP: '#64748b',
+  ADA: '#06b6d4',
+  DOGE: '#f59e0b',
+  AVAX: '#ef4444',
+  DOT: '#ec4899',
+  MATIC: '#8b5cf6',
+};
+
 export default function CoinList() {
   const assets = useCryptoStore((s) => s.assets);
   const [search, setSearch] = useState('');
+
   const sortedAssets = useMemo(
     () => [...assets].sort((a, b) => b.marketCap - a.marketCap),
     [assets]
   );
+
   const filtered = useMemo(() => {
     if (!search.trim()) return sortedAssets;
     const q = search.toLowerCase();
@@ -18,10 +34,12 @@ export default function CoinList() {
         a.symbol.toLowerCase().includes(q) || a.name.toLowerCase().includes(q)
     );
   }, [sortedAssets, search]);
+
   return (
     <div className="animate-fade-in-up space-y-6 p-6">
       {/* Page Title */}
-      <h1 className="text-4xl font-bold gradient-text-2">Coin List</h1>
+      <h1 className="text-3xl md:text-4xl font-bold gradient-text-2">Coin List</h1>
+
       {/* Search Input */}
       <div className="relative max-w-md">
         <input
@@ -45,9 +63,10 @@ export default function CoinList() {
           />
         </svg>
       </div>
+
       {/* Table */}
-      <div className="glass-card-3d rounded-2xl overflow-x-auto min-w-[640px]">
-        <table className="w-full text-left">
+      <div className="glass-card-3d rounded-2xl overflow-x-auto">
+        <table className="w-full text-left min-w-[700px]">
           <thead>
             <tr className="border-b border-white/[0.06]">
               <th className="px-5 py-4 text-sm font-medium text-muted-foreground">#</th>
@@ -69,36 +88,56 @@ export default function CoinList() {
                 </td>
                 <td className="px-5 py-4">
                   <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-white/[0.08] flex items-center justify-center text-foreground font-bold text-xs">
+                    <div
+                      className="w-8 h-8 rounded-full flex items-center justify-center text-foreground font-bold text-xs"
+                      style={{
+                        backgroundColor: (COIN_COLORS[coin.symbol] || '#f59e0b') + '22',
+                        color: COIN_COLORS[coin.symbol] || '#f59e0b',
+                      }}
+                    >
                       {coin.symbol.slice(0, 2)}
                     </div>
                     <div>
-                      <span className="text-foreground font-semibold text-sm">
+                      <span className="text-foreground font-semibold text-sm block">
                         {coin.name}
                       </span>
-                      <span className="text-muted-foreground text-xs ml-2">
+                      <span className="text-muted-foreground text-xs">
                         {coin.symbol}
+                      </span>
+                    </div>
                   </div>
-                <td className="px-5 py-4 text-right text-foreground font-medium text-sm">
+                </td>
+                <td className="px-5 py-4 text-right text-foreground font-medium text-sm tabular-nums">
                   {formatPrice(coin.price)}
+                </td>
                 <td
-                  className={`px-5 py-4 text-right text-sm font-medium ${
+                  className={`px-5 py-4 text-right text-sm font-medium tabular-nums ${
                     coin.change24h >= 0 ? 'price-up' : 'price-down'
                   }`}
                 >
                   {formatPercent(coin.change24h)}
-                <td className="px-5 py-4 text-right text-foreground text-sm">
+                </td>
+                <td className="px-5 py-4 text-right text-foreground text-sm tabular-nums">
                   {formatNumber(coin.volume24h)}
+                </td>
+                <td className="px-5 py-4 text-right text-foreground text-sm tabular-nums">
                   {formatNumber(coin.marketCap)}
+                </td>
               </tr>
             ))}
             {filtered.length === 0 && (
               <tr>
+                <td
                   colSpan={6}
                   className="px-5 py-12 text-center text-muted-foreground"
+                >
                   No coins found matching &quot;{search}&quot;
+                </td>
+              </tr>
             )}
           </tbody>
         </table>
+      </div>
     </div>
+  );
 }

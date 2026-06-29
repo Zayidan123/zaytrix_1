@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
+
 const STOP_WORDS = new Set([
   'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
   'of', 'with', 'by', 'from', 'is', 'are', 'was', 'were', 'be', 'been',
@@ -17,6 +18,7 @@ const STOP_WORDS = new Set([
   'both', 'few', 'more', 'most', 'other', 'some', 'such', 'only', 'own',
   'same', 'into', 'over', 'after', 'before', 'between', 'through',
 ]);
+
 function tokenize(text: string): string[] {
   return text
     .toLowerCase()
@@ -24,27 +26,37 @@ function tokenize(text: string): string[] {
     .split(/\s+/)
     .filter((w) => w.length > 1 && !STOP_WORDS.has(w));
 }
+
 function wordFrequency(words: string[]): { word: string; count: number }[] {
   const freq: Record<string, number> = {};
   for (const w of words) freq[w] = (freq[w] ?? 0) + 1;
   return Object.entries(freq)
     .map(([word, count]) => ({ word, count }))
     .sort((a, b) => b.count - a.count);
+}
+
 function jaccard(a: Set<string>, b: Set<string>): number {
   const intersection = new Set(Array.from(a).filter((x) => b.has(x)));
   const union = new Set([...Array.from(a), ...Array.from(b)]);
   return union.size === 0 ? 0 : intersection.size / union.size;
+}
+
 interface CompareResult {
   similarity: number;
   freq1: { word: string; count: number }[];
   freq2: { word: string; count: number }[];
   commonWords: string[];
+}
+
 const DEFAULT_DOC_1 = `Bitcoin is the first decentralized cryptocurrency created in 2009 by Satoshi Nakamoto. It uses a proof-of-work consensus mechanism and has a fixed supply of 21 million coins. Bitcoin transactions are verified by network nodes through cryptography and recorded on a public blockchain.`;
+
 const DEFAULT_DOC_2 = `Ethereum is a decentralized blockchain platform that enables smart contracts and decentralized applications. Created by Vitalik Buterin in 2015, it uses proof-of-stake consensus. Ethereum transactions are verified by validators and recorded on a distributed ledger. The platform supports programmable money and token creation.`;
+
 export default function AIDocCompare() {
   const [doc1, setDoc1] = useState(DEFAULT_DOC_1);
   const [doc2, setDoc2] = useState(DEFAULT_DOC_2);
   const [result, setResult] = useState<CompareResult | null>(null);
+
   const handleCompare = () => {
     const words1 = tokenize(doc1);
     const words2 = tokenize(doc2);
@@ -59,6 +71,7 @@ export default function AIDocCompare() {
       commonWords,
     });
   };
+
   // Comparison matrix data: top words from both docs
   const matrixData = useMemo(() => {
     if (!result) return null;
@@ -74,6 +87,7 @@ export default function AIDocCompare() {
       isCommon: !!map1[word] && !!map2[word],
     }));
   }, [result]);
+
   return (
     <div className="space-y-8 animate-fade-in-up">
       {/* Header */}
@@ -81,6 +95,7 @@ export default function AIDocCompare() {
         <h1 className="text-4xl font-bold gradient-text-3">Document Compare</h1>
         <p className="text-muted-foreground mt-1">Analyze similarity and word patterns between two documents</p>
       </div>
+
       {/* Text Areas */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <div className="glass-card-3d p-5 space-y-3">
@@ -93,21 +108,34 @@ export default function AIDocCompare() {
             placeholder="Paste first document here..."
           />
         </div>
+        <div className="glass-card-3d p-5 space-y-3">
           <Label className="text-muted-foreground text-sm">Document B</Label>
+          <Textarea
             value={doc2}
             onChange={(e) => setDoc2(e.target.value)}
+            rows={10}
+            className="bg-transparent border-white/10 text-foreground resize-none"
             placeholder="Paste second document here..."
-      <Button
-        onClick={handleCompare}
-        size="lg"
-        className="gradient-bg-3 text-foreground font-bold"
-      >
-        Compare Documents
-      </Button>
+          />
+        </div>
+      </div>
+
+      {/* Compare Button */}
+      <div className="flex justify-center">
+        <Button
+          onClick={handleCompare}
+          size="lg"
+          className="gradient-bg-3 text-foreground font-bold px-12"
+        >
+          Compare Documents
+        </Button>
+      </div>
+
       {/* Results */}
       {result && (
         <div className="space-y-6 stagger-children animate-fade-in-up">
           <Separator className="opacity-20" />
+
           {/* Similarity Score */}
           <div className="glass-card-3d p-8 flex flex-col items-center text-center">
             <p className="text-muted-foreground text-sm uppercase tracking-wider mb-2">Jaccard Similarity</p>
@@ -125,6 +153,7 @@ export default function AIDocCompare() {
               />
             </div>
           </div>
+
           {/* Word Frequency + Matrix */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
             {/* Doc A freq */}
@@ -138,6 +167,8 @@ export default function AIDocCompare() {
                   </div>
                 ))}
               </div>
+            </div>
+
             {/* Comparison Matrix */}
             <div className="glass-card-3d p-5 overflow-x-auto">
               <p className="text-foreground text-sm font-semibold mb-3">Comparison Matrix</p>
@@ -171,9 +202,23 @@ export default function AIDocCompare() {
                   Highlighted rows = words shared in both documents
                 </p>
               )}
+            </div>
+
             {/* Doc B freq */}
+            <div className="glass-card-3d p-5">
               <p className="text-foreground text-sm font-semibold mb-3">Top Words — Doc B</p>
+              <div className="space-y-2">
                 {result.freq2.map((f) => (
+                  <div key={f.word} className="flex items-center justify-between text-sm">
+                    <span className="text-foreground">{f.word}</span>
+                    <span className="text-muted-foreground tabular-nums">{f.count}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
+}

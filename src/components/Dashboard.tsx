@@ -3,11 +3,13 @@
 import { useMemo } from 'react';
 import { useCryptoStore } from '@/lib/store';
 import { formatPrice, formatNumber, formatPercent } from '@/lib/helpers';
+
 function MiniSparkline({ positive }: { positive: boolean }) {
   const bars = useMemo(() => {
     return Array.from({ length: 12 }, () => 20 + Math.random() * 60);
   }, []);
   const color = positive ? '#22c55e' : '#ef4444';
+
   return (
     <div className="flex items-end gap-[2px] h-5 w-16">
       {bars.map((h, i) => (
@@ -24,33 +26,45 @@ function MiniSparkline({ positive }: { positive: boolean }) {
     </div>
   );
 }
+
 export default function Dashboard() {
   const assets = useCryptoStore((s) => s.assets);
   const holdings = useCryptoStore((s) => s.holdings);
+  const isConnected = useCryptoStore((s) => s.isConnected);
+
   const totalValue = useMemo(
     () => holdings.reduce((sum, h) => sum + h.value, 0),
     [holdings]
-  const totalChange = useMemo(() => {
-    if (holdings.length === 0) return 0;
-    return (
-      holdings.reduce((sum, h) => sum + h.pnl, 0) /
-      holdings.reduce((sum, h) => sum + h.value + h.pnl - h.pnlPercent * 0, 0) *
-      100
-    );
-  }, [holdings]);
+  );
+
   const weightedChange = useMemo(() => {
     const totalVal = holdings.reduce((sum, h) => sum + h.value, 0);
     if (totalVal === 0) return 0;
+    return (
       holdings.reduce((sum, h) => sum + h.pnlPercent * h.value, 0) / totalVal
+    );
+  }, [holdings]);
+
+  const totalPnl = useMemo(
+    () => holdings.reduce((sum, h) => sum + h.pnl, 0),
+    [holdings]
+  );
+
   const topGainer = useMemo(() => {
     if (assets.length === 0) return null;
     return assets.reduce((best, a) => (a.change24h > best.change24h ? a : best), assets[0]);
   }, [assets]);
+
   const totalMarketCap = useMemo(
     () => assets.reduce((sum, a) => sum + a.marketCap, 0),
     [assets]
+  );
+
   const topCoins = useMemo(
     () => [...assets].sort((a, b) => b.marketCap - a.marketCap).slice(0, 5),
+    [assets]
+  );
+
   const statCards = [
     {
       label: 'Total Portfolio Value',
@@ -58,21 +72,31 @@ export default function Dashboard() {
       change: formatPercent(weightedChange),
       positive: weightedChange >= 0,
     },
+    {
       label: '24h Change',
-      value: formatPrice(holdings.reduce((sum, h) => sum + h.pnl, 0)),
+      value: formatPrice(totalPnl),
       change: weightedChange >= 0 ? 'Profit' : 'Loss',
+      positive: weightedChange >= 0,
+    },
+    {
       label: 'Top Gainer',
-      value: topGainer ? `${topGainer.symbol}` : 'N/A',
+      value: topGainer ? topGainer.symbol : 'N/A',
       change: topGainer ? formatPercent(topGainer.change24h) : '—',
       positive: topGainer ? topGainer.change24h >= 0 : true,
+    },
+    {
       label: 'Market Cap',
       value: formatNumber(totalMarketCap),
       change: `${assets.length} Assets`,
       positive: true,
+    },
   ];
+
+  return (
     <div className="animate-fade-in-up space-y-8 p-6">
       {/* Page Title */}
-      <h1 className="text-4xl font-bold gradient-text-1">Dashboard</h1>
+      <h1 className="text-3xl md:text-4xl font-bold gradient-text-1">Dashboard</h1>
+
       {/* Stat Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 stagger-children">
         {statCards.map((card, i) => (
@@ -81,7 +105,7 @@ export default function Dashboard() {
             className="glass-card-3d p-5 rounded-2xl flex flex-col gap-2"
           >
             <span className="text-sm text-muted-foreground">{card.label}</span>
-            <span className="text-2xl font-bold text-foreground">{card.value}</span>
+            <span className="text-2xl font-bold text-foreground tabular-nums">{card.value}</span>
             <span
               className={`text-sm font-medium ${
                 card.positive ? 'price-up' : 'price-down'
@@ -92,6 +116,7 @@ export default function Dashboard() {
           </div>
         ))}
       </div>
+
       {/* Two-column layout */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Market Overview */}
@@ -111,32 +136,60 @@ export default function Dashboard() {
                     </span>
                     <span className="text-muted-foreground text-xs ml-2">
                       {coin.symbol}
+                    </span>
                   </div>
                 </div>
                 <MiniSparkline positive={coin.change24h >= 0} />
                 <div className="flex items-center gap-4 text-right">
-                  <span className="text-foreground font-medium text-sm min-w-[100px] text-right">
+                  <span className="text-foreground font-medium text-sm min-w-[100px] text-right tabular-nums">
                     {formatPrice(coin.price)}
                   </span>
                   <span
-                    className={`text-sm font-medium min-w-[70px] text-right ${
+                    className={`text-sm font-medium min-w-[70px] text-right tabular-nums ${
                       coin.change24h >= 0 ? 'price-up' : 'price-down'
                     }`}
                   >
                     {formatPercent(coin.change24h)}
+                  </span>
+                </div>
               </div>
             ))}
+          </div>
         </div>
+
         {/* Quick Actions */}
         <div className="glass-card-3d p-6 rounded-2xl flex flex-col gap-4">
           <h2 className="text-xl font-bold text-foreground mb-2">Quick Actions</h2>
           <button className="glass-card w-full py-4 rounded-xl text-foreground font-semibold text-lg transition-all hover:scale-[1.02] active:scale-[0.98]">
             <span className="mr-2">↗</span> Buy
           </button>
+          <button className="glass-card w-full py-4 rounded-xl text-foreground font-semibold text-lg transition-all hover:scale-[1.02] active:scale-[0.98]">
             <span className="mr-2">↘</span> Sell
+          </button>
+          <button className="glass-card w-full py-4 rounded-xl text-foreground font-semibold text-lg transition-all hover:scale-[1.02] active:scale-[0.98]">
             <span className="mr-2">⇄</span> Swap
+          </button>
+
+          {/* Connection Status */}
           <div className="mt-auto pt-4 border-t border-white/[0.06]">
             <div className="flex items-center gap-2">
-              <span className="status-dot connected" />
-              <span className="text-sm text-muted-foreground">Live data feed</span>
+              <span
+                className={`inline-block w-2 h-2 rounded-full ${
+                  isConnected ? 'bg-emerald-400' : 'bg-rose-400'
+                }`}
+                style={{
+                  boxShadow: isConnected
+                    ? '0 0 6px rgba(52, 211, 153, 0.5)'
+                    : '0 0 6px rgba(251, 113, 133, 0.5)',
+                }}
+              />
+              <span className="text-sm text-muted-foreground">
+                {isConnected ? 'Live data feed' : 'Demo mode'}
+              </span>
             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
