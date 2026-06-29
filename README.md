@@ -1,7 +1,7 @@
 # Z-CAPITAL | Advanced Crypto Intelligence Dashboard
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-3.1.0-amber?style=for-the-badge" alt="Version" />
+  <img src="https://img.shields.io/badge/version-3.2.0-amber?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/Next.js-16-black?style=for-the-badge&logo=next.js" alt="Next.js" />
   <img src="https://img.shields.io/badge/TypeScript-5-blue?style=for-the-badge&logo=typescript" alt="TypeScript" />
   <img src="https://img.shields.io/badge/Tailwind_CSS-4-cyan?style=for-the-badge&logo=tailwindcss" alt="Tailwind CSS" />
@@ -78,6 +78,7 @@ src/
 ├── app/
 │   ├── globals.css          # 3D glass theme, gradients, animations
 │   ├── layout.tsx           # Root layout with fonts + toaster
+│   ├── middleware.ts         # CSP + security headers (no sandbox)
 │   └── page.tsx             # Main router with 12 tab navigation
 ├── components/
 │   ├── ui/                  # shadcn/ui components
@@ -120,6 +121,13 @@ mini-services/
 - `.animate-pulse-glow` — Pulsing glow animation
 
 ## 📝 Version History
+
+### v3.2.0 — Security Headers + Stability
+- Added middleware.ts with CSP, HSTS, X-Frame-Options, X-Content-Type-Options (no sandbox)
+- Configured `allowedDevOrigins` in next.config.ts for cross-origin preview support
+- Removed `output: "standalone"` from next.config.ts (dev mode compatibility)
+- Verified font visibility: #f5f5f7 on #06070a (18:1 contrast ratio)
+- All components consistently use `text-foreground` / `text-muted-foreground`
 
 ### v3.1.0 — Enhanced 3D Glass Theme
 - Complete rewrite of all 12 components (fixed JSX corruption)
