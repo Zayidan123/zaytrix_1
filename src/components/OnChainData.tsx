@@ -608,9 +608,9 @@ export default function OnChainData() {
                 <div className="flex items-center justify-between mb-2">
                   <h3 className="text-base font-bold text-white flex items-center gap-2">
                     <Percent className="w-4 h-4 text-cyan-400" />
-                    Rata-rata Tingkat Pendanaan (Funding Rate) (8-Jam)
+                    Rata-rata Tingkat Pendanaan (Funding Rate) {liveMetrics?.fundingRates ? 'LIVE' : '(8-Jam)'}
                   </h3>
-                  <span className="text-xs bg-slate-800 px-2 py-0.5 rounded text-slate-400 font-mono">Metric #2</span>
+                  <span className="text-xs bg-slate-800 px-2 py-0.5 rounded text-slate-400 font-mono">Metric #2 {liveMetrics?.fundingRates ? '🔴 LIVE' : ''}</span>
                 </div>
                 <p className="text-xs text-slate-400 mb-4">
                   Pembayaran periodik antara trader long dan short. Nilai positif mengindikasikan dominasi pembeli (bullish leverage).
@@ -629,8 +629,10 @@ export default function OnChainData() {
                       <Legend verticalAlign="top" height={36} />
                       <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="3 3" label={{ value: 'Netral', fill: '#94a3b8', fontSize: 10, position: 'insideTopLeft' }} />
                       <Line type="monotone" dataKey="Binance" stroke="#f59e0b" strokeWidth={1.5} dot={false} />
-                      <Line type="monotone" dataKey="Bybit" stroke="#0ea5e9" strokeWidth={1.5} dot={false} />
-                      <Line type="monotone" dataKey="OKX" stroke="#ec4899" strokeWidth={1.5} dot={false} />
+                      {liveMetrics?.fundingRates && <Line type="monotone" dataKey="ETH" stroke="#06b6d4" strokeWidth={1.5} dot={false} />}
+                      {liveMetrics?.fundingRates && <Line type="monotone" dataKey="SOL" stroke="#a855f7" strokeWidth={1.5} dot={false} />}
+                      {!liveMetrics?.fundingRates && <Line type="monotone" dataKey="Bybit" stroke="#0ea5e9" strokeWidth={1.5} dot={false} />}
+                      {!liveMetrics?.fundingRates && <Line type="monotone" dataKey="OKX" stroke="#ec4899" strokeWidth={1.5} dot={false} />}
                     </RechartsLineChart>
                   </ResponsiveContainer>
                 </div>

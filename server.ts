@@ -3457,6 +3457,153 @@ async function getLiveBinanceDerivatives() {
 }
 
 
+// ============================================================================
+// LIVE ON-CHAIN METRICS API - Real data from Binance Futures, CoinGecko, Alternative.me
+// ============================================================================
+let metricsCache: any = null;
+let metricsCacheTime = 0;
+const METRICS_CACHE_TTL = 30000; // 30 seconds
+
+app.get("/api/onchain/metrics", async (req, res) => {
+  const now = Date.now();
+  if (metricsCache && now - metricsCacheTime < METRICS_CACHE_TTL) {
+    return res.json(metricsCache);
+  }
+
+  const result: any = { success: true, lastUpdated: new Date().toISOString() };
+
+  // --- 1. Binance Futures Funding Rate History (30 entries) for BTC, ETH, SOL ---
+  try {
+    const [btcFr, ethFr, solFr] = await Promise.all([
+      fetchWithTimeout("https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=30", {}, 5000).then(r => r.json()).catch(() => []),
+      fetchWithTimeout("https://fapi.binance.com/fapi/v1/fundingRate?symbol=ETHUSDT&limit=30", {}, 5000).then(r => r.json()).catch(() => []),
+      fetchWithTimeout("https://fapi.binance.com/fapi/v1/fundingRate?symbol=SOLUSDT&limit=30", {}, 5000).then(r => r.json()).catch(() => []),
+    ]);
+
+    const fundingRateMap = new Map<string, any[]>();
+    for (const item of btcFr) { const d = new Date(item.fundingTime).toLocaleDateString("id-ID", {month:"short",day:"numeric"}); const arr = fundingRateMap.get(d)||[]; arr.push({exchange:"Binance",rate:parseFloat(item.fundingRate)}); fundingRateMap.set(d,arr); }
+    for (const item of ethFr) { const d = new Date(item.fundingTime).toLocaleDateString("id-ID", {month:"short",day:"numeric"}); const arr = fundingRateMap.get(d)||[]; arr.push({exchange:"ETH",rate:parseFloat(item.fundingRate)}); fundingRateMap.set(d,arr); }
+    for (const item of solFr) { const d = new Date(item.fundingTime).toLocaleDateString("id-ID", {month:"short",day:"numeric"}); const arr = fundingRateMap.get(d)||[]; arr.push({exchange:"SOL",rate:parseFloat(item.fundingRate)}); fundingRateMap.set(d,arr); }
+
+    result.fundingRates = btcFr.slice(0,30).map((item, i) => {
+      const d = new Date(item.fundingTime).toLocaleDateString("id-ID", {month:"short",day:"numeric"});
+      return {
+        date: d,
+        Binance: parseFloat(btcFr[i]?.fundingRate || 0),
+        ETH: parseFloat(ethFr[i]?.fundingRate || 0),
+        SOL: parseFloat(solFr[i]?.fundingRate || 0),
+      };
+    });
+
+    result.currentFundingRates = {
+      BTC: btcFr.length > 0 ? parseFloat(btcFr[0].fundingRate) : null,
+      ETH: ethFr.length > 0 ? parseFloat(ethFr[0].fundingRate) : null,
+      SOL: solFr.length > 0 ? parseFloat(solFr[0].fundingRate) : null,
+    };
+  } catch(e: any) { console.error("[Metrics] Funding rate fetch failed:", e.message); }
+
+  // --- 2. Binance Futures Open Interest (current) ---
+  try {
+    const symbols = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT"];
+    const oiResults = await Promise.all(symbols.map(sym =>
+      fetchWithTimeout(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${sym}`, {}, 5000)
+        .then(r => r.json())
+        .catch(() => null)
+    ));
+    result.openInterest = {};
+    symbols.forEach((sym, i) => {
+      if (oiResults[i]) {
+        result.openInterest[sym.replace("USDT","")] = {
+          openInterest: parseFloat(oiResults[i].openInterest),
+          notionalValue: parseFloat(oiResults[i].notionalValue || 0),
+        };
+      }
+    });
+  } catch(e: any) { console.error("[Metrics] OI fetch failed:", e.message); }
+
+  // --- 3. CoinGecko Global Data (dominance, market cap, volume) ---
+  try {
+    const cgGlobal = await fetchWithTimeout("https://api.coingecko.com/api/v3/global", {}, 5000).then(r => r.json());
+    if (cgGlobal && cgGlobal.data) {
+      const d = cgGlobal.data;
+      result.market = {
+        btcDominance: d.market_cap_percentage?.btc || null,
+        ethDominance: d.market_cap_percentage?.eth || null,
+        totalMarketCap: d.total_market_cap?.usd || null,
+        totalVolume24h: d.total_volume?.usd || null,
+        activeCurrencies: d.active_cryptocurrencies || null,
+        marketCapChange24h: d.market_cap_change_percentage_24h_usd || null,
+      };
+    }
+  } catch(e: any) { console.error("[Metrics] CoinGecko global failed:", e.message); }
+
+  // --- 4. CoinGecko BTC Price History (30 days) ---
+  try {
+    const btcHistory = await fetchWithTimeout("https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=30&interval=daily", {}, 8000).then(r => r.json());
+    if (btcHistory && btcHistory.prices) {
+      result.btcPriceHistory = btcHistory.prices.map((p: number[]) => ({
+        date: new Date(p[0]).toLocaleDateString("id-ID", {month:"short",day:"numeric"}),
+        price: Math.round(p[1]),
+      }));
+    }
+    if (btcHistory && btcHistory.total_volumes) {
+      result.btcVolumeHistory = btcHistory.total_volumes.map((v: number[], i: number) => ({
+        date: result.btcPriceHistory?.[i]?.date || "",
+        volume: Math.round(v[1] / 1e6), // in millions
+      }));
+    }
+  } catch(e: any) { console.error("[Metrics] BTC price history failed:", e.message); }
+
+  // --- 5. Fear & Greed Index (Alternative.me) ---
+  try {
+    const fng = await fetchWithTimeout("https://api.alternative.me/fng/?limit=30", {}, 5000).then(r => r.json());
+    if (fng && fng.data) {
+      result.fearGreed = {
+        current: { value: parseInt(fng.data[0]?.value || 50), classification: fng.data[0]?.value_classification || "Neutral" },
+        history: fng.data.map((d: any) => ({
+          date: new Date(parseInt(d.timestamp) * 1000).toLocaleDateString("id-ID", {month:"short",day:"numeric"}),
+          value: parseInt(d.value),
+          classification: d.value_classification,
+        })),
+      };
+    }
+  } catch(e: any) { console.error("[Metrics] Fear & Greed failed:", e.message); }
+
+  // --- 6. Top Gainers/Losers from Binance Spot (server already has this) ---
+  try {
+    const binanceTickers = await fetchWithTimeout("https://api.binance.com/api/v3/ticker/24hr", {}, 5000).then(r => r.json()).catch(() => []);
+    if (Array.isArray(binanceTickers) && binanceTickers.length > 0) {
+      const usdtPairs = binanceTickers.filter((t: any) => t.symbol.endsWith("USDT") && parseFloat(t.quoteVolume) > 1000000);
+      const sorted = [...usdtPairs].sort((a: any, b: any) => parseFloat(b.priceChangePercent) - parseFloat(a.priceChangePercent));
+      result.gainers = sorted.slice(0, 10).map((t: any) => ({
+        symbol: t.symbol.replace("USDT", ""),
+        price: parseFloat(t.lastPrice),
+        change: parseFloat(parseFloat(t.priceChangePercent).toFixed(2)),
+        volume: formatCompactVolume(parseFloat(t.quoteVolume)),
+        volumeUsd: parseFloat(t.quoteVolume),
+      }));
+      result.losers = sorted.slice(-10).reverse().map((t: any) => ({
+        symbol: t.symbol.replace("USDT", ""),
+        price: parseFloat(t.lastPrice),
+        change: parseFloat(parseFloat(t.priceChangePercent).toFixed(2)),
+        volume: formatCompactVolume(parseFloat(t.quoteVolume)),
+        volumeUsd: parseFloat(t.quoteVolume),
+      }));
+    }
+  } catch(e: any) { console.error("[Metrics] Binance gainers/losers failed:", e.message); }
+
+  metricsCache = result;
+  metricsCacheTime = now;
+  return res.json(result);
+});
+
+function formatCompactVolume(val: number): string {
+  if (val >= 1e9) return `$${(val/1e9).toFixed(1)}B`;
+  if (val >= 1e6) return `$${(val/1e6).toFixed(1)}M`;
+  if (val >= 1e3) return `$${(val/1e3).toFixed(1)}K`;
+  return `$${val.toFixed(0)}`;
+}
+
 // GET ROUTE CALLING THE DATA RETRIEVAL DECODER
 app.get("/api/onchain/data", async (req, res) => {
   try {

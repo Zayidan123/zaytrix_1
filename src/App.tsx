@@ -37,6 +37,7 @@ import CoinsRankings from "./components/CoinsRankings";
 import { motion, AnimatePresence } from "motion/react";
 import { auth } from "./lib/firebase";
 import AuthScreen from "./components/AuthScreen";
+import SplashScreen from "./components/SplashScreen";
 
 export default function App() {
   const [activeTab, setActiveTab ] = useState("dashboard");
@@ -779,7 +780,18 @@ export default function App() {
   };
 
   if (!user) {
-    return <AuthScreen />;
+    return (
+      <SplashScreen
+        onComplete={() => {
+          useGlobalStore.getState().setUser({
+            uid: 'splash-user',
+            displayName: 'Z-Capital Trader',
+            email: 'trader@z-capital.com',
+            isAnonymous: true,
+          });
+        }}
+      />
+    );
   }
 
   return (
