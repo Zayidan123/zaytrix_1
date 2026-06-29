@@ -1,0 +1,1969 @@
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --color-brand-blue: #2563eb;
+  --color-brand-blue-hover: #1d4ed8;
+  --color-bg-base: #05070a;
+  --color-bg-panel: #0f172a;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+body {
+  background-color: #05070a;
+  color: #e2e8f0;
+  font-family: "Inter", sans-serif;
+}
+
+/* Custom premium scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #05070a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+
+/* Real-time moving marquee ticker style - ultra-smooth hardware-accelerated scrolling */
+@keyframes marquee {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  100% {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+.animate-marquee {
+  display: inline-flex;
+  width: max-content;
+  animation: marquee 90s linear infinite;
+  will-change: transform;
+  backface-visibility: hidden;
+  perspective: 1000px;
+}
+
+/* ==========================================================================
+   THEME STYLING CONFIGURATIONS (LIGHT / BLOOMBERG / HACKER TERMINAL)
+   ========================================================================== */
+
+/* 1. REFINED LIGHT MODE OVERRIDES WITH MAGNIFICENT MULTICOLOR GRADIENT */
+.theme-light {
+  background: linear-gradient(135deg, 
+    #ffffff 0%, 
+    #fff7ed 20%, /* soft orange */
+    #faf5ff 40%, /* soft purple */
+    #fdf2f8 60%, /* soft pink */
+    #f0f9ff 80%, /* soft sky blue */
+    #ffffff 100%
+  ) !important;
+  background-size: 300% 300% !important;
+  animation: light-theme-flow 18s ease infinite !important;
+  color: #0f172a !important;
+}
+
+@keyframes light-theme-flow {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.theme-light #app-sidebar,
+.theme-light aside {
+  background-color: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border-color: transparent !important;
+  border-style: none !important;
+  box-shadow: none !important;
+}
+
+.theme-light header,
+.theme-light footer {
+  background-color: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border-color: transparent !important;
+  border-style: none !important;
+  box-shadow: none !important;
+  color: #0f172a !important;
+}
+
+/* Override all deep color blocks, dark card classes, and dashboard plates in Light Mode */
+.theme-light .bg-\[\#05070A\],
+.theme-light .bg-slate-950,
+.theme-light .bg-\[\#0A1220\],
+.theme-light .bg-slate-900,
+.theme-light .bg-\[\#0F172A\],
+.theme-light .bg-\[\#0b0f19\],
+.theme-light .bg-\[\#0F192C\],
+.theme-light .bg-[#0F172A],
+.theme-light .bg-[#0b0f19],
+.theme-light .bg-[#0a0d14],
+.theme-light .bg-[#0e1420],
+.theme-light .bg-slate-900\/40,
+.theme-light .bg-slate-950\/70,
+.theme-light .bg-slate-950\/50,
+.theme-light .bg-slate-900\/50,
+.theme-light .bg-slate-900\/20,
+.theme-light .bg-slate-950\/40,
+.theme-light .bg-slate-900\/80,
+.theme-light .bg-slate-950\/80,
+.theme-light .bg-slate-900\/30 {
+  background-color: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border-color: transparent !important;
+  border-style: none !important;
+  box-shadow: none !important;
+  color: #0f172a !important;
+}
+
+.theme-light .bg-slate-800,
+.theme-light .bg-[#1e293b],
+.theme-light .bg-slate-800\/60,
+.theme-light .bg-slate-850\/80,
+.theme-light .bg-[#1E293B] {
+  background-color: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border-color: transparent !important;
+  border-style: none !important;
+  box-shadow: none !important;
+  color: #0f172a !important;
+}
+
+.theme-light select,
+.theme-light input,
+.theme-light textarea {
+  background-color: #ffffff !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+
+.theme-light input::placeholder {
+  color: #94a3b8 !important;
+}
+
+.theme-light .border-slate-800,
+.theme-light .border-\[\#1E293B\],
+.theme-light .border-slate-800\/65,
+.theme-light .border-slate-800\/60,
+.theme-light .border-[#1E293B],
+.theme-light .border-slate-850\/80,
+.theme-light .border-slate-900,
+.theme-light .border-slate-700/60,
+.theme-light border-white/5,
+.theme-light hr {
+  border-color: #e2e8f0 !important;
+}
+
+/* Pristine Font Accessibility Overrides in Light Mode */
+.theme-light .text-slate-100,
+.theme-light .text-slate-200,
+.theme-light .text-slate-350,
+.theme-light .text-slate-300,
+.theme-light .text-slate-100,
+.theme-light .text-gray-100,
+.theme-light .text-gray-200,
+.theme-light .text-slate-50,
+.theme-light h1,
+.theme-light h2,
+.theme-light h3,
+.theme-light h4 {
+  color: #0f172a !important;
+}
+
+.theme-light .text-slate-400,
+.theme-light .text-slate-500,
+.theme-light .text-slate-550,
+.theme-light .text-slate-600 {
+  color: #475569 !important;
+}
+
+/* Light mode high-contrast indicators instead of washed out neon green/red */
+.theme-light .text-amber-500,
+.theme-light .text-amber-400 {
+  color: #b45309 !important; /* high accessibility amber-700 */
+}
+
+.theme-light .text-emerald-400,
+.theme-light .text-emerald-500 {
+  color: #166534 !important; /* dark green-800 */
+}
+
+.theme-light .text-rose-400,
+.theme-light .text-rose-500 {
+  color: #9f1239 !important; /* dark rose-800 */
+}
+
+.theme-light .text-blue-400,
+.theme-light .text-blue-500 {
+  color: #1e40af !important; /* dark blue-800 */
+}
+
+.theme-light .border-amber-500\/20,
+.theme-light .border-amber-500\/30 {
+  border-color: rgba(180, 83, 9, 0.25) !important;
+}
+
+
+/* 2. RETRO BLOOMBERG TERMINAL OVERRIDES */
+.theme-bloomberg {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace !important;
+  background-color: #000000 !important;
+  color: #00ff00 !important;
+}
+
+.theme-bloomberg #app-sidebar,
+.theme-bloomberg header,
+.theme-bloomberg footer,
+.theme-bloomberg aside {
+  background-color: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border-color: transparent !important;
+  border-style: none !important;
+  box-shadow: none !important;
+}
+
+.theme-bloomberg #z-capital-app-root,
+.theme-bloomberg main,
+.theme-bloomberg .bg-\[\#05070A\],
+.theme-bloomberg .bg-slate-950,
+.theme-bloomberg .bg-[#0F172A],
+.theme-bloomberg .bg-slate-900,
+.theme-bloomberg .bg-slate-900\/40,
+.theme-bloomberg .bg-[#0b0f19],
+.theme-bloomberg .bg-[#0e1420],
+.theme-bloomberg .bg-slate-950\/70,
+.theme-bloomberg .bg-[#0a0d14],
+.theme-bloomberg .bg-slate-950\/40 {
+  background-color: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border-color: transparent !important;
+  border-style: none !important;
+  box-shadow: none !important;
+  color: #00ff00 !important;
+}
+
+.theme-bloomberg h1,
+.theme-bloomberg h2,
+.theme-bloomberg h3,
+.theme-bloomberg h4,
+.theme-bloomberg text,
+.theme-bloomberg .text-slate-100,
+.theme-bloomberg .text-slate-200,
+.theme-bloomberg .text-amber-500 {
+  color: #ff9900 !important; /* Bloomberg signature Orange */
+}
+
+.theme-bloomberg .text-slate-350,
+.theme-bloomberg .text-slate-400,
+.theme-bloomberg .text-slate-300 {
+  color: #ffdd00 !important; /* yellow secondary */
+}
+
+.theme-bloomberg .text-slate-500,
+.theme-bloomberg .text-slate-600 {
+  color: #00cf00 !important;
+}
+
+.theme-bloomberg .border-slate-800,
+.theme-bloomberg .border-slate-900,
+.theme-bloomberg .border-\[\#1E293B\],
+.theme-bloomberg .border-[#1E293B],
+.theme-bloomberg .border-slate-850\/80 {
+  border-color: transparent !important;
+  border-style: none !important;
+}
+
+.theme-bloomberg select,
+.theme-bloomberg input,
+.theme-bloomberg textarea {
+  background-color: #050505 !important;
+  border-color: #00ff00 !important;
+  color: #00ff00 !important;
+}
+
+
+/* 3. CYBER HACKER CONSOLE OVERRIDES */
+.theme-hacker {
+  font-family: "Fira Code", "Fira Mono", "JetBrains Mono", monospace !important;
+  background-color: #010501 !important;
+  color: #39ff14 !important; /* Matrix Neon Phosphor Green */
+}
+
+.theme-hacker #app-sidebar,
+.theme-hacker header,
+.theme-hacker footer,
+.theme-hacker aside {
+  background-color: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border-color: transparent !important;
+  border-style: none !important;
+  box-shadow: none !important;
+}
+
+.theme-hacker #z-capital-app-root,
+.theme-hacker main,
+.theme-hacker .bg-\[\#05070A\],
+.theme-hacker .bg-slate-950,
+.theme-hacker .bg-[#0F172A],
+.theme-hacker .bg-[#0b0f19],
+.theme-hacker .bg-[#0e1420],
+.theme-hacker .bg-slate-900,
+.theme-hacker .bg-slate-900\/40,
+.theme-hacker .bg-slate-950\/70,
+.theme-hacker .bg-[#0a0d14],
+.theme-hacker .bg-slate-950\/40 {
+  background-color: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border-color: transparent !important;
+  border-style: none !important;
+  box-shadow: none !important;
+  color: #39ff14 !important;
+}
+
+.theme-hacker .text-slate-100,
+.theme-hacker .text-slate-200,
+.theme-hacker .text-slate-350,
+.theme-hacker .text-slate-300,
+.theme-hacker .text-amber-500,
+.theme-hacker h1,
+.theme-hacker h2,
+.theme-hacker h3,
+.theme-hacker h4 {
+  color: #39ff14 !important;
+  text-shadow: 0 0 3px rgba(57, 255, 20, 0.4);
+}
+
+.theme-hacker .text-slate-400,
+.theme-hacker .text-slate-500,
+.theme-hacker .text-slate-650 {
+  color: #008800 !important;
+}
+
+.theme-hacker .border-slate-800,
+.theme-hacker .border-slate-900,
+.theme-hacker .border-\[\#1E293B\],
+.theme-hacker .border-[#1E293B],
+.theme-hacker .border-slate-850\/80 {
+  border-color: transparent !important;
+  border-style: none !important;
+}
+
+.theme-hacker select,
+.theme-hacker input,
+.theme-hacker textarea {
+  background-color: #000000 !important;
+  border-color: #008800 !important;
+  color: #39ff14 !important;
+}
+
+
+/* 4. GLASSMORPHISM ENHANCED CLASS OVERRIDES FOR ALL THEMES */
+
+/* A. Default / Dark / Slate Mode Glassmorphism Overrides */
+/* Default Mode / Dark / Slate Mode Container Glassmorphic Transparency */
+.bg-\[\#0F172A\],
+.bg-[#0F172A],
+.bg-[#0b0f19],
+.bg-[#0e1420],
+.bg-[#0a0d14],
+.bg-[#0A1220],
+.bg-[#0F192C],
+.bg-slate-900\/40,
+.bg-slate-900\/60,
+.bg-slate-900\/50,
+.bg-slate-900\/80,
+.bg-slate-900\/30,
+.bg-slate-900,
+.bg-slate-950,
+.bg-slate-950\/40,
+.bg-slate-950\/50,
+.bg-slate-950\/70,
+.bg-slate-950\/80,
+.bg-[#0f172a],
+#app-sidebar,
+aside,
+header,
+footer,
+.glassmorphism-active .bg-\[\#0F172A\],
+.glassmorphism-active .bg-[#0F172A],
+.glassmorphism-active .bg-[#0b0f19],
+.glassmorphism-active .bg-[#0e1420],
+.glassmorphism-active .bg-[#0a0d14],
+.glassmorphism-active .bg-[#0A1220],
+.glassmorphism-active .bg-[#0F192C],
+.glassmorphism-active .bg-slate-900\/40,
+.glassmorphism-active .bg-slate-900\/60,
+.glassmorphism-active .bg-slate-900\/50,
+.glassmorphism-active .bg-slate-900\/80,
+.glassmorphism-active .bg-slate-900\/30,
+.glassmorphism-active .bg-slate-900,
+.glassmorphism-active .bg-slate-950,
+.glassmorphism-active .bg-slate-950\/40,
+.glassmorphism-active .bg-slate-950\/50,
+.glassmorphism-active .bg-slate-950\/70,
+.glassmorphism-active .bg-slate-950\/80,
+.glassmorphism-active .bg-[#0f172a],
+.glassmorphism-active #app-sidebar,
+.glassmorphism-active aside,
+.glassmorphism-active header,
+.glassmorphism-active footer {
+  background-color: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: none !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+/* B. Light Mode Glassmorphism Overrides - Satin Translucent Pearl Glow */
+.theme-light.glassmorphism-active .bg-\[\#05070A\],
+.theme-light.glassmorphism-active .bg-slate-950,
+.theme-light.glassmorphism-active .bg-\[\#0A1220\],
+.theme-light.glassmorphism-active .bg-[#0e1420],
+.theme-light.glassmorphism-active .bg-slate-900,
+.theme-light.glassmorphism-active .bg-\[\#0F172A\],
+.theme-light.glassmorphism-active .bg-\[\#0b0f19\],
+.theme-light.glassmorphism-active .bg-\[\#0F192C\],
+.theme-light.glassmorphism-active .bg-slate-900\/40,
+.theme-light.glassmorphism-active .bg-slate-900\/60,
+.theme-light.glassmorphism-active .bg-slate-900\/50,
+.theme-light.glassmorphism-active .bg-slate-900\/80,
+.theme-light.glassmorphism-active .bg-[#0b0f19],
+.theme-light.glassmorphism-active .bg-[#0a0d14],
+.theme-light.glassmorphism-active .bg-[#0F172A],
+.theme-light.glassmorphism-active .bg-[#ffffff],
+.theme-light.glassmorphism-active aside,
+.theme-light.glassmorphism-active #app-sidebar,
+.theme-light.glassmorphism-active header,
+.theme-light.glassmorphism-active footer {
+  background-color: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: none !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+/* C. Bloomberg Retro Terminal Glassmorphism Overrides - Black Glass with Phosphor Green */
+.theme-bloomberg.glassmorphism-active .bg-\[\#0F172A\],
+.theme-bloomberg.glassmorphism-active .bg-[#0F172A],
+.theme-bloomberg.glassmorphism-active .bg-[#0b0f19],
+.theme-bloomberg.glassmorphism-active .bg-[#0e1420],
+.theme-bloomberg.glassmorphism-active .bg-[#0a0d14],
+.theme-bloomberg.glassmorphism-active .bg-[#0A1220],
+.theme-bloomberg.glassmorphism-active .bg-[#0F192C],
+.theme-bloomberg.glassmorphism-active .bg-slate-900,
+.theme-bloomberg.glassmorphism-active .bg-slate-900\/40,
+.theme-bloomberg.glassmorphism-active .bg-slate-900\/60,
+.theme-bloomberg.glassmorphism-active .bg-slate-900\/50,
+.theme-bloomberg.glassmorphism-active .bg-slate-900\/80,
+.theme-bloomberg.glassmorphism-active .bg-slate-950,
+.theme-bloomberg.glassmorphism-active .bg-slate-950\/40,
+.theme-bloomberg.glassmorphism-active .bg-slate-950\/50,
+.theme-bloomberg.glassmorphism-active .bg-slate-950\/70,
+.theme-bloomberg.glassmorphism-active .bg-slate-950\/80,
+.theme-bloomberg.glassmorphism-active #app-sidebar,
+.theme-bloomberg.glassmorphism-active aside,
+.theme-bloomberg.glassmorphism-active header,
+.theme-bloomberg.glassmorphism-active footer {
+  background-color: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: none !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+/* D. Cyber Hacker Console Glassmorphism Overrides - Translucent Matrix Green */
+.theme-hacker.glassmorphism-active .bg-\[\#0F172A\],
+.theme-hacker.glassmorphism-active .bg-[#0F172A],
+.theme-hacker.glassmorphism-active .bg-[#0b0f19],
+.theme-hacker.glassmorphism-active .bg-[#0e1420],
+.theme-hacker.glassmorphism-active .bg-[#0a0d14],
+.theme-hacker.glassmorphism-active .bg-[#0A1220],
+.theme-hacker.glassmorphism-active .bg-[#0F192C],
+.theme-hacker.glassmorphism-active .bg-slate-900,
+.theme-hacker.glassmorphism-active .bg-slate-900\/40,
+.theme-hacker.glassmorphism-active .bg-slate-900\/60,
+.theme-hacker.glassmorphism-active .bg-slate-900\/50,
+.theme-hacker.glassmorphism-active .bg-slate-900\/80,
+.theme-hacker.glassmorphism-active .bg-slate-950,
+.theme-hacker.glassmorphism-active .bg-slate-950\/40,
+.theme-hacker.glassmorphism-active .bg-slate-950\/50,
+.theme-hacker.glassmorphism-active .bg-slate-950\/70,
+.theme-hacker.glassmorphism-active .bg-slate-950\/80,
+.theme-hacker.glassmorphism-active #app-sidebar,
+.theme-hacker.glassmorphism-active aside,
+.theme-hacker.glassmorphism-active header,
+.theme-hacker.glassmorphism-active footer {
+  background-color: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: none !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+/* E. Interactive Control Elements (Inputs, Selects, Buttons) Glassmorphism Updates */
+.glassmorphism-active select,
+.glassmorphism-active input,
+.glassmorphism-active textarea {
+  background-color: rgba(15, 23, 42, 0.6) !important;
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.3) !important;
+}
+
+.theme-light.glassmorphism-active select,
+.theme-light.glassmorphism-active input,
+.theme-light.glassmorphism-active textarea {
+  background-color: rgba(255, 255, 255, 0.6) !important;
+  border-color: rgba(15, 23, 42, 0.15) !important;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.05) !important;
+}
+
+.theme-bloomberg.glassmorphism-active select,
+.theme-bloomberg.glassmorphism-active input,
+.theme-bloomberg.glassmorphism-active textarea {
+  background-color: rgba(0, 0, 0, 0.75) !important;
+  border-color: rgba(0, 255, 0, 0.5) !important;
+  color: #00ff00 !important;
+}
+
+.theme-hacker.glassmorphism-active select,
+.theme-hacker.glassmorphism-active input,
+.theme-hacker.glassmorphism-active textarea {
+  background-color: rgba(0, 0, 0, 0.75) !important;
+  border-color: rgba(57, 255, 20, 0.5) !important;
+  color: #39ff14 !important;
+}
+
+/* 5. SVG CHART & INSTRUMENT COMPLIANCE IN LIGHT MODE */
+.theme-light .recharts-cartesian-grid line {
+  stroke: rgba(15, 23, 42, 0.1) !important;
+}
+
+.theme-light .recharts-text,
+.theme-light .recharts-cartesian-axis-tick-value {
+  fill: #334155 !important;
+  font-weight: 500 !important;
+}
+
+.theme-light .recharts-legend-item-text {
+  color: #334155 !important;
+}
+
+.theme-light .recharts-tooltip-cursor {
+  stroke: rgba(15, 23, 42, 0.15) !important;
+}
+
+
+/* ========================================== */
+/* 6. HOLO GLASS PREMIUM THEME OVERRIDES       */
+/* ========================================== */
+
+@keyframes holo-mesh {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.theme-holo-glass {
+  font-family: "Inter", ui-sans-serif, system-ui, sans-serif !important;
+  background: radial-gradient(circle at 15% 15%, rgba(139, 92, 246, 0.28) 0%, transparent 45%),
+              radial-gradient(circle at 85% 20%, rgba(6, 182, 212, 0.28) 0%, transparent 45%),
+              radial-gradient(circle at 30% 80%, rgba(236, 72, 153, 0.24) 0%, transparent 50%),
+              radial-gradient(circle at 80% 85%, rgba(16, 185, 129, 0.16) 0%, transparent 45%),
+              #030712 !important;
+  background-size: 200% 200% !important;
+  animation: holo-mesh 25s ease infinite !important;
+  color: #f8fafc !important;
+}
+
+.theme-holo-glass #app-sidebar,
+.theme-holo-glass header,
+.theme-holo-glass footer,
+.theme-holo-glass aside {
+  background-color: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border-color: transparent !important;
+  border-style: none !important;
+  box-shadow: none !important;
+}
+
+.theme-holo-glass #z-capital-app-root,
+.theme-holo-glass main,
+.theme-holo-glass .bg-\[\#05070A\],
+.theme-holo-glass .bg-slate-950,
+.theme-holo-glass .bg-[#0F172A],
+.theme-holo-glass .bg-slate-900,
+.theme-holo-glass .bg-slate-900\/40,
+.theme-holo-glass .bg-[#0b0f19],
+.theme-holo-glass .bg-[#0e1420],
+.theme-holo-glass .bg-slate-950\/70,
+.theme-holo-glass .bg-[#0a0d14],
+.theme-holo-glass .bg-slate-950\/40 {
+  background-color: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: none !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  color: #f8fafc !important;
+}
+
+.theme-holo-glass h1,
+.theme-holo-glass h2,
+.theme-holo-glass h3,
+.theme-holo-glass h4 {
+  color: #ffffff !important;
+  text-shadow: 0 0 10px rgba(168, 85, 247, 0.5), 0 0 2px rgba(168, 85, 247, 0.8) !important; /* soft violet-purple glow */
+}
+
+/* Beautiful color tweaks for holo-glass headers, highlights, labels */
+.theme-holo-glass .text-amber-500,
+.theme-holo-glass .text-amber-400 {
+  color: #ec4899 !important; /* Bright Neon Pink for special accent values */
+}
+
+.theme-holo-glass .text-emerald-400,
+.theme-holo-glass .text-emerald-500 {
+  color: #06b6d4 !important; /* Electric Cyan accent */
+}
+
+.theme-holo-glass .text-slate-100,
+.theme-holo-glass .text-slate-200 {
+  color: #ffffff !important;
+}
+
+.theme-holo-glass .text-slate-350,
+.theme-holo-glass .text-slate-300 {
+  color: #f1f5f9 !important; /* High contrast reading */
+}
+
+.theme-holo-glass .text-slate-400 {
+  color: #cbd5e1 !important; /* Supreme readability for bodies/labels */
+}
+
+.theme-holo-glass .text-slate-500,
+.theme-holo-glass .text-slate-600 {
+  color: #94a3b8 !important;
+}
+
+.theme-holo-glass .border-slate-800,
+.theme-holo-glass .border-slate-900,
+.theme-holo-glass .border-\[\#1E293B\],
+.theme-holo-glass .border-[#1E293B],
+.theme-holo-glass .border-slate-850\/80 {
+  border-color: transparent !important;
+  border-style: none !important;
+}
+
+.theme-holo-glass select,
+.theme-holo-glass input,
+.theme-holo-glass textarea {
+  background-color: rgba(15, 23, 42, 0.5) !important;
+  border-color: rgba(255, 255, 255, 0.18) !important;
+  color: #ffffff !important;
+}
+
+/* F. Holo Glass Premium Theme Glassmorphism Overrides - High-Tech Iridescent Opal */
+.theme-holo-glass.glassmorphism-active .bg-\[\#0F172A\],
+.theme-holo-glass.glassmorphism-active .bg-[#0F172A],
+.theme-holo-glass.glassmorphism-active .bg-[#0b0f19],
+.theme-holo-glass.glassmorphism-active .bg-[#0e1420],
+.theme-holo-glass.glassmorphism-active .bg-[#0a0d14],
+.theme-holo-glass.glassmorphism-active .bg-[#0A1220],
+.theme-holo-glass.glassmorphism-active .bg-[#0F192C],
+.theme-holo-glass.glassmorphism-active .bg-slate-900,
+.theme-holo-glass.glassmorphism-active .bg-slate-900\/40,
+.theme-holo-glass.glassmorphism-active .bg-slate-900\/60,
+.theme-holo-glass.glassmorphism-active .bg-slate-900\/50,
+.theme-holo-glass.glassmorphism-active .bg-slate-900\/80,
+.theme-holo-glass.glassmorphism-active .bg-slate-950,
+.theme-holo-glass.glassmorphism-active .bg-slate-950\/40,
+.theme-holo-glass.glassmorphism-active .bg-slate-950\/50,
+.theme-holo-glass.glassmorphism-active .bg-slate-950\/70,
+.theme-holo-glass.glassmorphism-active .bg-slate-950\/80,
+.theme-holo-glass.glassmorphism-active #app-sidebar,
+.theme-holo-glass.glassmorphism-active aside,
+.theme-holo-glass.glassmorphism-active header,
+.theme-holo-glass.glassmorphism-active footer {
+  background-color: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: none !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+.theme-holo-glass.glassmorphism-active select,
+.theme-holo-glass.glassmorphism-active input,
+.theme-holo-glass.glassmorphism-active textarea {
+  background-color: rgba(15, 10, 30, 0.6) !important;
+  border-color: rgba(168, 85, 247, 0.4) !important;
+  color: #ffffff !important;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4), 0 0 8px rgba(168, 85, 247, 0.15) !important;
+}
+
+
+/* ========================================== */
+/* 7. AURORA SYNTHWAVE GLASS THEME            */
+/* ========================================== */
+
+@keyframes aurora-mesh-flow {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.theme-aurora-synth {
+  font-family: "Inter", ui-sans-serif, system-ui, sans-serif !important;
+  background: radial-gradient(circle at 10% 10%, rgba(236, 72, 153, 0.32) 0%, transparent 45%), /* Cyber Pink */
+              radial-gradient(circle at 90% 15%, rgba(6, 182, 212, 0.32) 0%, transparent 45%),  /* Cyber Cyan */
+              radial-gradient(circle at 50% 80%, rgba(139, 92, 246, 0.28) 0%, transparent 50%),  /* Electro Violet */
+              radial-gradient(circle at 85% 75%, rgba(249, 115, 22, 0.22) 0%, transparent 45%),  /* Neon Orange */
+              radial-gradient(circle at 20% 60%, rgba(16, 185, 129, 0.18) 0%, transparent 45%),  /* Mint Green */
+              #030108 !important;
+  background-size: 200% 200% !important;
+  animation: aurora-mesh-flow 18s ease infinite !important;
+  color: #ffffff !important;
+}
+
+/* Sidebar, Header, Footer and general container panels */
+.theme-aurora-synth #app-sidebar,
+.theme-aurora-synth header,
+.theme-aurora-synth footer,
+.theme-aurora-synth aside {
+  background-color: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border-color: transparent !important;
+  border-style: none !important;
+  box-shadow: none !important;
+}
+
+.theme-aurora-synth #z-capital-app-root,
+.theme-aurora-synth main,
+.theme-aurora-synth .bg-\[\#05070A\],
+.theme-aurora-synth .bg-slate-950,
+.theme-aurora-synth .bg-[#0F172A],
+.theme-aurora-synth .bg-slate-900,
+.theme-aurora-synth .bg-slate-900\/40,
+.theme-aurora-synth .bg-[#0b0f19],
+.theme-aurora-synth .bg-[#0e1420],
+.theme-aurora-synth .bg-slate-950\/70,
+.theme-aurora-synth .bg-[#0a0d14],
+.theme-aurora-synth .bg-slate-950\/40 {
+  background-color: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: none !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  color: #ffffff !important;
+}
+
+/* Text glow & supreme contrast for headers */
+.theme-aurora-synth h1,
+.theme-aurora-synth h2,
+.theme-aurora-synth h3,
+.theme-aurora-synth h4 {
+  color: #ffffff !important;
+  text-shadow: 0 0 10px rgba(236, 72, 153, 0.5), 0 0 3px rgba(6, 182, 212, 0.7) !important;
+  font-weight: 700 !important;
+}
+
+/* Bright high-tech highlights */
+.theme-aurora-synth .text-amber-500,
+.theme-aurora-synth .text-amber-400 {
+  color: #f97316 !important; /* Vivid Cyber Orange */
+}
+
+.theme-aurora-synth .text-emerald-400,
+.theme-aurora-synth .text-emerald-500 {
+  color: #06b6d4 !important; /* Electric Cyan */
+}
+
+.theme-aurora-synth .text-slate-100,
+.theme-aurora-synth .text-slate-200 {
+  color: #ffffff !important;
+}
+
+.theme-aurora-synth .text-slate-350,
+.theme-aurora-synth .text-slate-300 {
+  color: #f8fafc !important; /* Clean reading contrast */
+}
+
+.theme-aurora-synth .text-slate-400 {
+  color: #e2e8f0 !important; /* Highly readable labels */
+}
+
+.theme-aurora-synth .text-slate-500,
+.theme-aurora-synth .text-slate-600 {
+  color: #cbd5e1 !important; /* Increased brightness for secondary text */
+}
+
+.theme-aurora-synth .border-slate-800,
+.theme-aurora-synth .border-slate-900,
+.theme-aurora-synth .border-\[\#1E293B\],
+.theme-aurora-synth .border-[#1E293B],
+.theme-aurora-synth .border-slate-850\/80 {
+  border-color: transparent !important;
+  border-style: none !important;
+}
+
+.theme-aurora-synth select,
+.theme-aurora-synth input,
+.theme-aurora-synth textarea {
+  background-color: rgba(10, 4, 20, 0.7) !important;
+  border-color: rgba(236, 72, 153, 0.4) !important;
+  color: #ffffff !important;
+}
+
+/* Glassmorphism Overrides for Aurora Synthwave */
+.theme-aurora-synth.glassmorphism-active .bg-\[\#0F172A\],
+.theme-aurora-synth.glassmorphism-active .bg-[#0F172A],
+.theme-aurora-synth.glassmorphism-active .bg-[#0b0f19],
+.theme-aurora-synth.glassmorphism-active .bg-[#0e1420],
+.theme-aurora-synth.glassmorphism-active .bg-[#0a0d14],
+.theme-aurora-synth.glassmorphism-active .bg-[#0A1220],
+.theme-aurora-synth.glassmorphism-active .bg-[#0F192C],
+.theme-aurora-synth.glassmorphism-active .bg-slate-900,
+.theme-aurora-synth.glassmorphism-active .bg-slate-900\/40,
+.theme-aurora-synth.glassmorphism-active .bg-slate-900\/60,
+.theme-aurora-synth.glassmorphism-active .bg-slate-900\/50,
+.theme-aurora-synth.glassmorphism-active .bg-slate-900\/80,
+.theme-aurora-synth.glassmorphism-active .bg-slate-950,
+.theme-aurora-synth.glassmorphism-active .bg-slate-950\/40,
+.theme-aurora-synth.glassmorphism-active .bg-slate-950\/50,
+.theme-aurora-synth.glassmorphism-active .bg-slate-950\/70,
+.theme-aurora-synth.glassmorphism-active .bg-slate-950\/80,
+.theme-aurora-synth.glassmorphism-active #app-sidebar,
+.theme-aurora-synth.glassmorphism-active aside,
+.theme-aurora-synth.glassmorphism-active header,
+.theme-aurora-synth.glassmorphism-active footer {
+  background-color: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: none !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+.theme-aurora-synth.glassmorphism-active select,
+.theme-aurora-synth.glassmorphism-active input,
+.theme-aurora-synth.glassmorphism-active textarea {
+  background-color: rgba(15, 5, 30, 0.75) !important;
+  border-color: rgba(6, 182, 212, 0.5) !important;
+  color: #ffffff !important;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.6), 0 0 10px rgba(6, 182, 212, 0.3) !important;
+}
+
+
+/* ========================================== */
+/* 8. HIGH FUTURE-TECH GLOBAL ANIMATIONS      */
+/* ========================================== */
+
+@keyframes grid-travel-forward {
+  0% {
+    background-position: 0 0;
+  }
+  100% {
+    background-position: 0 40px;
+  }
+}
+
+/* Subtle digital grid overlay in background for high-tech themes */
+.theme-holo-glass::before,
+.theme-aurora-synth::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-image: linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+  background-size: 30px 30px;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.8;
+  animation: grid-travel-forward 20s linear infinite;
+}
+
+.theme-hacker::before,
+.theme-bloomberg::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-image: linear-gradient(rgba(57, 255, 20, 0.015) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(57, 255, 20, 0.015) 1px, transparent 1px);
+  background-size: 24px 24px;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.85;
+  animation: grid-travel-forward 25s linear infinite;
+}
+
+.theme-dark::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-image: linear-gradient(rgba(59, 130, 246, 0.01) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(59, 130, 246, 0.01) 1px, transparent 1px);
+  background-size: 40px 40px;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.7;
+  animation: grid-travel-forward 30s linear infinite;
+}
+
+/* Global Holographic Sweeping Line scanning telemetry */
+@keyframes scanning-laser-sweep {
+  0% {
+    top: -15%;
+  }
+  100% {
+    top: 115%;
+  }
+}
+
+.tech-sweep-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(to bottom, transparent, rgba(139, 92, 246, 0.25), rgba(6, 182, 212, 0.25), transparent);
+  pointer-events: none;
+  z-index: 100;
+  animation: scanning-laser-sweep 14s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  opacity: 0.75;
+}
+
+.theme-hacker .tech-sweep-line {
+  background: linear-gradient(to bottom, transparent, rgba(57, 255, 20, 0.35), rgba(57, 255, 20, 0.1), transparent) !important;
+}
+
+.theme-bloomberg .tech-sweep-line {
+  background: linear-gradient(to bottom, transparent, rgba(249, 115, 22, 0.25), transparent) !important;
+}
+
+.theme-light .tech-sweep-line {
+  background: linear-gradient(to bottom, transparent, rgba(59, 130, 246, 0.08), transparent) !important;
+}
+
+.theme-aurora-synth .tech-sweep-line {
+  background: linear-gradient(to bottom, transparent, rgba(236, 72, 153, 0.4), rgba(6, 182, 212, 0.4), transparent) !important;
+}
+
+/* Cyber Pulse Indicators */
+@keyframes neon-pulse-slow {
+  0%, 100% {
+    opacity: 0.8;
+    transform: scale(1);
+    filter: drop-shadow(0 0 2px rgba(139, 92, 246, 0.3));
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.05);
+    filter: drop-shadow(0 0 8px rgba(139, 92, 246, 0.7));
+  }
+}
+
+.theme-aurora-synth .animate-pulse,
+.theme-holo-glass .animate-pulse {
+  animation: neon-pulse-slow 2s ease-in-out infinite !important;
+}
+
+/* Glow Border & futuristic corner indicators on major cards */
+.theme-holo-glass.glassmorphism-active .bg-slate-900\/60:hover,
+.theme-holo-glass.glassmorphism-active .bg-slate-900\/40:hover,
+.theme-holo-glass.glassmorphism-active .bg-slate-950\/40:hover,
+.theme-aurora-synth.glassmorphism-active .bg-slate-900\/60:hover,
+.theme-aurora-synth.glassmorphism-active .bg-slate-900\/40:hover,
+.theme-aurora-synth.glassmorphism-active .bg-slate-950\/40:hover {
+  transform: translateY(-2px) scale(1.002);
+  border-color: rgba(255, 255, 255, 0.28) !important;
+}
+
+
+/* ========================================== */
+/* 9. LIQUID GLASS PREMIUM WEBFLOW-INSPIRED THEME */
+/* ========================================== */
+
+.theme-liquid-glass {
+  font-family: "Inter", ui-sans-serif, system-ui, sans-serif !important;
+  background: #020308 !important;
+  color: #f8fafc !important;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Floating Liquid Glass Blobs definitions */
+.liquid-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(85px);
+  mix-blend-mode: screen;
+  opacity: 0.65;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.liquid-blob.blob-1 {
+  width: 500px;
+  height: 500px;
+  background: radial-gradient(circle, rgba(6, 182, 212, 0.75) 0%, rgba(59, 130, 246, 0.05) 70%);
+  top: -10%;
+  left: 15%;
+  animation: liquid-fluid-1 22s ease-in-out infinite alternate;
+}
+
+.liquid-blob.blob-2 {
+  width: 550px;
+  height: 550px;
+  background: radial-gradient(circle, rgba(168, 85, 247, 0.7) 0%, rgba(236, 72, 153, 0.05) 70%);
+  bottom: -15%;
+  right: 5%;
+  animation: liquid-fluid-2 26s ease-in-out infinite alternate;
+}
+
+.liquid-blob.blob-3 {
+  width: 450px;
+  height: 450px;
+  background: radial-gradient(circle, rgba(236, 72, 153, 0.65) 0%, rgba(249, 115, 22, 0.05) 70%);
+  top: 35%;
+  right: 30%;
+  animation: liquid-fluid-1 18s ease-in-out infinite alternate-reverse;
+}
+
+.liquid-blob.blob-4 {
+  width: 400px;
+  height: 400px;
+  background: radial-gradient(circle, rgba(59, 130, 246, 0.7) 0%, rgba(6, 182, 212, 0.05) 70%);
+  bottom: 20%;
+  left: -5%;
+  animation: liquid-fluid-2 16s ease-in-out infinite alternate-reverse;
+}
+
+@keyframes liquid-fluid-1 {
+  0% {
+    transform: translate(0px, 0px) scale(1) rotate(0deg);
+    border-radius: 50% 40% 60% 50% / 50% 60% 40% 50%;
+  }
+  50% {
+    transform: translate(60px, 40px) scale(1.15) rotate(180deg);
+    border-radius: 40% 60% 50% 60% / 60% 50% 60% 40%;
+  }
+  100% {
+    transform: translate(-40px, -50px) scale(0.9) rotate(360deg);
+    border-radius: 50% 40% 60% 50% / 50% 60% 40% 50%;
+  }
+}
+
+@keyframes liquid-fluid-2 {
+  0% {
+    transform: translate(0px, 0px) scale(1.05) rotate(0deg);
+    border-radius: 45% 55% 45% 55% / 55% 45% 55% 45%;
+  }
+  50% {
+    transform: translate(-70px, -20px) scale(0.9) rotate(180deg);
+    border-radius: 55% 45% 55% 45% / 45% 55% 45% 55%;
+  }
+  100% {
+    transform: translate(40px, 60px) scale(1.1) rotate(360deg);
+    border-radius: 45% 55% 45% 55% / 55% 45% 55% 45%;
+  }
+}
+
+/* Sidebar, Header, Footer and general container panels */
+.theme-liquid-glass #app-sidebar,
+.theme-liquid-glass header,
+.theme-liquid-glass footer,
+.theme-liquid-glass aside {
+  background-color: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border-color: transparent !important;
+  border-style: none !important;
+  box-shadow: none !important;
+}
+
+.theme-liquid-glass #z-capital-app-root,
+.theme-liquid-glass main,
+.theme-liquid-glass .bg-\[\#05070A\],
+.theme-liquid-glass .bg-slate-950,
+.theme-liquid-glass .bg-[#0F172A],
+.theme-liquid-glass .bg-slate-900,
+.theme-liquid-glass .bg-slate-900\/40,
+.theme-liquid-glass .bg-[#0b0f19],
+.theme-liquid-glass .bg-[#0e1420],
+.theme-liquid-glass .bg-slate-950\/70,
+.theme-liquid-glass .bg-[#0a0d14],
+.theme-liquid-glass .bg-slate-950\/40 {
+  background-color: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: none !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  color: #f8fafc !important;
+}
+
+/* Text glow & supreme contrast for headers */
+.theme-liquid-glass h1,
+.theme-liquid-glass h2,
+.theme-liquid-glass h3,
+.theme-liquid-glass h4 {
+  color: #ffffff !important;
+  text-shadow: 0 0 12px rgba(6, 182, 212, 0.45), 0 0 2px rgba(139, 92, 246, 0.4) !important;
+  font-weight: 700 !important;
+}
+
+/* Highlights */
+.theme-liquid-glass .text-amber-500,
+.theme-liquid-glass .text-amber-400 {
+  color: #ec4899 !important; /* Cyber pink */
+}
+
+.theme-liquid-glass .text-emerald-400,
+.theme-liquid-glass .text-emerald-500 {
+  color: #06b6d4 !important; /* Neon cyan */
+}
+
+.theme-liquid-glass .text-slate-100,
+.theme-liquid-glass .text-slate-200 {
+  color: #ffffff !important;
+}
+
+.theme-liquid-glass .text-slate-350,
+.theme-liquid-glass .text-slate-300 {
+  color: #f8fafc !important;
+}
+
+.theme-liquid-glass .text-slate-400 {
+  color: #e2e8f0 !important;
+}
+
+.theme-liquid-glass .text-slate-500,
+.theme-liquid-glass .text-slate-600 {
+  color: #cbd5e1 !important;
+}
+
+.theme-liquid-glass .border-slate-800,
+.theme-liquid-glass .border-slate-900,
+.theme-liquid-glass .border-\[\#1E293B\],
+.theme-liquid-glass .border-[#1E293B],
+.theme-liquid-glass .border-slate-850\/80 {
+  border-color: transparent !important;
+  border-style: none !important;
+}
+
+.theme-liquid-glass select,
+.theme-liquid-glass input,
+.theme-liquid-glass textarea {
+  background-color: rgba(10, 15, 30, 0.6) !important;
+  border-color: rgba(6, 182, 212, 0.5) !important;
+  color: #ffffff !important;
+}
+
+/* Glassmorphism Overrides for Liquid Glass Theme */
+.theme-liquid-glass.glassmorphism-active .bg-\[\#0F172A\],
+.theme-liquid-glass.glassmorphism-active .bg-[#0F172A],
+.theme-liquid-glass.glassmorphism-active .bg-[#0b0f19],
+.theme-liquid-glass.glassmorphism-active .bg-[#0e1420],
+.theme-liquid-glass.glassmorphism-active .bg-[#0a0d14],
+.theme-liquid-glass.glassmorphism-active .bg-[#0A1220],
+.theme-liquid-glass.glassmorphism-active .bg-[#0F192C],
+.theme-liquid-glass.glassmorphism-active .bg-slate-900,
+.theme-liquid-glass.glassmorphism-active .bg-slate-900\/40,
+.theme-liquid-glass.glassmorphism-active .bg-slate-900\/60,
+.theme-liquid-glass.glassmorphism-active .bg-slate-900\/50,
+.theme-liquid-glass.glassmorphism-active .bg-slate-900\/80,
+.theme-liquid-glass.glassmorphism-active .bg-slate-950,
+.theme-liquid-glass.glassmorphism-active .bg-slate-950\/40,
+.theme-liquid-glass.glassmorphism-active .bg-slate-950\/50,
+.theme-liquid-glass.glassmorphism-active .bg-slate-950\/70,
+.theme-liquid-glass.glassmorphism-active .bg-slate-950\/80,
+.theme-liquid-glass.glassmorphism-active #app-sidebar,
+.theme-liquid-glass.glassmorphism-active aside,
+.theme-liquid-glass.glassmorphism-active header,
+.theme-liquid-glass.glassmorphism-active footer {
+  background-color: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: none !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+.theme-liquid-glass.glassmorphism-active select,
+.theme-liquid-glass.glassmorphism-active input,
+.theme-liquid-glass.glassmorphism-active textarea {
+  background-color: rgba(255, 255, 255, 0.09) !important;
+  border-color: rgba(255, 255, 255, 0.35) !important;
+  color: #ffffff !important;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5), 0 0 12px rgba(6, 182, 212, 0.25) !important;
+}
+
+.theme-liquid-glass .tech-sweep-line {
+  background: linear-gradient(to bottom, transparent, rgba(6, 182, 212, 0.5), rgba(236, 72, 153, 0.5), transparent) !important;
+}
+
+/* Hover highlights for Liquid Glass */
+.theme-liquid-glass.glassmorphism-active .bg-slate-900\/60:hover,
+.theme-liquid-glass.glassmorphism-active .bg-slate-900\/40:hover,
+.theme-liquid-glass.glassmorphism-active .bg-slate-950\/40:hover {
+  transform: translateY(-3px) scale(1.005);
+  border-color: rgba(255, 255, 255, 0.4) !important;
+  box-shadow: 0 35px 70px -10px rgba(0, 0, 0, 0.95),
+              0 0 50px 0 rgba(6, 182, 212, 0.2),
+              inset 0 1px 3px 0 rgba(255, 255, 255, 0.45) !important;
+}
+
+/* Include live pulse glow in Liquid Glass */
+.theme-liquid-glass .animate-pulse {
+  animation: neon-pulse-slow 2.5s ease-in-out infinite !important;
+}
+
+/* Digital grid overlay for Liquid Glass */
+.theme-liquid-glass::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-image: linear-gradient(rgba(6, 182, 212, 0.02) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(6, 182, 212, 0.02) 1px, transparent 1px);
+  background-size: 32px 32px;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.9;
+  animation: grid-travel-forward 15s linear infinite;
+}
+
+
+/* ========================================== */
+/* 10. CYBER 3D PREMIUM HOLO THEME (WHOLE SYSTEM 3D) */
+/* ========================================== */
+
+.theme-cyber-3d {
+  font-family: "Inter", ui-sans-serif, system-ui, sans-serif !important;
+  background: #04030a !important;
+  color: #f8fafc !important;
+  position: relative;
+  overflow: hidden;
+  perspective: 1000px;
+}
+
+/* Limit futuristic Orbitron font to large display headers and main metrics to preserve legibility */
+.theme-cyber-3d h1,
+.theme-cyber-3d h2,
+.theme-cyber-3d .sidebar-title,
+.theme-cyber-3d .logo-text,
+.theme-cyber-3d .header-brand-title,
+.theme-cyber-3d .metric-value {
+  font-family: "Orbitron", "Inter", sans-serif !important;
+  letter-spacing: 0.08em !important;
+}
+
+/* Body copy, table elements, labels, buttons, and system values are styled in Inter for maximum clarity */
+.theme-cyber-3d p,
+.theme-cyber-3d button,
+.theme-cyber-3d select,
+.theme-cyber-3d input,
+.theme-cyber-3d textarea,
+.theme-cyber-3d span,
+.theme-cyber-3d label,
+.theme-cyber-3d th,
+.theme-cyber-3d td,
+.theme-cyber-3d li {
+  font-family: "Inter", ui-sans-serif, system-ui, sans-serif !important;
+  letter-spacing: 0.01em !important;
+}
+
+/* 3D Extruded Text effect strictly for main display headings */
+.theme-cyber-3d h1,
+.theme-cyber-3d h2,
+.theme-cyber-3d .logo-text,
+.theme-cyber-3d .header-brand-title {
+  color: #ffffff !important;
+  text-transform: uppercase;
+  text-shadow: 
+    1px 1px 0px #4f46e5, 
+    2px 2px 0px #4f46e5, 
+    3px 3px 0px #06b6d4, 
+    4px 4px 10px rgba(6, 182, 212, 0.4) !important;
+  font-weight: 850 !important;
+}
+
+/* Sub-headings and card titles designed for easy and immediate reading */
+.theme-cyber-3d h3,
+.theme-cyber-3d h4,
+.theme-cyber-3d h5 {
+  color: #ffffff !important;
+  text-shadow: 0px 1px 4px rgba(99, 102, 241, 0.35) !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.02em !important;
+}
+
+/* 3D Isometric Background Grid Projection */
+.theme-cyber-3d::before {
+  content: "";
+  position: absolute;
+  top: -50%; left: -50%; right: -50%; bottom: -50%;
+  background-image: 
+    linear-gradient(rgba(79, 70, 229, 0.1) 1.5px, transparent 1.5px),
+    linear-gradient(90deg, rgba(79, 70, 229, 0.1) 1.5px, transparent 1.5px);
+  background-size: 50px 50px;
+  transform: rotateX(60deg) translateZ(-150px) rotateY(1deg);
+  transform-origin: center center;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.85;
+  animation: grid-3d-drift 30s linear infinite;
+}
+
+@keyframes grid-3d-drift {
+  0% {
+    background-position: 0 0;
+  }
+  100% {
+    background-position: 0 1000px;
+  }
+}
+
+/* Subtle floating dust particle effect to enhance 3D depth perception */
+.theme-cyber-3d::after {
+  content: "";
+  position: absolute;
+  top: -20%; left: -20%; right: -20%; bottom: -20%;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.65;
+  background-image: 
+    radial-gradient(1.5px 1.5px at 10% 15%, rgba(6, 182, 212, 0.45) 100%, transparent),
+    radial-gradient(2px 2px at 25% 60%, rgba(99, 102, 241, 0.35) 100%, transparent),
+    radial-gradient(1px 1px at 45% 25%, rgba(255, 255, 255, 0.5) 100%, transparent),
+    radial-gradient(2.5px 2.5px at 60% 80%, rgba(6, 182, 212, 0.3) 100%, transparent),
+    radial-gradient(1.5px 1.5px at 80% 40%, rgba(255, 255, 255, 0.45) 100%, transparent),
+    radial-gradient(2px 2px at 90% 75%, rgba(99, 102, 241, 0.3) 100%, transparent),
+    radial-gradient(1.2px 1.2px at 5% 55%, rgba(6, 182, 212, 0.4) 100%, transparent),
+    radial-gradient(1.8px 1.8px at 35% 90%, rgba(255, 255, 255, 0.35) 100%, transparent),
+    radial-gradient(2.2px 2.2px at 70% 15%, rgba(99, 102, 241, 0.3) 100%, transparent),
+    radial-gradient(1.5px 1.5px at 85% 90%, rgba(6, 182, 212, 0.4) 100%, transparent),
+    radial-gradient(1px 1px at 50% 50%, rgba(255, 255, 255, 0.6) 100%, transparent),
+    radial-gradient(2.5px 2.5px at 15% 40%, rgba(99, 102, 241, 0.25) 100%, transparent),
+    radial-gradient(1.8px 1.8px at 65% 35%, rgba(6, 182, 212, 0.4) 100%, transparent),
+    radial-gradient(1.2px 1.2px at 75% 60%, rgba(255, 255, 255, 0.5) 100%, transparent);
+  background-size: 600px 600px;
+  transform: perspective(1000px) rotateX(10deg) translateZ(-50px);
+  animation: cyber-dust-drift 32s ease-in-out infinite alternate;
+}
+
+@keyframes cyber-dust-drift {
+  0% {
+    background-position: 0px 0px;
+    opacity: 0.4;
+    transform: perspective(1000px) rotateX(10deg) translateZ(-80px) translateY(0);
+  }
+  50% {
+    opacity: 0.7;
+    transform: perspective(1000px) rotateX(11deg) translateZ(-40px) translateY(-15px) translateX(10px);
+  }
+  100% {
+    background-position: 120px -180px;
+    opacity: 0.5;
+    transform: perspective(1000px) rotateX(9deg) translateZ(-60px) translateY(-30px) translateX(-10px);
+  }
+}
+
+/* 3D Layered Extrusion for all cards and modules (The 3D block look) */
+.theme-cyber-3d .bg-\[\#0F172A\],
+.theme-cyber-3d .bg-[#0F172A],
+.theme-cyber-3d .bg-[#0b0f19],
+.theme-cyber-3d .bg-[#0e1420],
+.theme-cyber-3d .bg-[#0a0d14],
+.theme-cyber-3d .bg-[#0A1220],
+.theme-cyber-3d .bg-[#0F192C],
+.theme-cyber-3d .bg-slate-900,
+.theme-cyber-3d .bg-slate-900\/40,
+.theme-cyber-3d .bg-slate-900\/50,
+.theme-cyber-3d .bg-slate-900\/60,
+.theme-cyber-3d .bg-slate-900\/80,
+.theme-cyber-3d .bg-slate-950,
+.theme-cyber-3d .bg-slate-950\/40,
+.theme-cyber-3d .bg-slate-950\/50,
+.theme-cyber-3d .bg-slate-950\/70,
+.theme-cyber-3d .bg-slate-950\/80,
+.theme-cyber-3d #app-sidebar,
+.theme-cyber-3d aside,
+.theme-cyber-3d header,
+.theme-cyber-3d footer,
+.theme-cyber-3d .bg-slate-800 {
+  background: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: none !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  transform: translate3d(0, 0, 0) perspective(800px) !important;
+  transition: transform 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.45), 
+              box-shadow 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.45),
+              border-color 0.3s ease !important;
+  position: relative !important;
+  z-index: 10 !important;
+}
+
+/* Glass glare layer that follows the mouse using fixed radial-gradient alignment */
+.theme-cyber-3d .bg-\[\#0F172A\]::after,
+.theme-cyber-3d .bg-[#0F172A]::after,
+.theme-cyber-3d .bg-[#0b0f19]::after,
+.theme-cyber-3d .bg-[#0e1420]::after,
+.theme-cyber-3d .bg-[#0a0d14]::after,
+.theme-cyber-3d .bg-[#0A1220]::after,
+.theme-cyber-3d .bg-[#0F192C]::after,
+.theme-cyber-3d .bg-slate-900\/60::after,
+.theme-cyber-3d .bg-slate-900\/40::after,
+.theme-cyber-3d .bg-slate-950\/40::after,
+.theme-cyber-3d #app-sidebar::after,
+.theme-cyber-3d header::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(
+    circle 280px at var(--mouse-x, 50%) var(--mouse-y, 50%),
+    rgba(255, 255, 255, 0.05) 0%,
+    transparent 80%
+  ) !important;
+  background-attachment: fixed !important;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* 3D Float Hover Animation for panels/cards with Dynamic Neon Glow */
+.theme-cyber-3d .bg-\[\#0F172A\]:hover,
+.theme-cyber-3d .bg-[#0F172A]:hover,
+.theme-cyber-3d .bg-[#0b0f19]:hover,
+.theme-cyber-3d .bg-[#0e1420]:hover,
+.theme-cyber-3d .bg-[#0a0d14]:hover,
+.theme-cyber-3d .bg-[#0A1220]:hover,
+.theme-cyber-3d .bg-[#0F192C]:hover,
+.theme-cyber-3d .bg-slate-900:hover,
+.theme-cyber-3d .bg-slate-900\/40:hover,
+.theme-cyber-3d .bg-slate-900\/50:hover,
+.theme-cyber-3d .bg-slate-900\/60:hover,
+.theme-cyber-3d .bg-slate-900\/80:hover,
+.theme-cyber-3d .bg-slate-950:hover,
+.theme-cyber-3d .bg-slate-950\/40:hover,
+.theme-cyber-3d .bg-slate-950\/50:hover,
+.theme-cyber-3d .bg-slate-950\/70:hover,
+.theme-cyber-3d .bg-slate-950\/80:hover,
+.theme-cyber-3d #app-sidebar:hover,
+.theme-cyber-3d aside:hover,
+.theme-cyber-3d header:hover,
+.theme-cyber-3d footer:hover,
+.theme-cyber-3d .bg-slate-800:hover {
+  transform: translateY(-8px) translateZ(28px) rotateX(2deg) rotateY(1deg) !important;
+  border-color: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* Tactile 3D Keycap Buttons (Push-Down click effect) */
+.theme-cyber-3d button:not(.close-btn) {
+  position: relative !important;
+  border: 2px solid #4f46e5 !important;
+  border-bottom: 5px solid #312e81 !important;
+  border-right: 3px solid #312e81 !important;
+  box-shadow: 3px 3px 0px #1e1b4b, 0px 4px 12px rgba(0,0,0,0.4) !important;
+  transform: translateY(-1px) !important;
+  transition: all 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275) !important;
+}
+
+/* Button Hover State */
+.theme-cyber-3d button:not(.close-btn):hover {
+  border-bottom-width: 6px !important;
+  transform: translateY(-2px) !important;
+  box-shadow: 4px 4px 0px #1e1b4b, 0px 6px 15px rgba(99, 102, 241, 0.45) !important;
+  background-color: rgba(79, 70, 229, 0.2) !important;
+}
+
+/* Button Active Pressed State - Dynamic 3D depth push */
+.theme-cyber-3d button:not(.close-btn):active {
+  border-bottom-width: 1px !important;
+  border-right-width: 1px !important;
+  transform: translateY(3px) !important;
+  box-shadow: 0px 1px 0px #1e1b4b, 0px 2px 5px rgba(0,0,0,0.5) !important;
+}
+
+/* Active navigation tab highlight */
+.theme-cyber-3d .bg-blue-600,
+.theme-cyber-3d .bg-cyan-600,
+.theme-cyber-3d .bg-purple-600,
+.theme-cyber-3d .bg-pink-600,
+.theme-cyber-3d .bg-emerald-600 {
+  background-color: #4f46e5 !important;
+  border-color: #818cf8 !important;
+  box-shadow: 0px 0px 15px rgba(99, 102, 241, 0.85) !important;
+}
+
+/* Keep SVG icons clean and visible in 3D theme - avoid heavy drop shadows that blur small icons */
+.theme-cyber-3d svg {
+  filter: drop-shadow(1px 1px 1px rgba(6, 182, 212, 0.45)) !important;
+  transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275), filter 0.3s ease !important;
+}
+
+/* Hover SVG 3D displacement */
+.theme-cyber-3d svg:hover,
+.theme-cyber-3d button:hover svg {
+  transform: scale(1.15) translate3d(1px, -1px, 5px) !important;
+  filter: drop-shadow(0 0 5px rgba(99, 102, 241, 0.75)) !important;
+}
+
+/* High contrast readable grey/slate text colors */
+.theme-cyber-3d .text-slate-400 {
+  color: #e2e8f0 !important; /* Extremely readable light grey */
+}
+
+.theme-cyber-3d .text-slate-300 {
+  color: #f8fafc !important; /* Almost pure white */
+}
+
+.theme-cyber-3d .text-slate-500,
+.theme-cyber-3d .text-slate-600 {
+  color: #cbd5e1 !important; /* Clearly readable medium slate */
+}
+
+/* Indented 3D Inputs and Select structures */
+.theme-cyber-3d select,
+.theme-cyber-3d input,
+.theme-cyber-3d textarea {
+  background-color: rgba(6, 4, 18, 0.95) !important;
+  border: 2px solid #4f46e5 !important;
+  color: #ffffff !important;
+  border-radius: 6px !important;
+  box-shadow: inset 3px 3px 0px rgba(0,0,0,0.85), 1px 1px 0px rgba(255,255,255,0.1) !important;
+  transition: all 0.2s ease !important;
+}
+
+.theme-cyber-3d select:focus,
+.theme-cyber-3d input:focus,
+.theme-cyber-3d textarea:focus {
+  border-color: #06b6d4 !important;
+  box-shadow: inset 3px 3px 0px rgba(0,0,0,0.85), 0px 0px 10px rgba(6, 182, 212, 0.65) !important;
+}
+
+/* Glowing Neon borders for tables and lists */
+.theme-cyber-3d .border-slate-800,
+.theme-cyber-3d .border-slate-900,
+.theme-cyber-3d .border-\[\#1E293B\],
+.theme-cyber-3d .border-[#1E293B],
+.theme-cyber-3d .border-slate-850\/80,
+.theme-cyber-3d th,
+.theme-cyber-3d td {
+  border-color: rgba(79, 70, 229, 0.4) !important;
+}
+
+.theme-cyber-3d tr:hover td {
+  background-color: rgba(79, 70, 229, 0.15) !important;
+  color: #ffffff !important;
+}
+
+/* High-contrast status chips in 3D theme */
+.theme-cyber-3d .text-emerald-400,
+.theme-cyber-3d .text-emerald-500,
+.theme-cyber-3d .text-emerald-300 {
+  color: #00ffcc !important;
+  text-shadow: 0 0 8px rgba(0, 255, 204, 0.6) !important;
+}
+
+.theme-cyber-3d .text-rose-400,
+.theme-cyber-3d .text-rose-500,
+.theme-cyber-3d .text-rose-300,
+.theme-cyber-3d .text-red-400,
+.theme-cyber-3d .text-red-500 {
+  color: #ff3b6e !important;
+  text-shadow: 0 0 8px rgba(255, 59, 110, 0.6) !important;
+}
+
+.theme-cyber-3d .text-amber-400,
+.theme-cyber-3d .text-amber-500 {
+  color: #ffcc00 !important;
+  text-shadow: 0 0 8px rgba(255, 204, 0, 0.6) !important;
+}
+
+/* Telemetry scan line for Cyber 3D */
+.theme-cyber-3d .tech-sweep-line {
+  background: linear-gradient(to bottom, transparent, rgba(79, 70, 229, 0.4), rgba(6, 182, 212, 0.4), transparent) !important;
+  height: 4px !important;
+}
+
+/* Floating 3D Wireframe crystal animation */
+.theme-cyber-3d .wireframe-crystal {
+  position: absolute;
+  width: 120px;
+  height: 120px;
+  border: 1.5px solid rgba(6, 182, 212, 0.25);
+  transform-style: preserve-3d;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.theme-cyber-3d .wireframe-crystal-1 {
+  top: 15%;
+  right: 12%;
+  animation: rotate-3d-shape 16s linear infinite;
+}
+
+.theme-cyber-3d .wireframe-crystal-2 {
+  bottom: 20%;
+  left: 8%;
+  animation: rotate-3d-shape-reverse 20s linear infinite;
+}
+
+@keyframes rotate-3d-shape {
+  0% { transform: rotateX(0deg) rotateY(0deg) rotateZ(0deg) scale(0.9); }
+  100% { transform: rotateX(360deg) rotateY(360deg) rotateZ(360deg) scale(0.9); }
+}
+
+@keyframes rotate-3d-shape-reverse {
+  0% { transform: rotateX(360deg) rotateY(0deg) rotateZ(360deg) scale(0.7); }
+  100% { transform: rotateX(0deg) rotateY(360deg) rotateZ(0deg) scale(0.7); }
+}
+
+
+/* ==========================================================
+   11. 3D GLASS NEUMORPHISM THEME (theme-glass-3d)
+   ========================================================== */
+
+.theme-glass-3d {
+  font-family: "Inter", ui-sans-serif, system-ui, sans-serif !important;
+  background: radial-gradient(circle at 20% 30%, #151b2e 0%, #080a13 50%, #030408 100%) !important;
+  color: #f1f5f9 !important;
+  position: relative;
+  overflow: hidden;
+  perspective: 1200px;
+}
+
+/* Base headings with a beautiful metallic sheen text shadow */
+.theme-glass-3d h1,
+.theme-glass-3d h2,
+.theme-glass-3d .sidebar-title,
+.theme-glass-3d .logo-text,
+.theme-glass-3d .header-brand-title {
+  color: #ffffff !important;
+  text-shadow: 0 1px 0 #cccccc, 
+               0 2px 0 #c5c5c5, 
+               0 3px 0 #bbbbbb, 
+               0 4px 0 #b0b0b0, 
+               0 5px 12px rgba(0, 0, 0, 0.6),
+               0 0 15px rgba(255, 255, 255, 0.15) !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.04em !important;
+}
+
+.theme-glass-3d h3,
+.theme-glass-3d h4,
+.theme-glass-3d h5,
+.theme-glass-3d .metric-value {
+  color: #ffffff !important;
+  text-shadow: 0px 2px 8px rgba(255, 255, 255, 0.2) !important;
+  font-weight: 700 !important;
+}
+
+/* Ambient 3D Glass Neumorphism background glowing orbs */
+.theme-glass-3d::before {
+  content: "";
+  position: absolute;
+  top: 15%; left: 10%; width: 350px; height: 350px;
+  background: radial-gradient(circle, rgba(99, 102, 241, 0.15) 0%, transparent 70%);
+  filter: blur(50px);
+  pointer-events: none;
+  z-index: 0;
+  animation: glass-orb-float 15s ease-in-out infinite alternate;
+}
+
+.theme-glass-3d::after {
+  content: "";
+  position: absolute;
+  bottom: 15%; right: 10%; width: 400px; height: 400px;
+  background: radial-gradient(circle, rgba(6, 182, 212, 0.12) 0%, transparent 70%);
+  filter: blur(60px);
+  pointer-events: none;
+  z-index: 0;
+  animation: glass-orb-float-reverse 18s ease-in-out infinite alternate;
+}
+
+@keyframes glass-orb-float {
+  0% { transform: translateY(0) translateX(0) scale(1); }
+  100% { transform: translateY(-40px) translateX(30px) scale(1.15); }
+}
+
+@keyframes glass-orb-float-reverse {
+  0% { transform: translateY(0) translateX(0) scale(1); }
+  100% { transform: translateY(50px) translateX(-40px) scale(0.9); }
+}
+
+/* The core Glass-Neumorphism 3D Panel Styling */
+.theme-glass-3d .bg-\[\#0F172A\],
+.theme-glass-3d .bg-[#0F172A],
+.theme-glass-3d .bg-[#0b0f19],
+.theme-glass-3d .bg-[#0e1420],
+.theme-glass-3d .bg-[#0a0d14],
+.theme-glass-3d .bg-[#0A1220],
+.theme-glass-3d .bg-[#0F192C],
+.theme-glass-3d .bg-slate-900,
+.theme-glass-3d .bg-slate-900\/40,
+.theme-glass-3d .bg-slate-900\/50,
+.theme-glass-3d .bg-slate-900\/60,
+.theme-glass-3d .bg-slate-900\/80,
+.theme-glass-3d .bg-slate-950,
+.theme-glass-3d .bg-slate-950\/40,
+.theme-glass-3d .bg-slate-950\/50,
+.theme-glass-3d .bg-slate-950\/70,
+.theme-glass-3d .bg-slate-950\/80,
+.theme-glass-3d #app-sidebar,
+.theme-glass-3d aside,
+.theme-glass-3d header,
+.theme-glass-3d footer,
+.theme-glass-3d .bg-slate-800 {
+  background: rgba(255, 255, 255, 0.03) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  border: 1.5px solid rgba(255, 255, 255, 0.08) !important;
+  border-right-color: rgba(255, 255, 255, 0.03) !important;
+  border-bottom-color: rgba(255, 255, 255, 0.03) !important;
+  box-shadow: 6px 6px 20px rgba(0, 0, 0, 0.4), 
+              -6px -6px 20px rgba(255, 255, 255, 0.02),
+              inset 1px 1px 0px rgba(255, 255, 255, 0.08) !important;
+  border-radius: 16px !important;
+  transform: translate3d(0, 0, 0) perspective(1000px) !important;
+  transition: transform 0.4s cubic-bezier(0.165, 0.84, 0.44, 1), 
+              box-shadow 0.4s cubic-bezier(0.165, 0.84, 0.44, 1),
+              border-color 0.3s ease,
+              background 0.3s ease !important;
+  position: relative !important;
+  z-index: 10 !important;
+}
+
+/* Hover Float displacement with expanded shadow for 3D illusion */
+.theme-glass-3d .bg-\[\#0F172A\]:hover,
+.theme-glass-3d .bg-[#0F172A]:hover,
+.theme-glass-3d .bg-[#0b0f19]:hover,
+.theme-glass-3d .bg-[#0e1420]:hover,
+.theme-glass-3d .bg-[#0a0d14]:hover,
+.theme-glass-3d .bg-[#0A1220]:hover,
+.theme-glass-3d .bg-[#0F192C]:hover,
+.theme-glass-3d .bg-slate-900:hover,
+.theme-glass-3d .bg-slate-900\/40:hover,
+.theme-glass-3d .bg-slate-900\/50:hover,
+.theme-glass-3d .bg-slate-900\/60:hover,
+.theme-glass-3d .bg-slate-900\/80:hover,
+.theme-glass-3d .bg-slate-950:hover,
+.theme-glass-3d .bg-slate-950\/40:hover,
+.theme-glass-3d .bg-slate-950\/50:hover,
+.theme-glass-3d .bg-slate-950\/70:hover,
+.theme-glass-3d .bg-slate-950\/80:hover,
+.theme-glass-3d #app-sidebar:hover,
+.theme-glass-3d aside:hover,
+.theme-glass-3d header:hover,
+.theme-glass-3d footer:hover,
+.theme-glass-3d .bg-slate-800:hover {
+  transform: translateY(-8px) translateZ(30px) rotateX(1deg) rotateY(0.5deg) !important;
+  background: rgba(255, 255, 255, 0.05) !important;
+  border-color: rgba(255, 255, 255, 0.15) !important;
+  box-shadow: 15px 15px 35px rgba(0, 0, 0, 0.5), 
+              -10px -10px 35px rgba(255, 255, 255, 0.04),
+              inset 1.5px 1.5px 0px rgba(255, 255, 255, 0.15) !important;
+}
+
+/* Glass glare layer that follows the mouse */
+.theme-glass-3d .bg-\[\#0F172A\]::after,
+.theme-glass-3d .bg-[#0F172A]::after,
+.theme-glass-3d .bg-[#0b0f19]::after,
+.theme-glass-3d .bg-[#0e1420]::after,
+.theme-glass-3d .bg-[#0a0d14]::after,
+.theme-glass-3d .bg-[#0A1220]::after,
+.theme-glass-3d .bg-[#0F192C]::after,
+.theme-glass-3d .bg-slate-900\/60::after,
+.theme-glass-3d .bg-slate-900\/40::after,
+.theme-glass-3d .bg-slate-950\/40::after,
+.theme-glass-3d #app-sidebar::after,
+.theme-glass-3d header::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(
+    circle 300px at var(--mouse-x, 50%) var(--mouse-y, 50%),
+    rgba(255, 255, 255, 0.08) 0%,
+    transparent 80%
+  ) !important;
+  background-attachment: fixed !important;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Tactile 3D Glass Keycap Buttons (Push-Down click effect) */
+.theme-glass-3d button:not(.close-btn) {
+  position: relative !important;
+  background: rgba(255, 255, 255, 0.05) !important;
+  backdrop-filter: blur(10px) !important;
+  -webkit-backdrop-filter: blur(10px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-bottom: 4px solid rgba(255, 255, 255, 0.06) !important;
+  border-right: 2px solid rgba(255, 255, 255, 0.06) !important;
+  border-radius: 8px !important;
+  box-shadow: 3px 3px 10px rgba(0, 0, 0, 0.35), 
+              inset 1px 1px 0px rgba(255, 255, 255, 0.15) !important;
+  transform: translateY(-1px) !important;
+  color: #ffffff !important;
+  transition: all 0.12s cubic-bezier(0.175, 0.885, 0.32, 1.275) !important;
+}
+
+/* Button Hover State */
+.theme-glass-3d button:not(.close-btn):hover {
+  background: rgba(255, 255, 255, 0.1) !important;
+  border-bottom-width: 5px !important;
+  transform: translateY(-2px) !important;
+  box-shadow: 4px 4px 15px rgba(0, 0, 0, 0.45), 
+              0px 0px 10px rgba(255, 255, 255, 0.1),
+              inset 1.5px 1.5px 0px rgba(255, 255, 255, 0.25) !important;
+  border-color: rgba(255, 255, 255, 0.2) !important;
+}
+
+/* Button Active Pressed State */
+.theme-glass-3d button:not(.close-btn):active {
+  border-bottom-width: 1px !important;
+  border-right-width: 1px !important;
+  transform: translateY(3px) !important;
+  box-shadow: 0px 1px 3px rgba(0, 0, 0, 0.4), 
+              inset 0.5px 0.5px 0px rgba(255, 255, 255, 0.1) !important;
+}
+
+/* Active navigation tab highlight - glowing glass */
+.theme-glass-3d .bg-blue-600,
+.theme-glass-3d .bg-cyan-600,
+.theme-glass-3d .bg-purple-600,
+.theme-glass-3d .bg-pink-600,
+.theme-glass-3d .bg-emerald-600 {
+  background: rgba(255, 255, 255, 0.15) !important;
+  border-color: rgba(255, 255, 255, 0.4) !important;
+  box-shadow: 0px 0px 20px rgba(255, 255, 255, 0.25),
+              inset 1px 1px 0px rgba(255, 255, 255, 0.3) !important;
+  color: #ffffff !important;
+}
+
+/* High contrast readable grey/slate text colors */
+.theme-glass-3d .text-slate-400 {
+  color: #cbd5e1 !important; /* Extremely readable light grey */
+}
+
+.theme-glass-3d .text-slate-300 {
+  color: #f1f5f9 !important; /* Almost pure white */
+}
+
+.theme-glass-3d .text-slate-500,
+.theme-glass-3d .text-slate-600 {
+  color: #cbd5e1 !important; /* Clearly readable medium slate */
+}
+
+/* Indented 3D Inputs and Select structures */
+.theme-glass-3d select,
+.theme-glass-3d input,
+.theme-glass-3d textarea {
+  background-color: rgba(5, 7, 15, 0.6) !important;
+  border: 1.5px solid rgba(255, 255, 255, 0.12) !important;
+  color: #ffffff !important;
+  border-radius: 8px !important;
+  box-shadow: inset 3px 3px 6px rgba(0, 0, 0, 0.6), 
+              inset -3px -3px 6px rgba(255, 255, 255, 0.01),
+              0 1px 2px rgba(255, 255, 255, 0.02) !important;
+  transition: all 0.2s ease !important;
+}
+
+.theme-glass-3d select:focus,
+.theme-glass-3d input:focus,
+.theme-glass-3d textarea:focus {
+  border-color: rgba(255, 255, 255, 0.35) !important;
+  box-shadow: inset 3px 3px 6px rgba(0, 0, 0, 0.6), 
+              0px 0px 12px rgba(255, 255, 255, 0.15) !important;
+}
+
+/* Glowing soft borders for tables and lists */
+.theme-glass-3d .border-slate-800,
+.theme-glass-3d .border-slate-900,
+.theme-glass-3d .border-\[\#1E293B\],
+.theme-glass-3d .border-[#1E293B],
+.theme-glass-3d .border-slate-850\/80,
+.theme-glass-3d th,
+.theme-glass-3d td {
+  border-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+.theme-glass-3d tr:hover td {
+  background-color: rgba(255, 255, 255, 0.04) !important;
+  color: #ffffff !important;
+}
+
+/* High-contrast status chips */
+.theme-glass-3d .text-emerald-400,
+.theme-glass-3d .text-emerald-500,
+.theme-glass-3d .text-emerald-300 {
+  color: #52faaf !important;
+  text-shadow: 0 0 10px rgba(82, 250, 175, 0.4) !important;
+}
+
+.theme-glass-3d .text-rose-400,
+.theme-glass-3d .text-rose-500,
+.theme-glass-3d .text-rose-300,
+.theme-glass-3d .text-red-400,
+.theme-glass-3d .text-red-500 {
+  color: #ff6b8b !important;
+  text-shadow: 0 0 10px rgba(255, 107, 139, 0.4) !important;
+}
+
+.theme-glass-3d .text-amber-400,
+.theme-glass-3d .text-amber-500 {
+  color: #ffd043 !important;
+  text-shadow: 0 0 10px rgba(255, 208, 67, 0.4) !important;
+}
+
+/* Telemetry scan line for Glass 3D */
+.theme-glass-3d .tech-sweep-line {
+  background: linear-gradient(to bottom, transparent, rgba(255, 255, 255, 0.15), rgba(255, 255, 255, 0.15), transparent) !important;
+  height: 2px !important;
+}
+
+
+
