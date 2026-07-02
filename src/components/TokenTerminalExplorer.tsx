@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { 
   Search, 
   Database, 
@@ -37,6 +37,8 @@ import {
   Tooltip, 
   CartesianGrid 
 } from "recharts";
+// IMPL-C3: import Zustand store for live BTC/ETH/BNB/XRP/SOL/TRX/HYPE prices.
+import { useGlobalStore } from "../store";
 
 // Interfaces for Token Terminal Metrics
 export interface MetricDef {
@@ -1117,6 +1119,31 @@ const getDynamicDescription = (metric: MetricDef, profile: AssetProfile) => {
   return desc;
 };
 
+// IMPL-C3: Metric IDs whose values can be derived from the live
+// /api/coins/rankings response (price, marketCap, volume, supply, FDV,
+// turnover). All other metrics (fees, revenue, dev counts, TVL, etc.) come
+// from the fallback ASSET_PROFILES snapshot and are labelled "EST" in the UI.
+const LIVE_METRIC_IDS = new Set([
+  "price_market",
+  "circulating_market_cap_key",
+  "circulating_market_cap_market",
+  "fully_diluted_market_cap_key",
+  "fully_diluted_market_cap_market",
+  "token_trading_volume_key",
+  "token_turnover_fdv_key",
+  "token_turnover_circulating_key",
+  "maximum_token_supply_market",
+]);
+
+interface LiveCoinData {
+  price: number;
+  marketCap: number;
+  volume24h: number;
+  change24h: number;
+  change7d: number;
+  circulatingSupply: number;
+}
+
 export default function TokenTerminalExplorer() {
   const [selectedAssetId, setSelectedAssetId] = useState<string>("btc");
   const [searchQuery, setSearchQuery] = useState<string>("");
@@ -1133,13 +1160,154 @@ export default function TokenTerminalExplorer() {
     return initial;
   });
 
-  const selectedAsset = useMemo(() => {
-    return ASSET_OPTIONS.find(a => a.id === selectedAssetId) || ASSET_OPTIONS[0];
+  // IMPL-C3: live data state. /api/coins/rankings overlays live price /
+  // marketCap / volume / supply onto the fallback ASSET_PROFILES snapshot.
+  const [liveRankings, setLiveRankings] = useState<Record<string, LiveCoinData>>({});
+  const [rankingsLoading, setRankingsLoading] = useState<boolean>(true);
+  const [rankingsError, setRankingsError] = useState<string | null>(null);
+  // /api/history/:symbol returns ~100 days of daily closes for 8 of 18 assets.
+  const [liveHistory, setLiveHistory] = useState<Array<{ date: string; close: number }>>([]);
+  const [historyLoading, setHistoryLoading] = useState<boolean>(false);
+
+  // Pull live BTC/ETH/BNB/XRP/SOL/TRX/HYPE prices from the Zustand store
+  // (Binance WS feed). Used as a real-time sanity check overlay.
+  const liveBtcPrice = useGlobalStore(s => s.liveBtcPrice);
+  const liveEthPrice = useGlobalStore(s => s.liveEthPrice);
+  const liveBnbPrice = useGlobalStore(s => s.liveBnbPrice);
+  const liveXrpPrice = useGlobalStore(s => s.liveXrpPrice);
+  const liveSolPrice = useGlobalStore(s => s.liveSolPrice);
+  const liveTrxPrice = useGlobalStore(s => s.liveTrxPrice);
+  const liveHypePrice = useGlobalStore(s => s.liveHypePrice);
+
+  // Fetch /api/coins/rankings on mount + every 60s. Falls back gracefully
+  // to ASSET_PROFILES on error — does NOT crash the component.
+  useEffect(() => {
+    let cancelled = false;
+    const fetchRankings = async () => {
+      try {
+        setRankingsLoading(true);
+        setRankingsError(null);
+        const res = await fetch("/api/coins/rankings");
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (cancelled) return;
+        if (!data.success) throw new Error(data.error || "Gagal memuat data pasar.");
+        const map: Record<string, LiveCoinData> = {};
+        for (const c of (data.coins || [])) {
+          const sym = (c.symbol || "").toUpperCase();
+          if (!sym) continue;
+          map[sym] = {
+            price: Number(c.price) || 0,
+            marketCap: Number(c.marketCap) || 0,
+            volume24h: Number(c.volume24h) || 0,
+            change24h: Number(c.change24h) || 0,
+            change7d: Number(c.change7d) || 0,
+            circulatingSupply: Number(c.circulatingSupply) || 0,
+          };
+        }
+        setLiveRankings(map);
+      } catch (err: any) {
+        if (!cancelled) setRankingsError(err?.message || "Gagal memuat data pasar.");
+      } finally {
+        if (!cancelled) setRankingsLoading(false);
+      }
+    };
+    fetchRankings();
+    const interval = setInterval(fetchRankings, 60 * 1000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
+
+  // Fetch /api/history/:symbol when the selected asset changes. Only 8 of
+  // 18 assets have a history endpoint (BTC/ETH/SOL/BNB/XRP/ADA/SUI/AVAX);
+  // for the rest we keep the synthetic projection (labelled EST).
+  useEffect(() => {
+    let cancelled = false;
+    const fetchHistory = async () => {
+      const sym = ASSET_PROFILES[selectedAssetId]?.symbol;
+      if (!sym) {
+        setLiveHistory([]);
+        return;
+      }
+      try {
+        setHistoryLoading(true);
+        const res = await fetch(`/api/history/${sym}`);
+        if (!res.ok) {
+          if (!cancelled) setLiveHistory([]);
+          return;
+        }
+        const data = await res.json();
+        if (cancelled) return;
+        const hist: Array<{ date: string; close: number }> = (data.history || []).map((h: any) => ({
+          date: h.date,
+          close: Number(h.close) || 0,
+        }));
+        setLiveHistory(hist);
+      } catch {
+        if (!cancelled) setLiveHistory([]);
+      } finally {
+        if (!cancelled) setHistoryLoading(false);
+      }
+    };
+    fetchHistory();
+    return () => { cancelled = true; };
   }, [selectedAssetId]);
 
+  const selectedAsset = useMemo(() => {
+    const opt = ASSET_OPTIONS.find(a => a.id === selectedAssetId) || ASSET_OPTIONS[0];
+    const live = liveRankings[opt.symbol];
+    // IMPL-C3: hasData reflects reality — true if EITHER live rankings OR
+    // fallback profile exists for this asset. (Previously all 18 assets had
+    // hasData:true unconditionally while the empty-state copy claimed only
+    // BTC was available — an internal contradiction.)
+    return { ...opt, hasData: !!live || !!ASSET_PROFILES[opt.id] };
+  }, [selectedAssetId, liveRankings]);
+
   const profile = useMemo(() => {
-    return ASSET_PROFILES[selectedAssetId] || ASSET_PROFILES.btc;
-  }, [selectedAssetId]);
+    const base = ASSET_PROFILES[selectedAssetId] || ASSET_PROFILES.btc;
+    const live = liveRankings[base.symbol];
+    if (!live) return base;
+    // Overlay live price / marketCap / volume onto the fallback snapshot.
+    // Fields CoinGecko doesn't provide (fees, revenue, devs, TVL, etc.) keep
+    // their fallback values and are flagged EST in the UI via LIVE_METRIC_IDS.
+    const livePrice = live.price || base.price;
+    const liveMcap = live.marketCap > 0 ? live.marketCap : base.circulatingMc;
+    const liveWeeklyVolume = (live.volume24h || 0) * 7 || base.weeklyVolume;
+    // IMPL-C3: prefer the higher-frequency Zustand WS price (Binance feed,
+    // sub-second) for the 7 supported assets when available; fall back to the
+    // /api/coins/rankings price (60s polling).
+    const wsPrice = (() => {
+      switch (base.symbol) {
+        case "BTC": return liveBtcPrice;
+        case "ETH": return liveEthPrice;
+        case "BNB": return liveBnbPrice;
+        case "XRP": return liveXrpPrice;
+        case "SOL": return liveSolPrice;
+        case "TRX": return liveTrxPrice;
+        case "HYPE": return liveHypePrice;
+        default: return 0;
+      }
+    })();
+    const finalPrice = wsPrice > 0 ? wsPrice : livePrice;
+    const liveFdv = base.maxSupply !== null
+      ? finalPrice * base.maxSupply
+      : (live.marketCap > 0 ? live.marketCap : base.fdv);
+    return {
+      ...base,
+      price: finalPrice,
+      circulatingMc: liveMcap,
+      weeklyVolume: liveWeeklyVolume,
+      fdv: liveFdv,
+    };
+  }, [selectedAssetId, liveRankings, liveBtcPrice, liveEthPrice, liveBnbPrice, liveXrpPrice, liveSolPrice, liveTrxPrice, liveHypePrice]);
+
+  // IMPL-C3: helper — is the currently-selected metric's value derived
+  // from live API data (LIVE badge) or from the fallback snapshot (EST badge)?
+  const isMetricLive = useMemo(() => {
+    return LIVE_METRIC_IDS.has(activeMetricId) && !!liveRankings[profile.symbol];
+  }, [activeMetricId, profile, liveRankings]);
+  // (isMetricLive retained for potential future use; the inline badge in the
+  // metric list also uses LIVE_METRIC_IDS directly.)
+  void isMetricLive;
 
   const toggleCategory = (category: string) => {
     setExpandedCategories(prev => ({
@@ -1152,8 +1320,25 @@ export default function TokenTerminalExplorer() {
     return METRICS_LIST.find(m => m.id === activeMetricId) || METRICS_LIST[0];
   }, [activeMetricId]);
 
-  // Generates highly consistent 52-week data based on selected metric parameters
+  // IMPL-C3: When the active metric is `price_market` AND we have live
+  // history from /api/history/:symbol (returned ~100 daily closes), use the
+  // REAL price history as chart data. Otherwise, fall back to the synthetic
+  // 52-week projection (labelled EST in the UI). /api/history only supports
+  // 8 of 18 assets (BTC/ETH/SOL/BNB/XRP/ADA/SUI/AVAX); for the other 10 the
+  // synthetic projection remains and an EST badge is shown.
+  const usingLiveHistory = activeMetric.id === "price_market" && liveHistory.length > 0;
+
   const chartData = useMemo(() => {
+    // Live branch: real ~100-day daily closes from /api/history.
+    if (activeMetric.id === "price_market" && liveHistory.length > 0) {
+      return liveHistory.map((h, i) => ({
+        week: `H${i + 1}`,
+        date: h.date,
+        value: h.close,
+      }));
+    }
+
+    // Synthetic fallback (unchanged from original implementation).
     const dataPoints = [];
     const metric = activeMetric;
     const { baseValue: baseVal, volatility: vol, trend: tr } = getMetricValueForAsset(profile, metric.id);
@@ -1178,7 +1363,6 @@ export default function TokenTerminalExplorer() {
 
       // Clean zeros or special overrides
       if (metric.id.includes("revenue") || metric.id.includes("take_rate") || metric.id.includes("arpu")) {
-        // Now handled dynamically by getMetricValueForAsset - let's preserve the value if it's set
         if (baseVal === 0) finalValue = 0;
       }
       if (metric.id.includes("maximum_token_supply")) {
@@ -1193,7 +1377,7 @@ export default function TokenTerminalExplorer() {
     }
 
     return dataPoints;
-  }, [activeMetric, profile]);
+  }, [activeMetric, profile, liveHistory]);
 
   // Derived calculation stats for 365d display cards
   const stats = useMemo(() => {
@@ -1298,7 +1482,11 @@ export default function TokenTerminalExplorer() {
             </h2>
           </div>
           <p className="text-xs text-slate-400">
-            Analisis 35 metrik finansial, teknik, kegunaan, dan valuasi terlengkap yang disinkronkan secara mingguan selama 365 hari.
+            {/* IMPL-C3: removed false "weekly synchronization" claim. Data is
+                now fetched live from /api/coins/rankings (CoinGecko/Binance)
+                + /api/history for the price metric. Non-price metrics use a
+                fallback snapshot labelled EST. */}
+            Analisis 35 metrik finansial, teknik, kegunaan, dan valuasi. Data pasar langsung (CoinGecko/Binance) — metrik tanpa sumber live ditandai <span className="text-amber-400 font-bold">EST</span>.
           </p>
         </div>
 
@@ -1357,8 +1545,12 @@ export default function TokenTerminalExplorer() {
             <p className="text-xs text-slate-500 text-left list-disc list-inside">
               • Misalnya, <span className="font-bold text-slate-300">Bitcoin</span> tidak memiliki TVL kontrak pintar bawaan, sedangkan <span className="font-bold text-slate-300">Uniswap</span> memiliki volume perdagangan bursa tetapi tidak didukung oleh hashrate penambangan.
             </p>
+            {/* IMPL-C3: previously this claimed "simulasi database 35 metrik
+                lengkap hanya tersedia untuk Bitcoin (BTC)" — but all 18
+                assets had hasData:true, making the empty state unreachable
+                and the copy misleading. Updated to honest copy. */}
             <p className="text-slate-400">
-              Saat ini, simulasi database 35 metrik lengkap hanya tersedia untuk <span className="text-amber-400 font-extrabold">Bitcoin (BTC)</span>.
+              Data live tersedia untuk aset yang terdaftar di CoinGecko top 100. Metrik yang tidak memiliki sumber live ditandai <span className="text-amber-400 font-extrabold">EST</span> (estimasi snapshot).
             </p>
           </div>
 
@@ -1444,7 +1636,18 @@ export default function TokenTerminalExplorer() {
                                   : "text-slate-400 hover:text-slate-100 hover:bg-slate-900/40"
                               }`}
                             >
-                              <span className="truncate pr-1.5 font-medium">{metric.name}</span>
+                              <span className="truncate pr-1.5 font-medium flex items-center gap-1.5">
+                                {metric.name}
+                                {/* IMPL-C3: per-metric LIVE/EST micro-badge so the
+                                    user can see at a glance which values come
+                                    from /api/coins/rankings vs the fallback
+                                    snapshot. */}
+                                {LIVE_METRIC_IDS.has(metric.id) && liveRankings[profile.symbol] ? (
+                                  <span className="text-[8px] font-mono font-bold px-1 py-px rounded border bg-emerald-500/10 text-emerald-400 border-emerald-500/30 shrink-0">LIVE</span>
+                                ) : (
+                                  <span className="text-[8px] font-mono font-bold px-1 py-px rounded border bg-amber-500/10 text-amber-400 border-amber-500/30 shrink-0">EST</span>
+                                )}
+                              </span>
                               <span className="text-[10px] font-mono text-slate-500 font-bold bg-slate-950/60 px-1.5 py-0.5 rounded border border-slate-800/40 shrink-0">
                                 {formatMetricValue(displayVal, metric.type, true)}
                               </span>
@@ -1486,9 +1689,16 @@ export default function TokenTerminalExplorer() {
                 <div className="flex items-center gap-2">
                   <div className="bg-slate-900 border border-slate-800 text-[10px] font-mono font-bold text-slate-400 px-3 py-1.5 rounded-lg flex items-center gap-1.5 self-start md:self-center shrink-0">
                     <Calendar className="w-3.5 h-3.5 text-cyan-500" />
-                    <span>{activeMetric.interval}</span>
+                    <span>{usingLiveHistory ? "Riwayat harga 100 hari live" : activeMetric.interval}</span>
                   </div>
                   
+                  {/* IMPL-C3: LIVE / EST badge reflects whether the chart shows
+                      real /api/history data (LIVE) or the synthetic projection
+                      (EST). */}
+                  <span className={`text-[9px] uppercase font-mono font-bold px-2 py-1 rounded border ${usingLiveHistory ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30" : "bg-amber-500/10 text-amber-400 border-amber-500/30"}`}>
+                    {usingLiveHistory ? "LIVE" : "EST"}
+                  </span>
+
                   <a
                     href={profile.officialUrl}
                     target="_blank"
@@ -1496,7 +1706,9 @@ export default function TokenTerminalExplorer() {
                     className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider font-bold text-cyan-400 hover:text-cyan-300 bg-cyan-950/30 hover:bg-cyan-950/50 border border-cyan-800/40 px-3 py-1.5 rounded-lg transition-all self-start md:self-center shrink-0"
                   >
                     <Eye className="w-3.5 h-3.5" />
-                    Live Terminal
+                    {/* IMPL-C3: honest relabel — this is just an external link
+                        to tokenterminal.com, not a live data feed. */}
+                    Buka di TokenTerminal.com
                   </a>
                 </div>
               </div>
@@ -1517,27 +1729,31 @@ export default function TokenTerminalExplorer() {
                   {formatMetricValue(stats.current, activeMetric.type)}
                 </div>
                 <div className="text-[10px] text-slate-400">
-                  Data minggu terakhir
+                  {usingLiveHistory ? "Harga penutupan terakhir" : "Data minggu terakhir"}
                 </div>
               </div>
 
               {/* Stat 2: Aggregate metric value */}
               <div className="bg-slate-950/60 border border-slate-800/80 p-4 rounded-xl space-y-1">
                 <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                  {activeMetric.interval.includes("sum") ? "Total Akumulasi 365d" : "Rata-Rata 365d"}
+                  {/* IMPL-C3: label adjusts based on whether we're using live
+                      100-day history or the synthetic 365-day projection. */}
+                  {usingLiveHistory
+                    ? (activeMetric.interval.includes("sum") ? "Total Akumulasi 100 Hari" : "Rata-Rata 100 Hari")
+                    : (activeMetric.interval.includes("sum") ? "Total Akumulasi 365d" : "Rata-Rata 365d")}
                 </span>
                 <div className="text-lg md:text-xl font-black text-white font-mono truncate">
                   {formatMetricValue(stats.sumOrAvg, activeMetric.type)}
                 </div>
                 <div className="text-[10px] text-slate-400">
-                  {activeMetric.interval.includes("sum") ? "Akumulasi jumlah mingguan" : "Rata-rata mingguan"}
+                  {usingLiveHistory ? "Rata-rata harga harian" : (activeMetric.interval.includes("sum") ? "Akumulasi jumlah mingguan" : "Rata-rata mingguan")}
                 </div>
               </div>
 
-              {/* Stat 3: 365d percentage change */}
+              {/* Stat 3: percentage change */}
               <div className="bg-slate-950/60 border border-slate-800/80 p-4 rounded-xl space-y-1">
                 <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                  Perubahan 365 Hari
+                  {usingLiveHistory ? "Perubahan 100 Hari" : "Perubahan 365 Hari"}
                 </span>
                 <div className="flex items-center gap-1.5 mt-1">
                   {stats.changePercent === 0 ? (
@@ -1559,7 +1775,7 @@ export default function TokenTerminalExplorer() {
                   )}
                 </div>
                 <div className="text-[10px] text-slate-400">
-                  Perubahan dari minggu ke-1
+                  {usingLiveHistory ? "Perubahan dari hari ke-1" : "Perubahan dari minggu ke-1"}
                 </div>
               </div>
             </div>
@@ -1664,12 +1880,44 @@ export default function TokenTerminalExplorer() {
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
                   <Eye className="w-3.5 h-3.5 text-cyan-500" />
-                  Rincian Data Mingguan (10 Minggu Terakhir)
+                  {/* IMPL-C3: when using live history the rows are daily, not weekly. */}
+                  {usingLiveHistory ? "Rincian Data Harian (10 Hari Terakhir)" : "Rincian Data Mingguan (10 Minggu Terakhir)"}
                 </span>
                 
+                {/* IMPL-C3: REAL CSV download (previously a fake alert).
+                    Builds a CSV string from the actual chartData + stats,
+                    creates a Blob, and triggers download via a temporary
+                    <a download> element. Button UI is unchanged. */}
                 <button
                   id="tt-download-simulation-data"
-                  onClick={() => alert("Simulasi unduh data CSV berhasil! File 'token_terminal_bitcoin_" + activeMetric.id + ".csv' telah disiapkan.")}
+                  onClick={() => {
+                    try {
+                      const headers = ["Periode", "Tanggal", "Nilai", "Deviasi(%)"];
+                      const rows = chartData.slice(-10).reverse().map(row => {
+                        const dev = stats.sumOrAvg !== 0
+                          ? ((row.value - stats.sumOrAvg) / stats.sumOrAvg) * 100
+                          : 0;
+                        return [
+                          row.week,
+                          row.date,
+                          row.value.toFixed(6),
+                          dev.toFixed(2),
+                        ];
+                      });
+                      const csv = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
+                      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+                      const url = URL.createObjectURL(blob);
+                      const link = document.createElement("a");
+                      link.href = url;
+                      link.download = `token_terminal_${profile.symbol.toLowerCase()}_${activeMetric.id}.csv`;
+                      document.body.appendChild(link);
+                      link.click();
+                      document.body.removeChild(link);
+                      URL.revokeObjectURL(url);
+                    } catch (err) {
+                      console.error("CSV download failed", err);
+                    }
+                  }}
                   className="text-[10px] font-bold text-cyan-400 hover:text-cyan-300 flex items-center gap-1 bg-cyan-950/50 border border-cyan-900/50 px-2 py-1 rounded hover:bg-cyan-950 transition-all cursor-pointer"
                 >
                   <Download className="w-3 h-3" />
@@ -1681,7 +1929,7 @@ export default function TokenTerminalExplorer() {
                 <table className="w-full text-left text-xs divide-y divide-slate-800/80">
                   <thead className="bg-slate-950">
                     <tr className="text-[10px] uppercase font-bold text-slate-500">
-                      <th className="px-4 py-2.5">Minggu</th>
+                      <th className="px-4 py-2.5">{usingLiveHistory ? "Hari" : "Minggu"}</th>
                       <th className="px-4 py-2.5">Tanggal Pelaporan</th>
                       <th className="px-4 py-2.5 text-right">Nilai Metrik</th>
                       <th className="px-4 py-2.5 text-right">Deviasi dari Rerata/Total</th>

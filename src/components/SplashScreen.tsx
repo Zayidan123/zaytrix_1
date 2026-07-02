@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 
 interface SplashScreenProps {
@@ -8,18 +8,25 @@ interface SplashScreenProps {
 export default function SplashScreen({ onComplete }: SplashScreenProps) {
   const [phase, setPhase] = useState<'in' | 'hold' | 'out'>('in');
 
+  // Keep the latest onComplete in a ref so the mount-only effect below is not
+  // reset every time the parent re-renders (App re-renders frequently due to
+  // live WebSocket price updates, which would otherwise clear the 3s timer
+  // and prevent the splash from ever dismissing).
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete;
+
   useEffect(() => {
     // Phase 1: fade in (instant on mount via initial/animate)
     // Phase 2: hold for ~2s, then start fade out
     const holdTimer = setTimeout(() => setPhase('out'), 2200);
     // Phase 3: after fade-out animation (0.6s), call onComplete
-    const completeTimer = setTimeout(() => onComplete(), 3000);
+    const completeTimer = setTimeout(() => onCompleteRef.current(), 3000);
 
     return () => {
       clearTimeout(holdTimer);
       clearTimeout(completeTimer);
     };
-  }, [onComplete]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const containerVariants = {
     in: { opacity: 1 },
@@ -71,7 +78,7 @@ export default function SplashScreen({ onComplete }: SplashScreenProps) {
       animate={phase}
       transition={{ duration: 0.6, ease: 'easeInOut' }}
     >
-      {/* Radial gradient glow */
+      {/* Radial gradient glow */}
       <div
         className="absolute inset-0 pointer-events-none"
         style={{
@@ -88,11 +95,11 @@ export default function SplashScreen({ onComplete }: SplashScreenProps) {
         className="relative mb-8"
       >
         <motion.img
-          src="/logo.svg"
-          alt="Z-CAPITAL"
-          width={80}
-          height={80}
-          className="drop-shadow-lg"
+          src="/logo.png"
+          alt="ZAYTRIX"
+          width={130}
+          height={130}
+          className="drop-shadow-lg object-contain"
           animate={{
             filter: [
               'drop-shadow(0 0 8px rgba(245,158,11,0.3))',
@@ -121,7 +128,7 @@ export default function SplashScreen({ onComplete }: SplashScreenProps) {
           lineHeight: 1.2,
         }}
       >
-        Z-CAPITAL
+        ZAYTRIX
       </motion.h1>
 
       {/* Subtitle */}

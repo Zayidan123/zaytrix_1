@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { 
   Bell, 
   HelpCircle, 
@@ -36,6 +36,8 @@ import NewsSection from "./components/NewsSection";
 import CoinsRankings from "./components/CoinsRankings";
 import { motion, AnimatePresence } from "motion/react";
 import { auth } from "./lib/firebase";
+import { fetchCurrentUser, logoutUser } from "./lib/auth";
+import { fetchPortfolioFromServer, schedulePortfolioSync } from "./lib/portfolioSync";
 import AuthScreen from "./components/AuthScreen";
 import SplashScreen from "./components/SplashScreen";
 
@@ -326,6 +328,14 @@ export default function App() {
   // Connect state declarations with Zustand global store
   const user = useGlobalStore(state => state.user);
   const setUser = useGlobalStore(state => state.setUser);
+  // authReady flips true once the initial /api/auth/me check resolves.
+  // While it is false, App shows SplashScreen as a LOADING indicator
+  // (no auto-login bypass — see the gate near the bottom of this component).
+  const [authReady, setAuthReady] = useState(false);
+  // Tracks whether the secondary Firebase onAuthStateChanged listener has
+  // received its initial state report (so we can distinguish the initial
+  // null callback from a real signOut event triggered by Sidebar's "Keluar Aman").
+  const firebaseListenerReadyRef = useRef(false);
   const portfolio = useGlobalStore(state => state.portfolio);
   const alerts = useGlobalStore(state => state.alerts);
   const twoFactorEnabled = useGlobalStore(state => state.twoFactorEnabled);
@@ -340,8 +350,18 @@ export default function App() {
   // Zustand live price values and setters
   const liveBtcPrice = useGlobalStore(state => state.liveBtcPrice);
   const liveEthPrice = useGlobalStore(state => state.liveEthPrice);
+  const liveBnbPrice = useGlobalStore(state => state.liveBnbPrice);
+  const liveXrpPrice = useGlobalStore(state => state.liveXrpPrice);
+  const liveSolPrice = useGlobalStore(state => state.liveSolPrice);
+  const liveTrxPrice = useGlobalStore(state => state.liveTrxPrice);
+  const liveHypePrice = useGlobalStore(state => state.liveHypePrice);
   const btcPriceChangePercent = useGlobalStore(state => state.btcPriceChangePercent);
   const ethPriceChangePercent = useGlobalStore(state => state.ethPriceChangePercent);
+  const bnbPriceChangePercent = useGlobalStore(state => state.bnbPriceChangePercent);
+  const xrpPriceChangePercent = useGlobalStore(state => state.xrpPriceChangePercent);
+  const solPriceChangePercent = useGlobalStore(state => state.solPriceChangePercent);
+  const trxPriceChangePercent = useGlobalStore(state => state.trxPriceChangePercent);
+  const hypePriceChangePercent = useGlobalStore(state => state.hypePriceChangePercent);
   const updateBtcPrice = useGlobalStore(state => state.updateBtcPrice);
   const updateEthPrice = useGlobalStore(state => state.updateEthPrice);
   const updateBnbPrice = useGlobalStore(state => state.updateBnbPrice);
@@ -351,12 +371,102 @@ export default function App() {
   const updateHypePrice = useGlobalStore(state => state.updateHypePrice);
   const setTickerSource = useGlobalStore(state => state.setTickerSource);
 
-  // Hook Firebase Auth listener to update state
+  // Ref tracking the WS reconnect timeout so it can be cleared on unmount (prevents memory leak)
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // PRIMARY auth gate: check server-side session via /api/auth/me on mount.
+  // The httpOnly `zaytrix_session` cookie cannot be read by JS, so /api/auth/me
+  // is the single source of truth for auth state. While this fetch is in-flight,
+  // SplashScreen is shown as a loading indicator (no auto-login bypass).
+  useEffect(() => {
+    let mounted = true;
+    fetchCurrentUser().then((u) => {
+      if (!mounted) return;
+      if (u) {
+        // Map id → uid so components that historically read user.uid
+        // (Profile.tsx, Dashboard.tsx) keep working with the new AuthUser shape.
+        setUser({ ...u, uid: u.id });
+        // SEC2-DATA: fetch portfolio/ledger/conversions/alerts from server on login.
+        fetchPortfolioFromServer();
+      } else {
+        setUser(null);
+      }
+      setAuthReady(true);
+    });
+    return () => { mounted = false; };
+  }, [setUser]);
+
+  // SEC2-DATA: debounced server sync for portfolio/ledger/conversions.
+  // Subscribes to store changes; when user is logged in, pushes data to server
+  // after a 2s debounce. When logged out, no sync (localStorage still works).
+  useEffect(() => {
+    const unsub = useGlobalStore.subscribe((state) => {
+      if (state.user) {
+        schedulePortfolioSync();
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  // SECONDARY Firebase listener — retained because Sidebar.tsx and Profile.tsx
+  // still import from "../lib/firebase". We ignore Firebase's initial null
+  // state (Firebase isn't really configured in this sandbox) and only react to
+  // subsequent null transitions, which fire when the user clicks "Keluar Aman"
+  // in Sidebar (which calls signOut(auth)). On that transition we also clear
+  // our server-side session cookie + null out user state.
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged((firebaseUser) => {
-      setUser(firebaseUser);
+      if (!firebaseListenerReadyRef.current) {
+        // Initial state report — record and do nothing (let /api/auth/me decide).
+        firebaseListenerReadyRef.current = true;
+        return;
+      }
+      if (firebaseUser) {
+        // Rare path: Firebase actually returned a user — use it.
+        setUser(firebaseUser);
+      } else {
+        // signOut(auth) was called from Sidebar's "Keluar Aman" button.
+        // Clear our server session cookie + null out user state so AuthScreen shows.
+        logoutUser().finally(() => setUser(null));
+      }
     });
     return () => unsubscribe();
+  }, [setUser]);
+
+  // LOGOUT CLICK INTERCEPTOR — Sidebar.tsx's "Keluar Aman" button calls
+  // `signOut(auth)` (Firebase). In this sandbox Firebase isn't really
+  // configured, so `signOut(auth)` is a no-op that does NOT fire
+  // onAuthStateChanged (verified empirically) and does NOT clear our
+  // `zaytrix_session` cookie. Because Sidebar.tsx is outside this agent's
+  // ownership, we cannot modify its onClick. Instead, we install a
+  // capture-phase click listener on `window` that detects clicks on the
+  // logout button (identified by its unique `title` attribute) and routes
+  // them to our real `logoutUser()` + `setUser(null)` flow. stopPropagation
+  // prevents Sidebar's onClick (signOut(auth)) from firing, since it would
+  // be a redundant no-op anyway.
+  useEffect(() => {
+    const LOGOUT_BUTTON_TITLE = "Selesaikan Sesi Otentikasi Aman (Logout)";
+    const handleLogoutClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      // Walk up the DOM to find the button (click may land on the icon/span).
+      let el: HTMLElement | null = target;
+      while (el && el !== document.body) {
+        if (
+          el instanceof HTMLButtonElement &&
+          el.title === LOGOUT_BUTTON_TITLE
+        ) {
+          // Intercept: call our real logout, block Sidebar's signOut(auth) no-op.
+          e.stopPropagation();
+          logoutUser().finally(() => setUser(null));
+          return;
+        }
+        el = el.parentElement;
+      }
+    };
+    // Capture phase so we run BEFORE Sidebar's bubbling-phase onClick.
+    window.addEventListener("click", handleLogoutClick, true);
+    return () => window.removeEventListener("click", handleLogoutClick, true);
   }, [setUser]);
 
   // Dynamic real-time UTC clock updater
@@ -417,12 +527,11 @@ export default function App() {
     };
   }, [settings.theme]);
 
-  // Real-time Centralised Spot Ticker Price Updates (WebSocket Stream with HTTP Fallback & micro ticks)
+  // Real-time Centralised Spot Ticker Price Updates (WebSocket Stream with HTTP Fallback)
   useEffect(() => {
     let ws: WebSocket | null = null;
     let fallbackTimer: NodeJS.Timeout | null = null;
     let hypePollingTimer: NodeJS.Timeout | null = null;
-    let microFluctuationTimer: NodeJS.Timeout | null = null;
     let isWsActive = false;
 
     const fetchHypePrice = async () => {
@@ -503,9 +612,13 @@ export default function App() {
 
         ws.onclose = () => {
           isWsActive = false;
-          setTickerSource("Local Simulation");
-          // Attempt reconnect after 5 seconds
-          setTimeout(() => {
+          setTickerSource("HTTP Polling");
+          // Attempt reconnect after 5 seconds. Track the timeout so it can be cleared on unmount.
+          if (reconnectTimeoutRef.current) {
+            clearTimeout(reconnectTimeoutRef.current);
+          }
+          reconnectTimeoutRef.current = setTimeout(() => {
+            reconnectTimeoutRef.current = null;
             connectWebSocket();
           }, 5000);
         };
@@ -566,42 +679,19 @@ export default function App() {
         }
       } catch (e) {
         console.log("Spot market info loading error:", e);
-        setTickerSource("Local Simulation");
+        // Stay in HTTP Polling state (the next interval iteration will retry the live fetch).
+        // "Local Simulation" was removed because the synthetic micro-fluctuation generator was deleted;
+        // tickerSource is now only ever "WebSocket" (live WS streaming) or "HTTP Polling" (REST fallback).
+        setTickerSource("HTTP Polling");
       }
     }, 4000);
 
-    // Apply rapid micro fluctuations (every 600ms) for high-frequency feedback stream ticker
-    microFluctuationTimer = setInterval(() => {
-      // Tiny simulated ticks that oscillate close to the real spot rate (about +/-0.005%)
-      const btcAdjustment = (Math.random() - 0.5) * 1.50; // Max +/- $0.75
-      const ethAdjustment = (Math.random() - 0.5) * 0.15; // Max +/- $0.075
-      const bnbAdjustment = (Math.random() - 0.5) * 0.05;
-      const xrpAdjustment = (Math.random() - 0.5) * 0.0005;
-      const solAdjustment = (Math.random() - 0.5) * 0.02;
-      const trxAdjustment = (Math.random() - 0.5) * 0.00005;
-      const hypeAdjustment = (Math.random() - 0.5) * 0.002;
-
-      useGlobalStore.setState((state) => {
-        return {
-          liveBtcPrice: state.liveBtcPrice + btcAdjustment,
-          btcPriceDirection: btcAdjustment >= 0 ? "up" : "down",
-          liveEthPrice: state.liveEthPrice + ethAdjustment,
-          ethPriceDirection: ethAdjustment >= 0 ? "up" : "down",
-          liveBnbPrice: state.liveBnbPrice + bnbAdjustment,
-          bnbPriceDirection: bnbAdjustment >= 0 ? "up" : "down",
-          liveXrpPrice: state.liveXrpPrice + xrpAdjustment,
-          xrpPriceDirection: xrpAdjustment >= 0 ? "up" : "down",
-          liveSolPrice: state.liveSolPrice + solAdjustment,
-          solPriceDirection: solAdjustment >= 0 ? "up" : "down",
-          liveTrxPrice: state.liveTrxPrice + trxAdjustment,
-          trxPriceDirection: trxAdjustment >= 0 ? "up" : "down",
-          liveHypePrice: state.liveHypePrice + hypeAdjustment,
-          hypePriceDirection: hypeAdjustment >= 0 ? "up" : "down",
-        };
-      });
-    }, 600);
-
     return () => {
+      // Clear any pending reconnect timeout before tearing down the socket (prevents memory leak / setState-on-unmounted).
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
       if (ws) {
         ws.onopen = null;
         ws.onmessage = null;
@@ -611,7 +701,6 @@ export default function App() {
       }
       if (fallbackTimer) clearInterval(fallbackTimer);
       if (hypePollingTimer) clearInterval(hypePollingTimer);
-      if (microFluctuationTimer) clearInterval(microFluctuationTimer);
     };
   }, []);
   
@@ -654,18 +743,39 @@ export default function App() {
 
   const rawLiveAssets = serverAssets && serverAssets.length > 0 ? serverAssets : FALLBACK_LIVE_ASSETS;
 
-  // Intercept raw asset values and override them with active centralized high-frequency prices
+  // Intercept raw asset values and override them with active centralized high-frequency prices.
+  // All 7 streamed/polled coins (BTC, ETH, BNB, XRP, SOL, TRX, HYPE) are overridden with live
+  // Zustand store values so the ticker marquee and quick-action modals never display stale
+  // /api/assets prices when a fresh live value is already available in the store.
   const liveAssets = React.useMemo(() => {
     return rawLiveAssets.map((asset) => {
-      if (asset.symbol === "BTC") {
-        return { ...asset, price: liveBtcPrice, change24h: btcPriceChangePercent };
+      // Case-insensitive symbol matching so "btc"/"Btc"/"BTC" all resolve to the same override.
+      const symbolUpper = (asset.symbol || "").toUpperCase();
+      switch (symbolUpper) {
+        case "BTC":
+          return { ...asset, price: liveBtcPrice, change24h: btcPriceChangePercent };
+        case "ETH":
+          return { ...asset, price: liveEthPrice, change24h: ethPriceChangePercent };
+        case "BNB":
+          return { ...asset, price: liveBnbPrice, change24h: bnbPriceChangePercent };
+        case "XRP":
+          return { ...asset, price: liveXrpPrice, change24h: xrpPriceChangePercent };
+        case "SOL":
+          return { ...asset, price: liveSolPrice, change24h: solPriceChangePercent };
+        case "TRX":
+          return { ...asset, price: liveTrxPrice, change24h: trxPriceChangePercent };
+        case "HYPE":
+          return { ...asset, price: liveHypePrice, change24h: hypePriceChangePercent };
+        default:
+          return asset;
       }
-      if (asset.symbol === "ETH") {
-        return { ...asset, price: liveEthPrice, change24h: ethPriceChangePercent };
-      }
-      return asset;
     });
-  }, [rawLiveAssets, liveBtcPrice, liveEthPrice, btcPriceChangePercent, ethPriceChangePercent]);
+  }, [
+    rawLiveAssets,
+    liveBtcPrice, liveEthPrice, liveBnbPrice, liveXrpPrice, liveSolPrice, liveTrxPrice, liveHypePrice,
+    btcPriceChangePercent, ethPriceChangePercent, bnbPriceChangePercent, xrpPriceChangePercent,
+    solPriceChangePercent, trxPriceChangePercent, hypePriceChangePercent,
+  ]);
 
   // Fetch real-time AI signal history to derive active sentiment next to price change marquee
   const { data: signalHistoryData } = useQuery<{ signals: any[] }>({
@@ -779,23 +889,31 @@ export default function App() {
     setAlerts(alerts.filter(a => a.id !== id));
   };
 
+  // Auth gate — three possible states:
+  //   1. !authReady        → server-side auth check in-flight → show SplashScreen
+  //                          as a LOADING indicator (its 3s onComplete timer is
+  //                          a no-op here; we re-render past it once authReady
+  //                          flips true). This is NOT the old splash-user bypass.
+  //   2. authReady && !user → no session cookie → show real AuthScreen.
+  //   3. authReady && user  → authenticated → render the dashboard.
+  if (!authReady) {
+    return <SplashScreen onComplete={() => { /* no-op while auth check in-flight */ }} />;
+  }
+
   if (!user) {
     return (
-      <SplashScreen
-        onComplete={() => {
-          useGlobalStore.getState().setUser({
-            uid: 'splash-user',
-            displayName: 'Z-Capital Trader',
-            email: 'trader@z-capital.com',
-            isAnonymous: true,
-          });
+      <AuthScreen
+        onAuthSuccess={(u) => {
+          // Map id → uid for legacy components (Profile.tsx, Dashboard.tsx)
+          // that read user.uid.
+          setUser({ ...u, uid: u.id });
         }}
       />
     );
   }
 
   return (
-    <div className={`flex h-screen bg-[#05070A] text-slate-200 font-sans overflow-hidden relative theme-${settings.theme} ${settings.glassmorphism ? 'glassmorphism-active' : ''}`} id="z-capital-app-root">
+    <div className={`flex h-screen bg-[#05070A] text-slate-200 font-sans overflow-hidden relative theme-${settings.theme} ${settings.glassmorphism ? 'glassmorphism-active' : ''}`} id="zaytrix-app-root">
       
       {/* High-tech sweep scanning telemetry line */}
       <div className="tech-sweep-line" />
@@ -967,7 +1085,7 @@ export default function App() {
 
             <div className="hidden md:flex items-center space-x-2 bg-blue-500/10 text-blue-400 border border-blue-500/20 px-2.5 py-1 rounded text-[10px] font-semibold">
               <ShieldCheck className="w-3.5 h-3.5 text-blue-400" />
-              <span>AES-256 E2EE ACTIVE</span>
+              <span>E2EE SANDBOX (DEMO)</span>
             </div>
           </div>
         </header>
@@ -1618,11 +1736,20 @@ export default function App() {
               <span className="uppercase tracking-tighter font-mono">CORE FEED: ONLINE</span>
             </div>
             <div className="hidden sm:flex items-center space-x-1.5 border-l border-slate-800 pl-4">
-              <span className="text-emerald-500 font-mono">✓</span>
-              <span className="uppercase tracking-tighter font-mono">2FA ACTIVE & SECURED</span>
+              {twoFactorEnabled ? (
+                <>
+                  <span className="text-emerald-500 font-mono">✓</span>
+                  <span className="uppercase tracking-tighter font-mono text-emerald-500">2FA ACTIVE & SECURED</span>
+                </>
+              ) : (
+                <>
+                  <span className="text-amber-500 font-mono">!</span>
+                  <span className="uppercase tracking-tighter font-mono text-amber-500">2FA DISABLED</span>
+                </>
+              )}
             </div>
           </div>
-          <div className="text-[9px] text-slate-600 font-mono uppercase hidden xs:block sm:block">Z-CAPITAL SYSTEM CORE v4.2.0-PRO-INVESTOR</div>
+          <div className="text-[9px] text-slate-600 font-mono uppercase hidden xs:block sm:block">ZAYTRIX SYSTEM CORE v3.3.0</div>
         </footer>
       </main>
     </div>

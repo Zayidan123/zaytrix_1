@@ -249,7 +249,7 @@ export default function Projections({ assets }: ProjectionsProps) {
   const handleExportCfaReportPDF = () => {
     if (!aiAnalysis) return;
     const netProfitFormatted = formatValue(finalSummary.netProfit, finalSummary.isCrypto);
-    const roiFormatted = `${((finalSummary.netProfit / (parseFloat(purchasePrice) || 1)) * 105 - 5).toFixed(2)}%`; // using final calculation ratio
+    const roiFormatted = `${((finalSummary.netProfit / (parseFloat(purchasePrice) || 1)) * 100).toFixed(2)}%`; // ROI percentage = net profit / purchase price * 100
     
     exportProjectCfaReport(
       aiAnalysis,

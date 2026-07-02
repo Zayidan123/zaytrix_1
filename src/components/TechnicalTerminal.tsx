@@ -282,7 +282,7 @@ export default function TechnicalTerminal({
         if (webPushEnabled && typeof window !== "undefined" && "Notification" in window) {
           try {
             if (Notification.permission === "granted") {
-              new Notification("🎯 ALARM Z-CAPITAL", { body: messageText });
+              new Notification("🎯 ALARM ZAYTRIX", { body: messageText });
             }
           } catch (e) {
             console.warn("Suppressing Web Push Notification creation inside sandbox:", e);
@@ -344,7 +344,10 @@ export default function TechnicalTerminal({
       const sub = history.slice(startIdx, idx + 1);
       const smaVal = sub.reduce((sum, item) => sum + item.close, 0) / (sub.length || 1);
 
-      const simulatedVolume = (h as any).volume || Math.round((h.close * (100 + (idx % 25))) % 5000);
+      // Real volume from /api/history/:symbol (Yahoo Finance OHLCV). Falls back
+      // to 0 (empty bar) when the field is missing — never fabricate a synthetic
+      // volume figure, which would mislead the volume chart.
+      const realVolume = typeof (h as any).volume === "number" ? (h as any).volume : 0;
 
       // Interpolate linear coordinates for drawn trend lines
       const lineData: { [key: string]: number } = {};
@@ -368,7 +371,7 @@ export default function TechnicalTerminal({
         ...h,
         index: idx,
         sma: parseFloat(smaVal.toFixed(4)),
-        volumeSim: simulatedVolume,
+        volumeSim: realVolume,
         ...lineData
       };
     });

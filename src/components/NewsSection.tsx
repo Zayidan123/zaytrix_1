@@ -36,111 +36,111 @@ interface NewsArticle {
   source: string;
   subTitle?: string;
   tags: string[];
+  url?: string;
 }
 
-const NEWS_DATA: NewsArticle[] = [
-  {
-    id: "framework-ventures-400-million",
-    title: "Framework Ventures Meluncurkan Dana Keempat Senilai $400 Juta untuk Kripto, AI, dan Robotika",
-    subTitle: "Modal ventura Web3 terkemuka ini memperluas mandat investasinya melampaui DeFi tradisional guna menjangkau konvergensi kecerdasan buatan dan sistem mekanis otonom.",
-    summary: "Framework Ventures mengumumkan penutupan dana keempat mereka, 'Framework Ventures IV', senilai $400 juta. Dana baru ini akan dialokasikan untuk mendanai startup tahap awal di bidang protokol kripto, kecerdasan buatan (AI), dan teknologi robotika.",
-    author: "James Hunt",
-    authorTitle: "Senior Ventures Reporter, The Block",
-    date: "2026-06-25",
-    readTime: "5 min read",
-    category: "Venture Capital",
-    imageUrl: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=1200&q=80",
-    source: "The Block",
-    tags: ["Venture Capital", "Artificial Intelligence", "Robotics", "Web3", "Framework Ventures"],
-    content: [
-      "Sektor modal ventura kripto terus menunjukkan tanda-tanda kematangan dan ekspansi horizontal. Hari ini, Framework Ventures, salah satu perusahaan investasi Web3 paling produktif, secara resmi mengumumkan penutupan penggalangan dana terbarunya, 'Framework Ventures IV', dengan total komitmen kapital mencapai $400 juta.",
-      "Langkah ambisius ini menandai perluasan yang signifikan dari mandat investasi utama Framework. Meskipun terkenal sebagai investor awal di sektor Keuangan Terdesentralisasi (DeFi) — dengan taruhan sukses di jaringan seperti Synthetix, Chainlink, dan Aave — Framework kini mengarahkan pandangannya pada konvergensi tiga teknologi masa depan yang saling bertumpukan: jaringan kripto terdesentralisasi, kecerdasan buatan konsumen (AI), dan robotika otonom.",
-      "Vance Spencer, salah satu pendiri Framework Ventures, menjelaskan keputusan strategis ini dalam sebuah wawancara eksklusif: 'Kami melihat pergeseran paradigma global di mana insentif kriptografi dapat bertindak sebagai lapisan koordinasi utama bagi agen-agen kecerdasan buatan dan armada robot otonom. Masa depan di mana mesin bertransaksi secara on-chain bukan lagi fiksi ilmiah, melainkan sebuah kebutuhan infrastruktur.'",
-      "Dana Keempat ini didukung oleh berbagai investor institusional terkemuka, termasuk dana pensiun, universitas (endowment), dan kantor keluarga multi-generasi, yang menegaskan kembalinya kepercayaan institusional terhadap manajer investasi digital berkinerja tinggi pasca siklus konsolidasi pasar sebelumnya.",
-      "Alokasi investasi Framework IV diperkirakan akan dibagi menjadi tiga pilar utama:",
-      "1. Infrastruktur Web3 & Protokol Kripto (50%): Tetap setia pada akar perusahaan, mendanai protokol skalabilitas, DeFi generasi berikutnya, dan modularitas Web3.",
-      "2. AI Terdesentralisasi (30%): Mendukung jaringan komputasi terdistribusi, pasar data kedaulatan, serta agen AI otonom yang menggunakan rel rel kripto untuk berinteraksi secara ekonomi.",
-      "3. Sistem Mekanis & Robotika Kripto-Ekonomi (20%): Berinvestasi pada integrasi perangkat keras otonom (hardware), di mana identitas robotik dan integritas rantai pasokan diamankan menggunakan enkripsi kriptografi dan kontrak pintar.",
-      "Framework Ventures, didirikan pada tahun 2019 oleh Vance Spencer dan Michael Anderson, saat ini mengelola aset gabungan (AUM) lebih dari $1,4 miliar di seluruh portofolionya. Keberhasilan penutupan dana keempat ini memberikan amunisi baru yang luar biasa besar untuk mendukung para inovator terbaik yang membangun di batas terdepan teknologi komputer."
-    ]
-  },
-  {
-    id: "bitcoin-etf-flows-soar-institutional",
-    title: "Aliran Masuk ETF Bitcoin Spot Melonjak Saat Investor Institusi Memperluas Kepemilikan Kuartal Ke-2",
-    subTitle: "Pengajuan 13F terbaru menunjukkan peningkatan substansial dalam partisipasi institusional, dengan dana pensiun negara dan manajer aset raksasa memimpin pembelian.",
-    summary: "ETF Bitcoin Spot mencatat arus masuk mingguan tertinggi sejak Maret, didorong oleh kepatuhan regulasi yang lebih jelas dan alokasi modal dari dana kekayaan negara (sovereign wealth funds).",
-    author: "Zack Abrams",
-    authorTitle: "Markets Policy Editor, The Block",
-    date: "2026-06-24",
-    readTime: "4 min read",
-    category: "Markets",
-    imageUrl: "https://images.unsplash.com/photo-1621761191319-c6fb62004040?auto=format&fit=crop&w=800&q=80",
-    source: "The Block",
-    tags: ["Bitcoin", "ETF", "Institutional", "BlackRock", "SEC"],
-    content: [
-      "Arus masuk modal ke dalam ETF Bitcoin Spot sekali lagi memecahkan rekor bulanan. Berdasarkan agregat pelaporan dari kustodian utama di New York, produk investasi Bitcoin terintegrasi ini mencatat arus masuk bersih sebesar $2,1 miliar dalam kurun waktu lima hari perdagangan terakhir saja.",
-      "Analisis mendalam terhadap dokumen pelaporan kepemilikan aset kuartalan (Formulir 13F) yang diajukan ke SEC menunjukkan bahwa jenis pembeli ETF telah bergeser secara dramatis dari ritel kaya ke institusi reguler skala penuh. Di antaranya, Dana Pensiun Dewan Negara Bagian Wisconsin dan manajer investasi global Millennium Management memimpin daftar pemegang unit terbesar.",
-      "Meskipun volatilitas harga harian BTC tetap ada, tren alokasi jangka panjang menunjukkan bahwa Bitcoin secara resmi telah diadopsi sebagai kelas aset alternatif di mata alokator aset makro. Ini menandai kemenangan struktural yang signifikan bagi ekosistem aset digital global."
-    ]
-  },
-  {
-    id: "ethereum-penck-upgrade-announced",
-    title: "Developer Ethereum Mengumumkan Tanggal Target Upgrade 'Penck' untuk Meningkatkan Skalabilitas L2",
-    subTitle: "Pembaruan konsensus berikutnya akan memperkenalkan kompresi data canggih dan menurunkan biaya gas Layer 2 hingga 90% menggunakan kompresi blob kriptografi.",
-    summary: "Upgrade Ethereum berikutnya yang dinamakan 'Penck' dijadwalkan meluncur pada Q3 2026, berfokus penuh pada optimasi transmisi data Blob untuk memotong biaya operasional rollups secara radikal.",
-    author: "Christine Kim",
-    authorTitle: "Research Director, The Block",
-    date: "2026-06-22",
-    readTime: "3 min read",
-    category: "Technology",
-    imageUrl: "https://images.unsplash.com/photo-1622790694515-61759f6b0b30?auto=format&fit=crop&w=800&q=80",
-    source: "The Block",
-    tags: ["Ethereum", "Layer 2", "Penck", "Scalability", "Gas Fees"],
-    content: [
-      "Para pengembang inti (core developers) Ethereum secara resmi telah menyepakati jadwal peluncuran untuk peningkatan jaringan besar berikutnya, yang secara internal diberi sandi 'Penck' — dinamai dari penjelajah geologi terkemuka Albrecht Penck.",
-      "Fokus utama dari peningkatan ini adalah memperhalus dan memaksimalkan efisiensi struktur 'Blob' (EIP-4844) yang diperkenalkan pada upgrade sebelumnya. Upgrade Penck akan mengimplementasikan skema kompresi data on-chain baru yang secara teoritis mampu melipatgandakan throughput transaksi Layer 2 tanpa membebani ukuran state node validator dasar.",
-      "Dengan biaya gas Layer 2 yang diproyeksikan turun hingga serendah sepersepuluh sen dolar per transaksi, upgrade Penck diharapkan mampu memicu gelombang adopsi aplikasi mikro-transaksi, game on-chain, dan agen AI terdesentralisasi secara masif."
-    ]
-  },
-  {
-    id: "sec-rules-on-stablecoins-regulatory-clarity",
-    title: "DPR AS Meloloskan RUU Regulasi Stablecoin Komprehensif dengan Dukungan Dua Partai",
-    subTitle: "Undang-Undang Kepastian Stablecoin 2026 memberikan kerangka kerja federal resmi bagi penerbit stablecoin beragun fiat, memicu reli likuiditas di pasar kripto.",
-    summary: "Rancangan undang-undang stablecoin yang lama dinantikan akhirnya disetujui, menetapkan standar cadangan 1 banding 1 yang ketat dan jalur perbankan resmi bagi penerbit yang mematuhi aturan.",
-    author: "Sujith Somraaj",
-    authorTitle: "Policy & Regulation Specialist, The Block",
-    date: "2026-06-20",
-    readTime: "4 min read",
-    category: "Policy",
-    imageUrl: "https://images.unsplash.com/photo-1589829545856-d10d557cf95f?auto=format&fit=crop&w=800&q=80",
-    source: "The Block",
-    tags: ["Regulation", "Stablecoins", "USDT", "USDC", "Congress"],
-    content: [
-      "Setelah bertahun-tahun negosiasi sengit di komite keuangan Kongres Amerika Serikat, rancangan undang-undang 'Stablecoin Transparency and Soundness Act of 2026' akhirnya lolos dengan suara mayoritas mutlak dari kedua belah partai politik utama.",
-      "RUU baru ini mendefinisikan stablecoin beragun fiat sebagai instrumen pembayaran elektronik resmi di bawah pengawasan bersama Office of the Comptroller of the Currency (OCC) dan Federal Reserve. Penerbit stablecoin sekarang diwajibkan untuk menaruh 100% dari cadangan mereka dalam bentuk surat berharga Treasury jangka pendek dan uang tunai federal yang diaudit secara bulanan oleh auditor independen tier-satu.",
-      "Langkah legislatif ini menghilangkan ketidakpastian regulasi yang selama ini menghantui institusi keuangan tradisional, membuka pintu bagi bank investasi global untuk secara legal meluncurkan stablecoin berlabel merk mereka sendiri."
-    ]
-  },
-  {
-    id: "solana-validator-emissions-re-examined",
-    title: "Proposal Baru Mengusulkan Pembagian Biaya Prioritas Solana 100% ke Validator Guna Mengatasi Spam",
-    subTitle: "Langkah kontroversial ini ditujukan untuk memberi insentif tambahan kepada operator node dalam menyaring transaksi spam, namun menghadapi penolakan dari pendukung pembakaran token.",
-    summary: "Komunitas Solana memperdebatkan revisi struktur ekonomi biaya prioritas. Proposal SIM-009 mengusulkan penghapusan mekanisme pembakaran 50% biaya prioritas, mengalihkan seluruhnya ke validator.",
-    author: "Danny Nelson",
-    authorTitle: "DeFi & Layer 1 Lead, The Block",
-    date: "2026-06-18",
-    readTime: "6 min read",
-    category: "DeFi",
-    imageUrl: "https://images.unsplash.com/photo-1639762681485-074b7f938ba0?auto=format&fit=crop&w=800&q=80",
-    source: "The Block",
-    tags: ["Solana", "DeFi", "Validators", "Tokenomics", "Priority Fees"],
-    content: [
-      "Ketegangan sedang memuncak di forum tata kelola Solana terkait proposal modifikasi tokenomik yang berpotensi mengubah lanskap deflasi jaringan. Proposal tersebut, berkode SIM-009, mengusulkan pengalihan 100% dari biaya prioritas transaksi langsung ke kantong validator yang memproses blok, menggantikan mekanisme pembakaran (burn) 50% saat ini.",
-      "Para pendukung proposal berargumen bahwa dengan margin keuntungan validator yang kian menipis akibat tingginya biaya overhead operasional perangkat keras, insentif finansial tambahan mutlak diperlukan guna mengamankan kualitas node serta memotivasi validator dalam memerangi transaksi spam otomatis (bot).",
-      "Namun, kritik keras berdatangan dari pemegang token jangka panjang yang khawatir penghapusan mekanisme pembakaran 50% akan melumpuhkan narasi deflasi Solana, dan justru menyebabkan peningkatan emisi pasokan SOL secara neto dari waktu ke waktu."
-    ]
-  }
+// IMPL-C3: NEWS_DATA hardcoded array (5 future-dated articles, 2026-06-25)
+// has been removed. Articles are now fetched live from /api/news (RSS
+// aggregator over CoinDesk / Cointelegraph / CryptoSlate). See fetch effect
+// inside the component below.
+
+// Derive an editorial category from the article title + source.
+const CATEGORY_KEYWORDS: Array<[RegExp, string]> = [
+  [/\b(sec|regul|ruu|undang|congress|senat|law|legal)\b/i, "Regulasi"],
+  [/\b(etf|blackrock|fidelity|spot)\b/i, "ETF"],
+  [/\b(ethereum|\beth\b|vitalik|upgrade|fork|eip)\b/i, "Ethereum"],
+  [/\b(bitcoin|\bbtc\b|satoshi|mining|hashrate|halving)\b/i, "Bitcoin"],
+  [/\b(solana|\bsol\b)\b/i, "Solana"],
+  [/\b(defi|tvl|liquidity|staking|yield|lending)\b/i, "DeFi"],
+  [/\b(nft|gaming|metaverse)\b/i, "NFT"],
+  [/\b(hack|exploit|breach|ransom|drain)\b/i, "Keamanan"],
+  [/\b(fund|venture|capital|raise|funding|series)\b/i, "Venture Capital"],
+  [/\b(stablecoin|usdt|usdc|tether)\b/i, "Stablecoin"],
+  [/\b(ai|agent|llm|gpt)\b/i, "AI"],
 ];
+
+const deriveCategory = (title: string): string => {
+  for (const [re, cat] of CATEGORY_KEYWORDS) {
+    if (re.test(title)) return cat;
+  }
+  return "Crypto";
+};
+
+const TAG_KEYWORDS = [
+  "Bitcoin", "BTC", "Ethereum", "ETH", "Solana", "SOL", "XRP", "Ripple",
+  "ETF", "SEC", "DeFi", "NFT", "Stablecoin", "USDT", "USDC", "BNB",
+  "Cardano", "ADA", "TRX", "Tron", "Hype", "AVAX", "Sui", "NEAR",
+  "BlackRock", "Fidelity", "Coinbase", "Binance", "Hack", "Staking"
+];
+
+const deriveTags = (title: string): string[] => {
+  const tags = new Set<string>();
+  for (const kw of TAG_KEYWORDS) {
+    const re = new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+    if (re.test(title)) tags.add(kw);
+  }
+  if (tags.size === 0) {
+    const words = title.split(/\s+/).filter(w => w.length > 4 && /^[A-Z]/.test(w));
+    return words.slice(0, 3);
+  }
+  return Array.from(tags).slice(0, 5);
+};
+
+const estimateReadTime = (summary: string): string => {
+  const wordCount = (summary || "").split(/\s+/).filter(Boolean).length;
+  const minutes = Math.max(1, Math.ceil(wordCount / 200));
+  return `${minutes} min read`;
+};
+
+const formatNewsDate = (iso: string): string => {
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  } catch {
+    return iso;
+  }
+};
+
+// Map /api/news article shape → NewsArticle shape used by this component.
+// RSS only gives a short description; we use it for both summary and content
+// body, and append a "read more at source" note. AI sentiment analysis
+// remains live (POST /api/gemini/news-sentiment) when the user opens an
+// article — no fake static sentiment is shown on cards.
+const mapApiArticle = (api: {
+  id: string;
+  title: string;
+  summary: string;
+  url: string;
+  publishedAt: string;
+  image: string | null;
+  source: string;
+}): NewsArticle => {
+  const title = api.title || "Tanpa Judul";
+  const summary = api.summary || "";
+  const source = api.source || "Crypto News";
+  return {
+    id: api.id,
+    title,
+    summary,
+    content: [
+      summary || title,
+      `Artikel ini disindikasi langsung dari sumber terverifikasi (${source}). Untuk membaca laporan lengkap, kunjungi tautan sumber asli. ZAYTRIX Newsroom menyajikan ringkasan intelijen pasar dan analisis AI yang dapat diakses melalui panel di bawah.`,
+    ],
+    author: source,
+    authorTitle: `Reporter, ${source}`,
+    date: formatNewsDate(api.publishedAt),
+    readTime: estimateReadTime(summary),
+    category: deriveCategory(title),
+    imageUrl: api.image || "",
+    source,
+    url: api.url,
+    tags: deriveTags(title),
+  };
+};
 
 interface NewsSentimentResult {
   sentiment: "BULLISH" | "BEARISH" | "NEUTRAL";
@@ -154,19 +154,22 @@ interface NewsSentimentResult {
   isFallback?: boolean;
 }
 
-const getStaticSentiment = (id: string) => {
-  if (id === "framework-ventures-400-million") return { label: "BULLISH", score: 92, style: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" };
-  if (id === "bitcoin-etf-flows-soar-institutional") return { label: "BULLISH", score: 95, style: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" };
-  if (id === "ethereum-penck-upgrade-announced") return { label: "BULLISH", score: 88, style: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" };
-  if (id === "sec-rules-on-stablecoins-regulatory-clarity") return { label: "BULLISH", score: 85, style: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" };
-  if (id === "solana-validator-emissions-re-examined") return { label: "NEUTRAL", score: 65, style: "bg-amber-500/10 text-amber-400 border-amber-500/20" };
-  return { label: "NEUTRAL", score: 70, style: "bg-slate-800 text-slate-400 border-slate-700" };
-};
+// IMPL-C3: getStaticSentiment removed. The hardcoded switch returned fake
+// BULLISH/NEUTRAL scores inconsistent with the live /api/gemini/news-sentiment
+// analysis. Cards now show a neutral "AI: —" badge that does not fabricate a
+// score; the real AI analysis still runs when the user opens an article.
 
 export default function NewsSection() {
   const [selectedArticleId, setSelectedArticleId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState("All");
+
+  // IMPL-C3: Live articles state (replaces hardcoded NEWS_DATA).
+  const [articles, setArticles] = useState<NewsArticle[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState<number>(0);
+  const [displayCount, setDisplayCount] = useState<number>(9);
 
   // AI Sentiment States
   const [sentimentLoading, setSentimentLoading] = useState(false);
@@ -178,6 +181,47 @@ export default function NewsSection() {
   const [newsChatHistory, setNewsChatHistory] = useState<{role: 'user' | 'model', content: string}[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
 
+  // Fetch /api/news on mount, poll every 5 minutes for fresh articles.
+  // reloadKey lets the retry button force a refetch.
+  useEffect(() => {
+    let cancelled = false;
+    const fetchNews = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const res = await fetch("/api/news");
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (cancelled) return;
+        if (!data.success) throw new Error(data.error || "Gagal memuat berita.");
+        const mapped: NewsArticle[] = (data.articles || []).map(mapApiArticle);
+        // Sort by date descending (most recent first).
+        mapped.sort((a, b) => {
+          const ta = new Date(a.date).getTime() || 0;
+          const tb = new Date(b.date).getTime() || 0;
+          return tb - ta;
+        });
+        setArticles(mapped);
+      } catch (err: any) {
+        if (!cancelled) setError(err?.message || "Gagal memuat berita.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    fetchNews();
+    const interval = setInterval(fetchNews, 5 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [reloadKey]);
+
+  const handleRetry = () => {
+    setArticles([]);
+    setDisplayCount(9);
+    setReloadKey(k => k + 1);
+  };
+
   useEffect(() => {
     if (!selectedArticleId) {
       setSentimentResult(null);
@@ -186,7 +230,7 @@ export default function NewsSection() {
       return;
     }
     
-    const article = NEWS_DATA.find(art => art.id === selectedArticleId);
+    const article = articles.find(art => art.id === selectedArticleId);
     if (!article) return;
     
     setSentimentLoading(true);
@@ -215,12 +259,12 @@ export default function NewsSection() {
   }, [selectedArticleId]);
 
   const categories = useMemo(() => {
-    const cats = new Set(NEWS_DATA.map(art => art.category));
+    const cats = new Set(articles.map(art => art.category));
     return ["All", ...Array.from(cats)];
-  }, []);
+  }, [articles]);
 
   const filteredArticles = useMemo(() => {
-    return NEWS_DATA.filter(art => {
+    return articles.filter(art => {
       const matchesSearch = 
         art.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
         art.summary.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -229,17 +273,18 @@ export default function NewsSection() {
       const matchesCategory = activeCategory === "All" || art.category === activeCategory;
       return matchesSearch && matchesCategory;
     });
-  }, [searchQuery, activeCategory]);
+  }, [articles, searchQuery, activeCategory]);
 
+  // IMPL-C3: featuredArticle is now the most recent article from the live
+  // feed (articles are pre-sorted by date desc in the fetch effect).
   const featuredArticle = useMemo(() => {
-    // Find first article that is Venture Capital or marked as main
-    return NEWS_DATA[0];
-  }, []);
+    return articles[0];
+  }, [articles]);
 
   const activeArticle = useMemo(() => {
     if (!selectedArticleId) return null;
-    return NEWS_DATA.find(art => art.id === selectedArticleId) || null;
-  }, [selectedArticleId]);
+    return articles.find(art => art.id === selectedArticleId) || null;
+  }, [articles, selectedArticleId]);
 
   // Handle Scroll to top on reading article
   const handleSelectArticle = (id: string) => {
@@ -275,7 +320,7 @@ export default function NewsSection() {
                 </div>
                 <h2 className="text-2xl font-black text-white mt-1 flex items-center gap-2 font-sans">
                   <BookOpen className="w-6 h-6 text-amber-500" />
-                  Z-CAPITAL NEWSROOM
+                  ZAYTRIX NEWSROOM
                 </h2>
                 <p className="text-xs text-slate-400 mt-1">
                   Analisis intelijen pasar langsung dari koresponden global terkemuka kami.
@@ -314,19 +359,60 @@ export default function NewsSection() {
               ))}
             </div>
 
+            {/* IMPL-C3: Loading skeleton (same layout as article cards, shimmer effect). */}
+            {loading && articles.length === 0 && (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div key={i} className="bg-slate-950/40 border border-slate-800/80 rounded-xl overflow-hidden animate-pulse">
+                    <div className="h-44 bg-slate-900" />
+                    <div className="p-5 space-y-3">
+                      <div className="h-3 bg-slate-800 rounded w-1/3" />
+                      <div className="h-4 bg-slate-800 rounded w-3/4" />
+                      <div className="h-3 bg-slate-800/70 rounded w-full" />
+                      <div className="h-3 bg-slate-800/70 rounded w-2/3" />
+                    </div>
+                    <div className="px-5 pb-5 pt-3 border-t border-slate-800/50 flex items-center justify-between">
+                      <div className="h-3 bg-slate-800 rounded w-1/4" />
+                      <div className="h-3 bg-slate-800 rounded w-1/5" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* IMPL-C3: Error state with retry button. */}
+            {error && !loading && articles.length === 0 && (
+              <div className="bg-slate-950/30 border border-rose-500/30 rounded-xl p-12 text-center">
+                <p className="text-sm font-bold text-rose-400">Gagal memuat berita</p>
+                <p className="text-xs text-slate-500 mt-1 mb-4 font-mono">{error}</p>
+                <button
+                  onClick={handleRetry}
+                  className="text-xs bg-amber-500/15 text-amber-300 border border-amber-500/20 px-4 py-2 rounded cursor-pointer hover:bg-amber-500/25 font-bold transition-all"
+                >
+                  Coba Lagi
+                </button>
+              </div>
+            )}
+
             {/* Featured Hero Article - Styled like theblock.co top banner */}
-            {filteredArticles.length > 0 && activeCategory === "All" && !searchQuery && (
+            {filteredArticles.length > 0 && activeCategory === "All" && !searchQuery && featuredArticle && (
               <div 
                 onClick={() => handleSelectArticle(featuredArticle.id)}
                 className="group cursor-pointer bg-gradient-to-b from-slate-950/80 to-slate-950 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl transition-all duration-300 hover:border-amber-500/30 ring-1 ring-transparent hover:ring-amber-500/10 flex flex-col lg:flex-row"
               >
                 <div className="lg:w-3/5 relative h-64 lg:h-auto overflow-hidden">
-                  <img
-                    src={featuredArticle.imageUrl}
-                    alt={featuredArticle.title}
-                    referrerPolicy="no-referrer"
-                    className="w-full h-full object-cover group-hover:scale-[1.015] transition-transform duration-500 filter brightness-90 group-hover:brightness-100"
-                  />
+                  {featuredArticle.imageUrl ? (
+                    <img
+                      src={featuredArticle.imageUrl}
+                      alt={featuredArticle.title}
+                      referrerPolicy="no-referrer"
+                      className="w-full h-full object-cover group-hover:scale-[1.015] transition-transform duration-500 filter brightness-90 group-hover:brightness-100"
+                    />
+                  ) : (
+                    <div className="w-full h-full bg-gradient-to-br from-slate-800 via-slate-900 to-slate-950 flex items-center justify-center">
+                      <BookOpen className="w-16 h-16 text-slate-700" />
+                    </div>
+                  )}
                   <div className="absolute top-4 left-4 bg-amber-500 text-slate-950 text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded shadow-md font-mono">
                     FEATURED REPORT
                   </div>
@@ -338,14 +424,9 @@ export default function NewsSection() {
                       <span className="text-[10px] font-bold text-amber-400 uppercase tracking-widest bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
                         {featuredArticle.category}
                       </span>
-                      {(() => {
-                        const sent = getStaticSentiment(featuredArticle.id);
-                        return (
-                          <span className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded border ${sent.style}`}>
-                            AI: {sent.label} ({sent.score}%)
-                          </span>
-                        );
-                      })()}
+                      <span className="text-[9px] font-mono font-bold px-2 py-0.5 rounded border bg-slate-800/60 text-slate-400 border-slate-700">
+                        AI: —
+                      </span>
                       <span className="text-[10px] text-slate-400 font-mono flex items-center gap-1">
                         <Clock className="w-3.5 h-3.5 text-cyan-500" /> {featuredArticle.readTime}
                       </span>
@@ -375,9 +456,11 @@ export default function NewsSection() {
 
             {/* List Grid Feed */}
             {filteredArticles.length > 0 ? (
+              <>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {filteredArticles
-                  .filter(art => activeCategory !== "All" || searchQuery ? true : art.id !== featuredArticle.id)
+                  .filter(art => activeCategory !== "All" || searchQuery ? true : art.id !== featuredArticle?.id)
+                  .slice(0, displayCount)
                   .map((article) => (
                     <motion.div
                       key={article.id}
@@ -388,12 +471,18 @@ export default function NewsSection() {
                       <div>
                         {/* Article Image Cover */}
                         <div className="h-44 relative overflow-hidden bg-slate-900">
-                          <img
-                            src={article.imageUrl}
-                            alt={article.title}
-                            referrerPolicy="no-referrer"
-                            className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-300 filter brightness-90 group-hover:brightness-100"
-                          />
+                          {article.imageUrl ? (
+                            <img
+                              src={article.imageUrl}
+                              alt={article.title}
+                              referrerPolicy="no-referrer"
+                              className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-300 filter brightness-90 group-hover:brightness-100"
+                            />
+                          ) : (
+                            <div className="w-full h-full bg-gradient-to-br from-slate-800 via-slate-900 to-slate-950 flex items-center justify-center">
+                              <BookOpen className="w-12 h-12 text-slate-700" />
+                            </div>
+                          )}
                           <div className="absolute bottom-3 left-3 bg-slate-950/80 backdrop-blur-md border border-slate-800 text-slate-300 text-[9px] font-mono font-bold px-2 py-0.5 rounded uppercase tracking-wider">
                             {article.source}
                           </div>
@@ -406,14 +495,9 @@ export default function NewsSection() {
                               <span className="font-bold text-cyan-400 uppercase tracking-widest font-mono">
                                 {article.category}
                               </span>
-                              {(() => {
-                                const sent = getStaticSentiment(article.id);
-                                return (
-                                  <span className={`text-[8px] font-mono font-bold px-1.5 py-0.5 rounded border ${sent.style}`}>
-                                    {sent.label} ({sent.score}%)
-                                  </span>
-                                );
-                              })()}
+                              <span className="text-[8px] font-mono font-bold px-1.5 py-0.5 rounded border bg-slate-800/60 text-slate-400 border-slate-700">
+                                AI: —
+                              </span>
                             </div>
                             <span className="text-slate-500 font-mono flex items-center gap-1">
                               <Clock className="w-3 h-3" /> {article.readTime}
@@ -440,6 +524,20 @@ export default function NewsSection() {
                     </motion.div>
                   ))}
               </div>
+              {/* IMPL-C3: Load More button — API returns up to 30 articles; show
+                  9 initially and reveal 9 more per click. */}
+              {filteredArticles.length > displayCount && (
+                <div className="flex justify-center pt-2">
+                  <button
+                    onClick={() => setDisplayCount(c => c + 9)}
+                    className="text-xs font-bold text-amber-400 hover:text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 px-6 py-2.5 rounded-lg flex items-center gap-2 cursor-pointer transition-all"
+                  >
+                    Muat Lebih Banyak
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+              </>
             ) : (
               <div className="bg-slate-950/30 border border-slate-800/60 rounded-xl p-12 text-center text-slate-500">
                 <Search className="w-10 h-10 text-slate-600 mx-auto mb-3" />
@@ -527,12 +625,18 @@ export default function NewsSection() {
 
                 {/* Hero Featured Image */}
                 <div className="relative rounded-2xl overflow-hidden border border-slate-800 shadow-2xl h-64 md:h-[400px]">
-                  <img
-                    src={activeArticle.imageUrl}
-                    alt={activeArticle.title}
-                    referrerPolicy="no-referrer"
-                    className="w-full h-full object-cover"
-                  />
+                  {activeArticle.imageUrl ? (
+                    <img
+                      src={activeArticle.imageUrl}
+                      alt={activeArticle.title}
+                      referrerPolicy="no-referrer"
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-full h-full bg-gradient-to-br from-slate-800 via-slate-900 to-slate-950 flex items-center justify-center">
+                      <BookOpen className="w-20 h-20 text-slate-700" />
+                    </div>
+                  )}
                   <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-transparent opacity-60" />
                 </div>
 
@@ -857,7 +961,7 @@ export default function NewsSection() {
                         );
                       }
                       
-                      // Highlight blockquotes
+                      // Highlight blockquotes (kept for legacy compatibility)
                       if (paragraph.includes("Vance Spencer") && paragraph.includes(":")) {
                         const [speaker, speech] = paragraph.split(":");
                         return (
@@ -879,6 +983,20 @@ export default function NewsSection() {
                         </p>
                       );
                     })}
+
+                    {/* IMPL-C3: "Read more at source" link — RSS feed only gives
+                        a short summary, so we link to the original article. */}
+                    {activeArticle.url && (
+                      <a
+                        href={activeArticle.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 text-xs font-bold text-cyan-400 hover:text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 px-4 py-2 rounded-lg transition-all mt-4"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        Baca Selengkapnya di {activeArticle.source}
+                      </a>
+                    )}
 
                     {/* Tag Cloud */}
                     <div className="pt-6 border-t border-slate-800 flex flex-wrap items-center gap-2">
@@ -906,7 +1024,7 @@ export default function NewsSection() {
                   </h4>
                   
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {NEWS_DATA
+                    {articles
                       .filter(art => art.id !== activeArticle.id)
                       .slice(0, 2)
                       .map(art => (
@@ -916,12 +1034,18 @@ export default function NewsSection() {
                           className="bg-slate-950/40 hover:bg-slate-950/70 border border-slate-800 p-4 rounded-xl cursor-pointer transition-all duration-200 flex gap-4 items-center group"
                         >
                           <div className="w-16 h-16 rounded-lg overflow-hidden shrink-0 bg-slate-900">
-                            <img
-                              src={art.imageUrl}
-                              alt={art.title}
-                              referrerPolicy="no-referrer"
-                              className="w-full h-full object-cover filter brightness-90 group-hover:brightness-100"
-                            />
+                            {art.imageUrl ? (
+                              <img
+                                src={art.imageUrl}
+                                alt={art.title}
+                                referrerPolicy="no-referrer"
+                                className="w-full h-full object-cover filter brightness-90 group-hover:brightness-100"
+                              />
+                            ) : (
+                              <div className="w-full h-full bg-gradient-to-br from-slate-800 to-slate-950 flex items-center justify-center">
+                                <BookOpen className="w-6 h-6 text-slate-700" />
+                              </div>
+                            )}
                           </div>
                           <div className="space-y-1 overflow-hidden">
                             <span className="text-[9px] font-bold text-amber-500 font-mono uppercase">

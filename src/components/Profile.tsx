@@ -1,19 +1,19 @@
 import React, { useState, useEffect } from "react";
 import { motion } from "motion/react";
-import { 
-  User, 
-  Mail, 
-  Phone, 
-  MapPin, 
-  Calendar, 
-  ShieldCheck, 
-  Lock, 
-  Globe, 
-  Eye, 
-  Download, 
-  Trash2, 
-  CheckCircle, 
-  AlertTriangle, 
+import {
+  User,
+  Mail,
+  Phone,
+  MapPin,
+  Calendar,
+  ShieldCheck,
+  Lock,
+  Globe,
+  Eye,
+  Download,
+  Trash2,
+  CheckCircle,
+  AlertTriangle,
   Sparkles,
   Camera,
   Layers,
@@ -21,11 +21,29 @@ import {
   HelpCircle,
   Clock,
   Shield,
-  Fingerprint
+  Fingerprint,
+  Monitor,
+  LogOut,
+  MailCheck,
+  RefreshCw,
 } from "lucide-react";
 import { db, auth } from "../lib/firebase";
-import { doc, getDoc, setDoc } from "firebase/firestore";
+import { doc, getDoc, setDoc, deleteDoc } from "firebase/firestore";
+import {
+  updatePassword,
+  deleteUser,
+  reauthenticateWithCredential,
+  EmailAuthProvider,
+  signOut as firebaseSignOut
+} from "firebase/auth";
 import { useGlobalStore } from "../store";
+import {
+  getSessions,
+  revokeSession,
+  revokeOtherSessions,
+  resendVerification,
+  type AuthUser,
+} from "../lib/auth";
 
 // Preset Avatars
 const PRESET_AVATARS = [
@@ -140,6 +158,138 @@ export default function Profile() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [passwordStatus, setPasswordStatus] = useState<{ success: boolean; message: string } | null>(null);
 
+  // SEC2-AUTH: active sessions list + email verification status.
+  // Sessions are fetched on mount via getSessions() (GET /api/auth/sessions).
+  // Each row has { id, ip, userAgent, createdAt, lastSeen, expiresAt, current }.
+  type SessionRow = {
+    id: string;
+    ip?: string | null;
+    userAgent?: string | null;
+    createdAt: string;
+    lastSeen: string;
+    expiresAt: string;
+    current?: boolean;
+  };
+  const [sessions, setSessions] = useState<SessionRow[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [logoutOthersLoading, setLogoutOthersLoading] = useState(false);
+  const [logoutOthersMessage, setLogoutOthersMessage] = useState<string | null>(null);
+  // Email-verification status — derived from the global store's user object.
+  const emailVerified: boolean = !!(user as any)?.emailVerified;
+  const [resendEmailLoading, setResendEmailLoading] = useState(false);
+  const [resendEmailMessage, setResendEmailMessage] = useState<string | null>(null);
+
+  // Fetch sessions on mount + when user changes.
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    setSessionsLoading(true);
+    setSessionsError(null);
+    getSessions()
+      .then((res) => {
+        if (cancelled) return;
+        if (res.success && Array.isArray(res.sessions)) {
+          setSessions(res.sessions as SessionRow[]);
+        } else {
+          setSessionsError(res.error || "Gagal memuat daftar sesi.");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setSessionsError("Gagal memuat daftar sesi.");
+      })
+      .finally(() => {
+        if (!cancelled) setSessionsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
+  const handleRevokeSession = async (id: string) => {
+    if (!id) return;
+    if (!window.confirm("Cabut sesi ini? Perangkat terkait akan keluar otomatis.")) return;
+    setRevokingId(id);
+    try {
+      const res = await revokeSession(id);
+      if (res.success) {
+        setSessions((prev) => prev.filter((s) => s.id !== id));
+        addExecutionLog(`[SECURITY] Sesi ${id.slice(0, 8)}… dicabut.`);
+      } else {
+        addExecutionLog(`[SECURITY][WARN] Gagal mencabut sesi: ${res.error || "unknown"}`);
+      }
+    } finally {
+      setRevokingId(null);
+    }
+  };
+
+  const handleLogoutOthers = async () => {
+    if (!window.confirm("Cabut SEMUA sesi lain kecuali yang ini?")) return;
+    setLogoutOthersLoading(true);
+    setLogoutOthersMessage(null);
+    try {
+      const res = await revokeOtherSessions();
+      if (res.success) {
+        const count = (res as any).revoked ?? 0;
+        setLogoutOthersMessage(`${count} sesi lain berhasil dicabut.`);
+        addExecutionLog(`[SECURITY] ${count} sesi lain dicabut.`);
+        // Refresh the list — current session should now be the only one.
+        const fresh = await getSessions();
+        if (fresh.success && Array.isArray(fresh.sessions)) {
+          setSessions(fresh.sessions as SessionRow[]);
+        }
+      } else {
+        setLogoutOthersMessage(res.error || "Gagal mencabut sesi lain.");
+      }
+    } finally {
+      setLogoutOthersLoading(false);
+    }
+  };
+
+  const handleResendEmailVerification = async () => {
+    setResendEmailLoading(true);
+    setResendEmailMessage(null);
+    try {
+      const res = await resendVerification();
+      if (res.success) {
+        setResendEmailMessage(res.message || "Email verifikasi telah dikirim ulang.");
+        addExecutionLog(`[SECURITY] Email verifikasi dikirim ulang dari Profile.`);
+      } else {
+        setResendEmailMessage(res.error || "Gagal mengirim ulang.");
+      }
+    } finally {
+      setResendEmailLoading(false);
+    }
+  };
+
+  // Helper: format a session's user-agent into a short device/browser label.
+  function summarizeUA(ua: string | null | undefined): string {
+    if (!ua) return "Perangkat Tidak Diketahui";
+    if (/iphone|ipad|ios/i.test(ua)) return "iOS Device";
+    if (/android/i.test(ua)) return "Android Device";
+    if (/macintosh|mac os x/i.test(ua)) return "macOS Browser";
+    if (/windows/i.test(ua)) return "Windows Browser";
+    if (/linux/i.test(ua)) return "Linux Browser";
+    return "Browser Tidak Dikenal";
+  }
+  function formatLastSeen(iso: string): string {
+    try {
+      const d = new Date(iso);
+      const now = Date.now();
+      const diff = now - d.getTime();
+      const mins = Math.floor(diff / 60000);
+      if (mins < 1) return "baru saja";
+      if (mins < 60) return `${mins} menit lalu`;
+      const hours = Math.floor(mins / 60);
+      if (hours < 24) return `${hours} jam lalu`;
+      const days = Math.floor(hours / 24);
+      return `${days} hari lalu`;
+    } catch {
+      return iso;
+    }
+  }
+
   // Fetch from Firestore on load
   useEffect(() => {
     async function loadProfile() {
@@ -226,6 +376,10 @@ export default function Profile() {
   };
 
   // Handle Password Update
+  // Previously this was a FAKE: setTimeout(800ms) → success alert, no Firebase
+  // call. Now we call Firebase's real updatePassword(). If the user is the
+  // splash-user bypass (auth.currentUser is null), we honestly tell the user
+  // the feature requires an active Firebase login.
   const handleUpdatePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setPasswordStatus(null);
@@ -239,18 +393,61 @@ export default function Profile() {
       return;
     }
 
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+      // Honest message: the dashboard currently auto-logs-in a fake "splash-user"
+      // (see App.tsx). There is no real Firebase auth session, so we cannot
+      // change a password. Previously the UI faked success — now we are honest.
+      setPasswordStatus({
+        success: false,
+        message: "Fitur ubah kata sandi memerlukan login Firebase yang aktif. Sesi saat ini adalah splash-user (tidak terautentikasi)."
+      });
+      addExecutionLog(`[SECURITY][WARN] Ubah sandi dibatalkan: auth.currentUser null (splash-user bypass).`);
+      return;
+    }
+
+    if (!currentPassword) {
+      setPasswordStatus({ success: false, message: "Kata sandi saat ini wajib diisi (reautentikasi Firebase)." });
+      return;
+    }
+
+    addExecutionLog(`[SECURITY] Memvalidasi sesi otentikasi saat ini untuk perubahan sandi...`);
     try {
-      // Simulate/Trigger Password change
-      addExecutionLog(`[SECURITY] Memvalidasi sesi otentikasi saat ini untuk perubahan sandi...`);
-      await new Promise(resolve => setTimeout(resolve, 800));
-      
-      setPasswordStatus({ success: true, message: "Kata sandi akun Anda berhasil diperbarui di server aman." });
-      addExecutionLog(`[SECURITY] Kunci enkripsi sandi utama pengguna berhasil di-rekey secara aman.`);
+      // Firebase requires recent sign-in for sensitive operations. We
+      // re-authenticate with the user's email + currentPassword first.
+      const email = currentUser.email;
+      if (!email) {
+        throw new Error("Akun tidak memiliki email terdaftar — tidak dapat reautentikasi.");
+      }
+      const credential = EmailAuthProvider.credential(email, currentPassword);
+      try {
+        await reauthenticateWithCredential(currentUser, credential);
+      } catch (reauthErr: any) {
+        const code = reauthErr?.code || "";
+        if (code === "auth/wrong-password" || code === "auth/invalid-credential") {
+          throw new Error("Kata sandi saat ini salah.");
+        }
+        throw new Error(`Gagal reautentikasi: ${reauthErr?.message || code}`);
+      }
+
+      await updatePassword(currentUser, newPassword);
+      setPasswordStatus({ success: true, message: "Kata sandi akun Firebase Anda berhasil diperbarui." });
+      addExecutionLog(`[SECURITY] Kata sandi akun Firebase berhasil diubah (updatePassword).`);
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
     } catch (err: any) {
-      setPasswordStatus({ success: false, message: err.message || "Gagal mengganti kata sandi." });
+      const code = err?.code || "";
+      let msg = err?.message || "Gagal mengganti kata sandi.";
+      if (code === "auth/requires-recent-login") {
+        msg = "Firebase memerlukan login ulang. Silakan logout dan login kembali sebelum mengganti sandi.";
+      } else if (code === "auth/weak-password") {
+        msg = "Kata sandi baru terlalu lemah (min 6 karakter).";
+      } else if (code === "auth/too-many-requests") {
+        msg = "Terlalu banyak percobaan. Coba lagi nanti.";
+      }
+      setPasswordStatus({ success: false, message: msg });
+      addExecutionLog(`[SECURITY][WARN] Gagal ubah sandi: ${msg}`);
     }
   };
 
@@ -273,10 +470,78 @@ export default function Profile() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `z-capital-data-archive-${user?.uid || "user"}.json`;
+    link.download = `zaytrix-data-archive-${user?.uid || "user"}.json`;
     link.click();
     URL.revokeObjectURL(url);
     addExecutionLog(`[PRIVACY] Arsip komprehensif data pengguna berhasil diekstraksi dan diunduh.`);
+  };
+
+  // Real account deletion — previously a FAKE: confirm → alert → signOut only.
+  // Now we call Firebase Auth deleteUser() AND delete the Firestore profile
+  // document. If auth.currentUser is null (splash-user bypass), we honestly
+  // tell the user the feature requires an active Firebase login.
+  const handleDeleteAccount = async () => {
+    const confirmDelete = window.confirm(
+      "PERINGATAN SANGAT FATAL: Tindakan ini akan menghapus akun Firebase Auth Anda DAN dokumen profil Firestore secara permanen. Tindakan ini tidak dapat dibatalkan. Lanjutkan?"
+    );
+    if (!confirmDelete) return;
+
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+      // Honest message: with splash-user bypass, there is no real auth account
+      // to delete. We refuse to fake success.
+      alert(
+        "Fitur hapus akun memerlukan login Firebase yang aktif. Sesi saat ini adalah splash-user (tidak terautentikasi) — tidak ada akun Firebase yang dapat dihapus."
+      );
+      addExecutionLog(`[PRIVACY][WARN] Hapus akun dibatalkan: auth.currentUser null (splash-user bypass).`);
+      return;
+    }
+
+    const uid = currentUser.uid;
+    addExecutionLog(`[PRIVACY] Memulai penghapusan akun Firebase + dokumen Firestore profiles/${uid}...`);
+
+    // 1. Delete the Firestore profile document first (so we still have a valid
+    //    auth session while writing). If Firestore rules block this, we still
+    //    surface the error and abort before deleting the auth account.
+    try {
+      const docRef = doc(db, "profiles", uid);
+      await deleteDoc(docRef);
+      addExecutionLog(`[PRIVACY] Dokumen Firestore profiles/${uid} berhasil dihapus.`);
+    } catch (fsErr: any) {
+      const msg = fsErr?.message || String(fsErr);
+      alert(`Gagal menghapus dokumen profil Firestore: ${msg}\n\nAkun Firebase Auth TIDAK dihapus. Aborted.`);
+      addExecutionLog(`[PRIVACY][ERROR] Gagal hapus Firestore: ${msg}. Akun auth tidak dihapus.`);
+      return;
+    }
+
+    // 2. Delete the Firebase Auth user record. This may fail with
+    //    auth/requires-recent-login — if so, we tell the user to re-login.
+    try {
+      await deleteUser(currentUser);
+      addExecutionLog(`[PRIVACY] Akun Firebase Auth (uid: ${uid}) berhasil dihapus secara permanen.`);
+    } catch (authErr: any) {
+      const code = authErr?.code || "";
+      let msg = authErr?.message || String(authErr);
+      if (code === "auth/requires-recent-login") {
+        msg = "Firebase memerlukan login ulang untuk menghapus akun. Silakan logout, login kembali, lalu coba lagi.";
+      }
+      alert(
+        `Dokumen Firestore sudah dihapus, namun gagal menghapus akun Firebase Auth: ${msg}\n\n` +
+        `Anda perlu login ulang dan mengulangi permintaan hapus akun.`
+      );
+      addExecutionLog(`[PRIVACY][ERROR] Gagal hapus akun Auth (Firestore sudah dihapus): ${msg}`);
+      return;
+    }
+
+    // 3. Clean up local fallback data + sign out + reload.
+    try {
+      localStorage.removeItem(`z_profile_${uid}`);
+    } catch {}
+    try {
+      await firebaseSignOut(auth);
+    } catch {}
+    alert("Akun Firebase Auth + dokumen profil Firestore berhasil dihapus permanen. Anda akan dialihkan ke layar login.");
+    window.location.reload();
   };
 
   if (loading) {
@@ -739,6 +1004,135 @@ export default function Profile() {
             </div>
           </div>
 
+          {/* SEC2-AUTH Panel: Email Verification + Active Sessions. New panel
+              inserted between the existing 2FA panel and the notifications
+              panel — additive, does not modify any existing UI. */}
+          <div className="p-5 rounded-xl border border-slate-800 bg-[#0A0F1D]/60 space-y-4">
+            <h4 className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+              <ShieldCheck className="w-4 h-4 text-blue-400" />
+              Status Email & Sesi Aktif
+            </h4>
+
+            {/* Email verification status block */}
+            <div className={`p-3 rounded border ${
+              emailVerified
+                ? "bg-emerald-500/10 border-emerald-500/25"
+                : "bg-amber-500/10 border-amber-500/25"
+            }`}>
+              <div className="flex items-start gap-2.5">
+                {emailVerified ? (
+                  <MailCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                ) : (
+                  <Mail className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                )}
+                <div className="flex-1 space-y-1">
+                  <span className={`text-[11px] font-mono font-bold uppercase block ${
+                    emailVerified ? "text-emerald-300" : "text-amber-300"
+                  }`}>
+                    {emailVerified ? "Email Terverifikasi" : "Email Belum Diverifikasi"}
+                  </span>
+                  <p className="text-[10px] text-slate-400 leading-snug font-mono">
+                    {emailVerified
+                      ? `Email ${user?.email} telah diverifikasi pada ${new Date().toLocaleDateString("id-ID")}.`
+                      : `Email ${user?.email} belum diverifikasi. Verifikasi untuk membuka semua fitur keamanan.`}
+                  </p>
+                  {!emailVerified && (
+                    <div className="pt-1.5 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleResendEmailVerification}
+                        disabled={resendEmailLoading}
+                        className="text-[9px] font-mono uppercase bg-amber-500/15 hover:bg-amber-500/25 text-amber-200 border border-amber-500/30 px-2 py-0.5 rounded cursor-pointer transition-colors disabled:opacity-50 flex items-center gap-1"
+                      >
+                        {resendEmailLoading ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Mail className="w-3 h-3" />}
+                        Kirim Ulang Verifikasi
+                      </button>
+                      {resendEmailMessage && (
+                        <span className="text-[9px] font-mono text-amber-200/80">{resendEmailMessage}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Active sessions list */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[10.5px] text-slate-300 font-bold font-mono uppercase flex items-center gap-1.5">
+                  <Monitor className="w-3.5 h-3.5 text-blue-400" /> Sesi Aktif ({sessions.length})
+                </span>
+                <button
+                  type="button"
+                  onClick={handleLogoutOthers}
+                  disabled={logoutOthersLoading || sessions.length <= 1}
+                  className="text-[9px] font-mono uppercase bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/25 px-2 py-0.5 rounded cursor-pointer transition-colors disabled:opacity-40 flex items-center gap-1"
+                  title="Cabut semua sesi lain kecuali yang ini"
+                >
+                  {logoutOthersLoading ? <RefreshCw className="w-3 h-3 animate-spin" /> : <LogOut className="w-3 h-3" />}
+                  Logout Sesi Lain
+                </button>
+              </div>
+              {logoutOthersMessage && (
+                <p className="text-[9.5px] font-mono text-rose-300/80">{logoutOthersMessage}</p>
+              )}
+              {sessionsError && (
+                <p className="text-[9.5px] font-mono text-amber-400">{sessionsError}</p>
+              )}
+              {sessionsLoading ? (
+                <div className="text-[10px] text-slate-500 font-mono py-2 flex items-center gap-2">
+                  <RefreshCw className="w-3 h-3 animate-spin" /> Memuat daftar sesi...
+                </div>
+              ) : sessions.length === 0 ? (
+                <p className="text-[10px] text-slate-500 font-mono py-2">Tidak ada sesi aktif.</p>
+              ) : (
+                <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
+                  {sessions.map((s) => (
+                    <div
+                      key={s.id}
+                      className={`p-2 rounded border ${
+                        s.current
+                          ? "bg-emerald-950/40 border-emerald-500/25"
+                          : "bg-slate-950/70 border-slate-850"
+                      } flex items-center justify-between gap-2`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <Monitor className="w-3 h-3 text-slate-400 shrink-0" />
+                          <span className="text-[10px] text-slate-200 font-mono truncate">
+                            {summarizeUA(s.userAgent)}
+                          </span>
+                          {s.current && (
+                            <span className="text-[8px] font-mono uppercase bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-1 py-0.5 rounded">
+                              Saat Ini
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[9px] text-slate-500 font-mono mt-0.5">
+                          {s.ip || "IP tidak diketahui"} · aktif {formatLastSeen(s.lastSeen)}
+                        </div>
+                      </div>
+                      {!s.current && (
+                        <button
+                          type="button"
+                          onClick={() => handleRevokeSession(s.id)}
+                          disabled={revokingId === s.id}
+                          className="text-[9px] font-mono uppercase bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/25 px-1.5 py-0.5 rounded cursor-pointer transition-colors disabled:opacity-50 shrink-0"
+                          title="Cabut sesi ini"
+                        >
+                          {revokingId === s.id ? "..." : "Cabut"}
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="text-[9px] text-slate-500 font-mono leading-tight pt-1">
+                Sesi adalah kunci httpOnly yang disimpan di server (sha256 hashed). Mencabut sesi akan segera mengeluarkan perangkat terkait.
+              </p>
+            </div>
+          </div>
+
           {/* Panel 3: Preferensi Notifikasi Jalur Pesan */}
           <div className="p-5 rounded-xl border border-slate-800 bg-[#0A0F1D]/60 space-y-3">
             <h4 className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
@@ -802,14 +1196,7 @@ export default function Profile() {
 
               <button
                 type="button"
-                onClick={() => {
-                  const confirmDelete = window.confirm("PERINGATAN SANGAT FATAL: Tindakan ini akan menghapus akun Z-Capital serta semua data portofolio Anda secara permanen dari server. Tindakan ini tidak dapat dibatalkan. Lanjutkan?");
-                  if (confirmDelete) {
-                    alert("Akun Anda telah dinonaktifkan dengan aman.");
-                    auth.signOut();
-                    window.location.reload();
-                  }
-                }}
+                onClick={handleDeleteAccount}
                 className="w-full py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/25 rounded text-[10px] font-bold font-mono uppercase transition-colors cursor-pointer flex items-center justify-center gap-2"
               >
                 <Trash2 className="w-3.5 h-3.5 text-rose-500" />

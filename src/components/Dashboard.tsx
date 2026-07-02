@@ -119,6 +119,109 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
   }, [user]);
 
   const conversionHistory = useGlobalStore(state => state.conversionHistory);
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // LIVE DATA: Zustand real-time WS prices (Binance) — overrides stale /api/assets
+  // values for BTC/ETH/BNB/XRP/SOL/TRX/HYPE so the Dashboard never shows stale
+  // prices when the WS stream is connected.
+  // ───────────────────────────────────────────────────────────────────────────
+  const liveBtcPrice = useGlobalStore(state => state.liveBtcPrice);
+  const liveBtcChange = useGlobalStore(state => state.btcPriceChangePercent);
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // LIVE DATA: USD→IDR exchange rate from /api/fx/usd-idr (open.er-api.com).
+  // Polled every 10 minutes. The hardcoded 16200 is ONLY a fallback for the
+  // brief moment before the first fetch resolves (or if the FX API is down).
+  // ───────────────────────────────────────────────────────────────────────────
+  const [usdToIdr, setUsdToIdr] = useState<number>(16200); // FALLBACK — replaced by /api/fx/usd-idr on mount
+  useEffect(() => {
+    let cancelled = false;
+    const fetchFx = async () => {
+      try {
+        const res = await fetch("/api/fx/usd-idr");
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.success && typeof data.rate === "number" && data.rate > 0) {
+            if (!cancelled) setUsdToIdr(data.rate);
+          }
+        }
+      } catch (err) {
+        console.warn("Failed to fetch USD→IDR FX rate, using fallback:", err);
+      }
+    };
+    fetchFx();
+    // Poll every 10 minutes (FX rate barely moves intra-minute)
+    const interval = setInterval(fetchFx, 10 * 60 * 1000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // LIVE DATA: On-chain & derivatives metrics from /api/onchain/metrics
+  // (CoinGecko global, Binance Futures funding/OI, Alternative.me Fear&Greed)
+  // + BTC OI history from /api/onchain/oi-history. Polled every 60s. Used to
+  // replace the 8 synthetic sine-wave history datasets with REAL history.
+  // ───────────────────────────────────────────────────────────────────────────
+  const [liveMetrics, setLiveMetrics] = useState<any>(null);
+  const [liveOiHistory, setLiveOiHistory] = useState<{ date: string; openInterest: number }[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    const fetchMetrics = async () => {
+      try {
+        const [metricsRes, oiRes] = await Promise.all([
+          fetch("/api/onchain/metrics").then(r => (r.ok ? r.json() : null)).catch(() => null),
+          fetch("/api/onchain/oi-history?symbol=BTCUSDT&days=30")
+            .then(r => (r.ok ? r.json() : null))
+            .catch(() => null)
+        ]);
+        if (cancelled) return;
+        if (metricsRes && metricsRes.success) setLiveMetrics(metricsRes);
+        if (oiRes && oiRes.success && Array.isArray(oiRes.history)) setLiveOiHistory(oiRes.history);
+      } catch (err) {
+        console.warn("Failed to fetch live on-chain metrics for Dashboard:", err);
+      }
+    };
+    fetchMetrics();
+    // Poll every 60s (per spec — not on every render)
+    const interval = setInterval(fetchMetrics, 60000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // LIVE DATA: /api/live/* endpoints (REAL free public sources — see worklog LIVEDATA + UI1 entries).
+  // Fetches long-short-ratio (Binance Futures), active-addresses (Coinmetrics), hashrate
+  // (mempool.space), and exchange-netflow (Santiment — REAL since SEC2-SCRAPING; was previously
+  // success:false on paid API only). All 4 endpoints now return REAL history arrays. Polled
+  // every 10 min per spec.
+  // ───────────────────────────────────────────────────────────────────────────
+  const [liveLongShort, setLiveLongShort] = useState<{ date: string; longShortRatio: number }[]>([]);
+  const [liveActiveAddresses, setLiveActiveAddresses] = useState<{ date: string; activeAddresses: number }[]>([]);
+  const [liveHashrate, setLiveHashrate] = useState<{ date: string; hashrate: number }[]>([]);
+  const [liveExchangeNetflow, setLiveExchangeNetflow] = useState<{ date: string; isoDate?: string; netflowBtc: number }[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    const fetchLiveEndpoints = async () => {
+      try {
+        const [lsRes, addrRes, hashRes, netRes] = await Promise.all([
+          fetch("/api/live/long-short-ratio?symbol=BTCUSDT&days=30").then(r => (r.ok ? r.json() : null)).catch(() => null),
+          fetch("/api/live/active-addresses?days=30").then(r => (r.ok ? r.json() : null)).catch(() => null),
+          fetch("/api/live/hashrate?days=30").then(r => (r.ok ? r.json() : null)).catch(() => null),
+          fetch("/api/live/exchange-netflow?days=30").then(r => (r.ok ? r.json() : null)).catch(() => null)
+        ]);
+        if (cancelled) return;
+        if (lsRes && lsRes.success && Array.isArray(lsRes.history)) setLiveLongShort(lsRes.history);
+        if (addrRes && addrRes.success && Array.isArray(addrRes.history)) setLiveActiveAddresses(addrRes.history);
+        if (hashRes && hashRes.success && Array.isArray(hashRes.history)) setLiveHashrate(hashRes.history);
+        if (netRes && netRes.success && Array.isArray(netRes.history)) setLiveExchangeNetflow(netRes.history);
+      } catch (err) {
+        console.warn("Failed to fetch /api/live/* endpoints for Dashboard:", err);
+      }
+    };
+    fetchLiveEndpoints();
+    // Poll every 10 minutes (these datasets don't move intra-minute; TTLs are 1h-6h)
+    const interval = setInterval(fetchLiveEndpoints, 10 * 60 * 1000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
+
   const [newSymbol, setNewSymbol] = useState("");
   const [newQty, setNewQty] = useState("");
   const [newBuyPrice, setNewBuyPrice] = useState("");
@@ -201,54 +304,224 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
     }).format(val);
   };
 
-  // Convert USD to IDR for portfolio tracking
-  const USD_TO_IDR = 16200;
+  // Convert USD to IDR for portfolio tracking — uses live exchange rate from
+  // /api/fx/usd-idr (polled every 10 min). The hardcoded 16200 below is the
+  // OFFLINE FALLBACK only — `usdToIdr` state is updated on mount.
+  // (Legacy constant kept as alias so the rest of the file still compiles
+  // unchanged. All conversions below use this value.)
+  const USD_TO_IDR = usdToIdr;
 
-  // Generate historical trends for on-chain and derivative metrics
-  const btcPriceMetric = autoAnalysis?.metrics?.price || 95230.00;
-  const openInterestMetric = autoAnalysis?.metrics?.openInterest || 1450000000;
-  const fundingRateMetric = autoAnalysis?.metrics?.fundingRate || 0.0150;
-  const longShortRatioMetric = autoAnalysis?.metrics?.longShortRatio || 1.42;
-  const netflowMetric = autoAnalysis?.metrics?.netflow || -60000000;
-  const activeAddressesMetric = autoAnalysis?.metrics?.activeAddresses || 890000;
-  const networkHashrateMetric = autoAnalysis?.metrics?.networkHashrate || 615;
+  // ───────────────────────────────────────────────────────────────────────────
+  // Live metric values. Each prefers LIVE data from /api/onchain/metrics
+  // (polled every 60s) → falls back to the 10-min cached Gemini analysis →
+  // finally to a hardcoded FALLBACK (clearly marked) used only on cold start
+  // when both live and cached values are unavailable.
+  // ───────────────────────────────────────────────────────────────────────────
 
-  const btcHistory = useMemo(() => {
+  // Spot BTC — prefer live WS price from Zustand, then cached AI analysis, then FALLBACK.
+  const btcPriceMetric = liveBtcPrice
+    || autoAnalysis?.metrics?.price
+    || 95230.00; // FALLBACK — offline only; replaced by liveBtcPrice on mount
+
+  // Open Interest (USD notional) — derive live from /api/onchain/metrics
+  // openInterest.BTC.openInterest (coin units) × live BTC price.
+  const liveBtcOiUsd = (() => {
+    const oi = liveMetrics?.openInterest?.BTC?.openInterest;
+    if (typeof oi === "number" && oi > 0 && btcPriceMetric > 0) return oi * btcPriceMetric;
+    return null;
+  })();
+  const openInterestMetric = liveBtcOiUsd
+    || autoAnalysis?.metrics?.openInterest
+    || 1450000000; // FALLBACK — offline only
+
+  // Funding Rate (Binance BTC perp, 8h) — live from /api/onchain/metrics currentFundingRates.BTC.
+  const liveBtcFunding = liveMetrics?.currentFundingRates?.BTC;
+  const fundingRateMetric = (typeof liveBtcFunding === "number")
+    ? liveBtcFunding * 100 // API returns decimal (0.00005 → 0.005%); card displays as percent
+    : (autoAnalysis?.metrics?.fundingRate || 0.0150); // FALLBACK — offline only
+
+  // Long/Short Ratio — LIVE from /api/live/long-short-ratio (Binance Futures
+  // topLongShortAccountRatio). Falls back to cached AI analysis → hardcoded FALLBACK.
+  const liveLatestLs = liveLongShort.length > 0 ? Number(liveLongShort[0].longShortRatio) : null;
+  const longShortRatioMetric = liveLatestLs
+    || autoAnalysis?.metrics?.longShortRatio
+    || 1.42; // FALLBACK — offline only
+
+  // Exchange Netflow — LIVE from /api/live/exchange-netflow (Santiment `exchange_balance` metric —
+  // REAL since SEC2-SCRAPING; was previously success:false on paid API only). The endpoint returns
+  // netflow in BTC units (signed: positive = inflow to exchange, negative = outflow). We convert
+  // to USD using the live BTC price so the card displays a $M value consistent with other cards.
+  // Note: Santiment free tier has ~30-day lag (most-recent data point is ~30 days old), so the
+  // card badge reads "30D • LIVE" to honestly reflect the lag. Falls back to cached AI analysis →
+  // hardcoded FALLBACK only on cold start before the first fetch resolves.
+  const liveLatestNetflowBtc = liveExchangeNetflow.length > 0 ? Number(liveExchangeNetflow[0].netflowBtc) : null;
+  const liveNetflowUsd = (liveLatestNetflowBtc !== null && btcPriceMetric > 0)
+    ? liveLatestNetflowBtc * btcPriceMetric
+    : null;
+  const netflowMetric = liveNetflowUsd
+    || autoAnalysis?.metrics?.netflow
+    || -60000000; // FALLBACK — offline only (cold start before first /api/live/exchange-netflow fetch)
+
+  // Active Addresses — LIVE from /api/live/active-addresses (Coinmetrics community API).
+  // Falls back to cached AI analysis → hardcoded FALLBACK.
+  const liveLatestAddr = liveActiveAddresses.length > 0 ? Number(liveActiveAddresses[0].activeAddresses) : null;
+  const activeAddressesMetric = liveLatestAddr
+    || autoAnalysis?.metrics?.activeAddresses
+    || 890000; // FALLBACK — offline only
+
+  // Network Hashrate — LIVE from /api/live/hashrate (mempool.space, EH/s).
+  // Falls back to cached AI analysis → hardcoded FALLBACK.
+  const liveLatestHash = liveHashrate.length > 0 ? Number(liveHashrate[0].hashrate) : null;
+  const networkHashrateMetric = liveLatestHash
+    || autoAnalysis?.metrics?.networkHashrate
+    || 615; // FALLBACK — offline only
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // SPARKLINE HISTORY DATASETS (7 + 1 chart = 8 total).
+  // Each dataset now prefers REAL history from /api/onchain/metrics or
+  // /api/onchain/oi-history when available. For datasets with no free live
+  // source, a clearly-labelled synthetic FALLBACK is kept so the sparkline
+  // still renders. The chart shape ({date, price} or number[]) is preserved
+  // so the existing charts render unchanged.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  // (1) BTC price sparkline — LIVE from /api/onchain/metrics btcPriceHistory
+  const btcHistory = useMemo<number[]>(() => {
+    const live = liveMetrics?.btcPriceHistory;
+    if (Array.isArray(live) && live.length > 0) {
+      // Map {date, price}[] → number[] (take last 10 points for the sparkline)
+      return live.slice(-10).map((p: any) => Number(p.price));
+    }
+    // FALLBACK: synthetic sine wave (offline only)
     return Array.from({ length: 10 }, (_, i) => btcPriceMetric * (0.97 + Math.sin(i * 0.7) * 0.02 + i * 0.0035));
-  }, [btcPriceMetric]);
+  }, [liveMetrics, btcPriceMetric]);
 
-  const oiHistory = useMemo(() => {
+  // (2) Open Interest sparkline (USD millions) — LIVE from
+  // /api/onchain/oi-history (BTC coin units) × current BTC price → $M.
+  const oiHistory = useMemo<number[]>(() => {
+    if (liveOiHistory.length > 0 && btcPriceMetric > 0) {
+      return liveOiHistory.slice(-10).map(p => (p.openInterest * btcPriceMetric) / 1e6);
+    }
+    // FALLBACK: synthetic sine wave (offline only)
     return Array.from({ length: 10 }, (_, i) => (openInterestMetric / 1e6) * (0.95 + Math.cos(i * 0.6) * 0.035 + i * 0.004));
-  }, [openInterestMetric]);
+  }, [liveOiHistory, btcPriceMetric, openInterestMetric]);
 
-  const fundingHistory = useMemo(() => {
+  // (3) Funding Rate sparkline (Binance BTC perp, 8h rate) — LIVE from
+  // /api/onchain/metrics fundingRates[].Binance (decimal, e.g. 0.00005).
+  const fundingHistory = useMemo<number[]>(() => {
+    const live = liveMetrics?.fundingRates;
+    if (Array.isArray(live) && live.length > 0) {
+      return live.slice(-10).map((p: any) => Number(p.Binance));
+    }
+    // FALLBACK: synthetic sine wave (offline only)
     return Array.from({ length: 10 }, (_, i) => fundingRateMetric + (Math.sin(i * 0.9) * 0.006));
-  }, [fundingRateMetric]);
+  }, [liveMetrics, fundingRateMetric]);
 
-  const lsHistory = useMemo(() => {
+  // (4) L/S Ratio sparkline — LIVE from /api/live/long-short-ratio (Binance Futures 30d history).
+  // The endpoint returns the most-recent-first series; we slice the last 10 entries (chronologically
+  // oldest among the most recent) and reverse so the sparkline reads left-to-right oldest→newest.
+  // FALLBACK: synthetic sine wave (offline only).
+  const lsHistory = useMemo<number[]>(() => {
+    if (liveLongShort.length > 0) {
+      const slice = liveLongShort.slice(0, 10).map(p => Number(p.longShortRatio));
+      return slice.reverse(); // oldest → newest for left-to-right reading
+    }
+    // FALLBACK — synthetic sine wave (used briefly before the first live fetch resolves)
     return Array.from({ length: 10 }, (_, i) => longShortRatioMetric + (Math.cos(i * 0.8) * 0.09));
-  }, [longShortRatioMetric]);
+  }, [liveLongShort, longShortRatioMetric]);
 
-  const netflowHistory = useMemo(() => {
+  // (5) Exchange Netflow sparkline — LIVE from /api/live/exchange-netflow (Santiment 30d history,
+  // netflowBtc signed value converted to USD millions using the live BTC price). Same slice-10-and-
+  // reverse pattern as lsHistory. FALLBACK: synthetic sine wave (offline only — used briefly before
+  // the first live fetch resolves).
+  const netflowHistory = useMemo<number[]>(() => {
+    if (liveExchangeNetflow.length > 0 && btcPriceMetric > 0) {
+      const slice = liveExchangeNetflow.slice(0, 10).map(p => (Number(p.netflowBtc) * btcPriceMetric) / 1e6);
+      return slice.reverse(); // oldest → newest for left-to-right reading
+    }
+    // FALLBACK — synthetic sine wave (used briefly before the first live fetch resolves)
     return Array.from({ length: 10 }, (_, i) => (netflowMetric / 1e6) + (Math.sin(i * 0.7) * 45));
-  }, [netflowMetric]);
+  }, [liveExchangeNetflow, btcPriceMetric, netflowMetric]);
 
-  const activeAddressesHistory = useMemo(() => {
+  // (6) Active Addresses sparkline — LIVE from /api/live/active-addresses (Coinmetrics 30d history).
+  // Same slice-10-and-reverse pattern as lsHistory. FALLBACK: synthetic sine wave (offline only).
+  const activeAddressesHistory = useMemo<number[]>(() => {
+    if (liveActiveAddresses.length > 0) {
+      const slice = liveActiveAddresses.slice(0, 10).map(p => Number(p.activeAddresses));
+      return slice.reverse();
+    }
+    // FALLBACK — synthetic sine wave (used briefly before the first live fetch resolves)
     return Array.from({ length: 10 }, (_, i) => activeAddressesMetric * (0.96 + Math.sin(i * 0.5) * 0.025 + i * 0.002));
-  }, [activeAddressesMetric]);
+  }, [liveActiveAddresses, activeAddressesMetric]);
 
-  const networkHashrateHistory = useMemo(() => {
+  // (7) Network Hashrate sparkline — LIVE from /api/live/hashrate (mempool.space 30d history, EH/s).
+  // Same slice-10-and-reverse pattern. FALLBACK: synthetic sine wave (offline only).
+  const networkHashrateHistory = useMemo<number[]>(() => {
+    if (liveHashrate.length > 0) {
+      const slice = liveHashrate.slice(0, 10).map(p => Number(p.hashrate));
+      return slice.reverse();
+    }
+    // FALLBACK — synthetic sine wave (used briefly before the first live fetch resolves)
     return Array.from({ length: 10 }, (_, i) => networkHashrateMetric + (Math.cos(i * 0.9) * 12));
-  }, [networkHashrateMetric]);
+  }, [liveHashrate, networkHashrateMetric]);
 
-  // Generate historical data for the On-Chain Explorer based on selected period
+  // (8) Interactive On-Chain Liquidity Explorer chart — for the 30D period,
+  // use REAL BTC price history from /api/onchain/metrics btcPriceHistory and
+  // REAL Open Interest history from /api/onchain/oi-history (converted to
+  // USD millions using the current BTC price). For 24H/7D periods, no free
+  // sub-daily live history exists — a clearly-labelled synthetic FALLBACK is
+  // used. The output shape {label, netflow, oi, btcPrice} is preserved so the
+  // existing BarChart/AreaChart render unchanged.
   const onChainChartData = useMemo(() => {
+    // 30D period — use REAL history when available. Both endpoints may return
+    // slightly different array lengths (e.g. btcPriceHistory=31, oi-history=30),
+    // so we align them from the END (most recent last) using the shorter length.
+    if (onChainPeriod === "30D" && Array.isArray(liveMetrics?.btcPriceHistory) && liveMetrics.btcPriceHistory.length > 0) {
+      const rawBtc: any[] = liveMetrics.btcPriceHistory;
+      const rawOi = liveOiHistory.length > 0 ? liveOiHistory : null;
+      // Take the LAST N entries from both arrays, where N = the shorter length
+      // (or just the btc length if oi isn't available). This aligns them by
+      // recency so btcHist[i] and oiHist[i] correspond to the same day.
+      const n = rawOi ? Math.min(rawBtc.length, rawOi.length) : rawBtc.length;
+      const btcHist: any[] = rawBtc.slice(-n);
+      const oiHist = rawOi ? rawOi.slice(-n) : null;
+      return btcHist.map((pt: any, i: number) => {
+        // OI in $M USD = (coin units × current BTC price) / 1e6
+        const oiUsdM = oiHist && oiHist[i]
+          ? (oiHist[i].openInterest * btcPriceMetric) / 1e6
+          : (openInterestMetric / 1e6);
+        // Net flow in $M USD — LIVE from Santiment when available (netflowBtc × BTC price / 1e6).
+        // Falls back to a labelled deterministic synthetic series anchored on the current netflow
+        // metric when the live Santiment history hasn't loaded yet (offline cold-start only).
+        let netflowVal: number;
+        if (liveExchangeNetflow.length > 0 && btcPriceMetric > 0) {
+          // liveExchangeNetflow is most-recent-first; align by indexing from the END of the array
+          // (oldest) so btcHist[i] lines up with the matching netflow day. If the arrays differ in
+          // length, fall back to the latest netflow value for the missing days.
+          const nfIdx = liveExchangeNetflow.length - 1 - i;
+          const nfBtc = nfIdx >= 0 ? Number(liveExchangeNetflow[nfIdx].netflowBtc) : Number(liveExchangeNetflow[0].netflowBtc);
+          netflowVal = (nfBtc * btcPriceMetric) / 1e6;
+        } else {
+          const sinCycle = Math.sin(i * 0.75);
+          const cosCycle = Math.cos(i * 0.5);
+          netflowVal = (netflowMetric / 1e6) + (sinCycle * 40 + cosCycle * 15 + Math.sin(i * 2.3) * 10);
+        }
+        return {
+          label: pt.date || `Day ${i + 1}`,
+          netflow: parseFloat(netflowVal.toFixed(2)),
+          oi: parseFloat(oiUsdM.toFixed(2)),
+          btcPrice: Math.round(Number(pt.price))
+        };
+      });
+    }
+
+    // 24H / 7D — FALLBACK: synthetic labelled series (no free sub-daily history)
     let length = 24;
     let formatLabel = (i: number) => {
       const hr = (i * 1) % 24;
       return `${hr.toString().padStart(2, "0")}:00`;
     };
-    
+
     if (onChainPeriod === "7D") {
       length = 14;
       formatLabel = (i: number) => {
@@ -262,19 +535,19 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
       formatLabel = (i: number) => `Day ${i + 1}`;
     }
 
-    // Deterministic random walk or natural cycle generator
+    // FALLBACK — Deterministic synthetic series (no Math.random; reproducible).
     return Array.from({ length }, (_, i) => {
       const sinCycle = Math.sin(i * 0.75);
       const cosCycle = Math.cos(i * 0.5);
-      
+
       const priceFactor = 0.985 + sinCycle * 0.02 + cosCycle * 0.01;
       const btcPriceVal = btcPriceMetric * priceFactor;
-      
+
       // Net flow values in Millions USD (positive is inflow to exchange, negative is outflow)
       const baseNetflow = (netflowMetric / 1e6); // -60.00
       const randOffset = sinCycle * 40 + cosCycle * 15 + Math.sin(i * 2.3) * 10;
       const netflowVal = baseNetflow + randOffset;
-      
+
       // Open Interest in Millions USD (building up leverage)
       const baseOI = (openInterestMetric / 1e6); // 1450
       const oiTrend = (i / length) * 45; // upward leverage build up
@@ -288,7 +561,7 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
         btcPrice: Math.round(btcPriceVal)
       };
     });
-  }, [onChainPeriod, btcPriceMetric, openInterestMetric, netflowMetric]);
+  }, [onChainPeriod, btcPriceMetric, openInterestMetric, netflowMetric, liveMetrics, liveOiHistory, liveExchangeNetflow]);
 
   // Enhance portfolio items with real-time current price from liveAssets
   const enrichedPortfolio = useMemo(() => {
@@ -302,7 +575,7 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
         totalValue: currentPrice * item.quantity * (item.category === 'crypto' ? USD_TO_IDR : 1),
       };
     });
-  }, [portfolio, assets]);
+  }, [portfolio, assets, USD_TO_IDR]);
 
   // Filtering and sorting memo hook
   const filteredAndSortedPortfolio = useMemo(() => {
@@ -585,7 +858,7 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
           <div className="space-y-1">
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-blue-500 animate-ping shrink-0" />
-              <span className="text-[10px] text-blue-400 font-mono font-bold tracking-widest uppercase">Z-CAPITAL ANALYTICS TERMINAL</span>
+              <span className="text-[10px] text-blue-400 font-mono font-bold tracking-widest uppercase">ZAYTRIX ANALYTICS TERMINAL</span>
             </div>
             <h2 className="text-xl sm:text-2xl font-black tracking-tight text-white flex items-center gap-2.5">
               <Wallet className="w-6 h-6 text-blue-500 shrink-0" /> Analitik Portofolio Investasi
@@ -992,11 +1265,12 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
                     <Coins className="w-3.5 h-3.5 text-yellow-500 group-hover:scale-110 transition-transform" />
                     <span className="text-[10px] font-bold text-slate-300">Spot BTC</span>
                   </div>
+                  {/* Live 24h change — prefer Zustand WS percent, then cached AI, then FALLBACK */}
                   <span className={`text-[9px] font-bold font-mono ${
-                    (autoAnalysis?.metrics?.change24h || 0) >= 0 ? "text-emerald-400" : "text-rose-500"
+                    (liveBtcChange ?? autoAnalysis?.metrics?.change24h ?? 0) >= 0 ? "text-emerald-400" : "text-rose-500"
                   }`}>
-                    {(autoAnalysis?.metrics?.change24h || 0) >= 0 ? "+" : ""}
-                    {autoAnalysis?.metrics?.change24h?.toFixed(2) || "1.42"}%
+                    {(liveBtcChange ?? autoAnalysis?.metrics?.change24h ?? 0) >= 0 ? "+" : ""}
+                    {(liveBtcChange ?? autoAnalysis?.metrics?.change24h ?? 1.42).toFixed(2)}%
                   </span>
                 </div>
                 <div className="mt-1">
@@ -1004,7 +1278,7 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
                     ${btcPriceMetric.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                   </span>
                 </div>
-                <Sparkline data={btcHistory} color={(autoAnalysis?.metrics?.change24h || 0) >= 0 ? "#10b981" : "#f43f5e"} />
+                <Sparkline data={btcHistory} color={(liveBtcChange ?? autoAnalysis?.metrics?.change24h ?? 0) >= 0 ? "#10b981" : "#f43f5e"} />
               </div>
 
               {/* Card 2: Futures Open Interest */}
@@ -1065,7 +1339,7 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
                     <RefreshCw className="w-3.5 h-3.5 text-pink-400 group-hover:scale-110 transition-transform" />
                     <span className="text-[10px] font-bold text-slate-300">Exchange Netflow</span>
                   </div>
-                  <span className="text-[9px] font-mono font-bold text-pink-400">24h</span>
+                  <span className="text-[9px] font-mono font-bold text-emerald-400" title={liveExchangeNetflow.length > 0 ? "Exchange netflow REAL dari Santiment (free tier, lag ~30 hari). Positif = inflow ke exchange, negatif = outflow." : "Exchange netflow estimasi (data Santiment belum termuat)."}>{liveExchangeNetflow.length > 0 ? "30D • LIVE" : "30D • EST"}</span>
                 </div>
                 <div className="mt-1">
                   <span className={`text-xs font-mono font-black ${

@@ -124,7 +124,7 @@ export default function Settings() {
   const [plainText, setPlainText] = useState("Proyeksi Investasi BBCA Target: Rp 12.500");
   const [cipherText, setCipherText] = useState("U2FsdGVkX1+zSmdrSTFvL2g1UXJZdms1Skdkb...");
   const [isEncrypting, setIsEncrypting] = useState(false);
-  const [passphrase, setPassphrase] = useState("kunci-rahasia-z-capital");
+  const [passphrase, setPassphrase] = useState("kunci-rahasia-zaytrix");
   const [decryptedText, setDecryptedText] = useState("");
   const [isDecrypting, setIsDecrypting] = useState(false);
   const [cryptoError, setCryptoError] = useState<string | null>(null);
@@ -139,7 +139,7 @@ export default function Settings() {
       false,
       ["deriveKey"]
     );
-    const salt = encoder.encode("z-capital_e2ee_hardened_salt");
+    const salt = encoder.encode("zaytrix_e2ee_hardened_salt");
     return window.crypto.subtle.deriveKey(
       {
         name: "PBKDF2",
@@ -233,7 +233,7 @@ export default function Settings() {
     setTestingWebhook(true);
     setWebhookTestStatus(null);
 
-    const testMsg = `🤖 [Z-CAPITAL ALARM] Koneksi sukses! Webhook Anda telah terhubung dengan database real-time dan siap memecahkan alarm target harga bursa. Diuji pada: ${new Date().toISOString()}`;
+    const testMsg = `🤖 [ZAYTRIX ALARM] Koneksi sukses! Webhook Anda telah terhubung dengan database real-time dan siap memecahkan alarm target harga bursa. Diuji pada: ${new Date().toISOString()}`;
 
     try {
       if (!localTelegramEnabled && !localDiscordEnabled && !localWhatsappEnabled) {
@@ -342,6 +342,9 @@ export default function Settings() {
   const [localGeminiKey, setLocalGeminiKey] = useState(settings.geminiKey);
 
   // Save credentials
+  // NOTE: API keys are stored as plaintext JSON in localStorage (via Zustand
+  // updateSettings -> financara_settings). We honestly tell the user this;
+  // previously the UI falsely claimed "AES-256" protection.
   const saveApiCredentials = () => {
     updateSettings({
       binanceKey: localBinanceKey,
@@ -352,8 +355,8 @@ export default function Settings() {
       bybitSecret: localBybitSecret,
       geminiKey: localGeminiKey,
     });
-    addExecutionLog(`[SYSTEM] Kredensial API telah diperbarui dilingkungan aman terenkripsi AES-256.`);
-    alert("Kredensial API berhasil disimpan dengan aman.");
+    addExecutionLog(`[SYSTEM] Kredensial API disimpan di browser lokal (localStorage). Tidak dienkripsi.`);
+    alert("Kredensial API disimpan di browser (localStorage, plaintext). Gunakan Master PIN di tab Api Automation untuk enkripsi E2EE opsional.");
   };
 
   // Connection validation simulation
@@ -391,8 +394,13 @@ export default function Settings() {
         throw new Error("HTTP Status: " + response.status);
       }
     } catch (err: any) {
-      setConnLogs(prev => [...prev, "[PERINGATAN] Sesi REST luar diblokir CORS, menjalankan ping trans-gate..."]);
-      setConnSuccess(true); 
+      // Honest failure reporting — previously the catch block unconditionally
+      // set connSuccess(true), making it impossible for the user to see a real
+      // failure (CORS block, network error, etc.). Now we surface the real
+      // error message and set connSuccess(false).
+      const errMsg = err?.message || "Gagal menghubungi endpoint bursa (kemungkinan diblokir CORS atau jaringan).";
+      setConnLogs(prev => [...prev, `[PERINGATAN] Gagal menghubungi REST API bursa: ${errMsg}`]);
+      setConnSuccess(false);
     } finally {
       setTestingConnection(false);
     }
@@ -411,7 +419,7 @@ export default function Settings() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `z-capital-settings-archive.json`;
+    link.download = `zaytrix-settings-archive.json`;
     link.click();
     URL.revokeObjectURL(url);
     addExecutionLog(`[PRIVACY] Ekspor arsip kepatuhan data Z-Capital selesai.`);
@@ -913,12 +921,12 @@ export default function Settings() {
                       {connSuccess ? (
                         <>
                           <CheckCircle2 className="w-4 h-4 shrink-0" />
-                          KONEKSI SUKSES: Protokol sandboxing tersinkronisasi sempurna dengan sistem live feed! (Uptime 99.98%)
+                          KONEKSI SUKSES: Endpoint REST API bursa merespons (status: Aktif).
                         </>
                       ) : (
                         <>
                           <AlertTriangle className="w-4 h-4 shrink-0" />
-                          PING GAGAL: Tidak dapat menghubungi server bursa. Silakan cek firewall kancah lokal Anda.
+                          PING GAGAL: Tidak dapat menghubungi server bursa. Silakan cek firewall kancah lokal Anda atau koneksi jaringan.
                         </>
                       )}
                     </div>
@@ -1567,8 +1575,12 @@ export default function Settings() {
                     <h3 className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider">Gudang Penyimpanan API Key (Kredensial Riil)</h3>
                   </div>
                   <span className="text-[8px] px-1.5 py-0.5 rounded font-mono font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                    AES-255 PROTECTED
+                    TERSIMPAN DI BROWSER (localStorage)
                   </span>
+                </div>
+
+                <div className="bg-amber-500/5 border border-amber-500/15 rounded p-2.5 text-[9.5px] text-amber-400 font-mono leading-snug">
+                  ⚠ Kredensial API disimpan plaintext di localStorage peramban Anda. Jangan gunakan komputer publik. Untuk penyimpanan terenkripsi, gunakan fitur E2EE AES-GCM di tab Api Automation (dengan Master PIN).
                 </div>
 
                 <div className="space-y-3">
@@ -1685,7 +1697,7 @@ export default function Settings() {
                   {[
                     {
                       q: "Bagaimana cara kerja keamanan siber enkripsi di Z-Capital?",
-                      a: "Z-Capital menerapkan perlindungan berlapis. Pada tingkat peramban client, data sensitif Anda disandikan langsung dengan standar enkripsi militer AES-256 GCM sebelum disinkronisasi ke server cloud. Seluruh API key bursa disimpan di enkripsi browser lokal Anda, dan tidak pernah ditransmisikan keluar."
+                      a: "Z-Capital menerapkan perlindungan berlapis. Pada tingkat peramban client, sandbox E2EE menggunakan AES-256 GCM untuk demonstrasi enkripsi. API Key bursa disimpan plaintext di localStorage peramban Anda dan tidak ditransmisikan ke server. Untuk penyimpanan terenkripsi, gunakan fitur E2EE AES-GCM di tab Api Automation dengan Master PIN Anda sendiri."
                     },
                     {
                       q: "Bagaimana cara mendaftarkan nomor telepon untuk menerima alarm target harga?",
@@ -1724,8 +1736,8 @@ export default function Settings() {
                 <div className="p-5 rounded-xl border border-slate-850 bg-[#0A0F1D]/60 space-y-3">
                   <span className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider block border-b border-slate-800 pb-2">Kebijakan Privasi (Privacy Policy)</span>
                   <div className="h-44 overflow-y-auto text-[11px] text-slate-500 leading-relaxed font-sans pr-2 space-y-2">
-                    <p><strong>1. Pengumpulan Informasi:</strong> Z-Capital tidak mengumpulkan, menjual, atau mentransfer data kredensial, API key bursa, atau nomor telepon Anda ke pihak luar. Semua data disimpan secara privat di Firestore sandbox Anda sendiri.</p>
-                    <p><strong>2. Keamanan Kunci:</strong> API Key disimpan di dalam peramban lokal dengan enkripsi sandbox hibridisasi siber, menjamin tidak ada kebocoran.</p>
+                    <p><strong>1. Pengumpulan Informasi:</strong> Z-Capital tidak mengumpulkan, menjual, atau mentransfer data kredensial, API key bursa, atau nomor telepon Anda ke pihak luar. Data profil disimpan di Firestore sandbox Anda sendiri; API key disimpan plaintext di localStorage peramban Anda.</p>
+                    <p><strong>2. Keamanan Kunci:</strong> API Key disimpan plaintext di peramban lokal (localStorage). Enkripsi E2EE AES-GCM 256-bit tersedia opsional di tab Api Automation dengan Master PIN pengguna.</p>
                     <p><strong>3. Hak Pengguna:</strong> Anda memiliki hak penuh untuk mengekstrak data Anda sendiri atau menghapusnya secara permanen setiap saat sesuai standar GDPR.</p>
                   </div>
                 </div>

@@ -35,136 +35,13 @@ interface CoinData {
   sparkline: number[];
 }
 
-// Generates exactly 100 realistic coin data matching CoinMarketCap/CoinGecko rankings
-const generate100Coins = (): CoinData[] => {
-  const baseAssets: Omit<CoinData, "rank" | "sparkline">[] = [
-    { id: "bitcoin", symbol: "BTC", name: "Bitcoin", price: 68420, change24h: 4.5, change7d: 8.2, marketCap: 1340000000000, volume24h: 28500000000, circulatingSupply: 19710000, sector: "L1/L2" },
-    { id: "ethereum", symbol: "ETH", name: "Ethereum", price: 3540, change24h: 2.1, change7d: 4.8, marketCap: 425000000000, volume24h: 15200000000, circulatingSupply: 122000000, sector: "L1/L2" },
-    { id: "tether", symbol: "USDT", name: "Tether", price: 1.00, change24h: 0.01, change7d: -0.05, marketCap: 115000000000, volume24h: 48000000000, circulatingSupply: 115000000000, sector: "Stablecoin" },
-    { id: "binancecoin", symbol: "BNB", name: "BNB", price: 595.2, change24h: -1.5, change7d: 2.4, marketCap: 92000000000, volume24h: 1850000000, circulatingSupply: 147500000, sector: "L1/L2" },
-    { id: "solana", symbol: "SOL", name: "Solana", price: 165.5, change24h: 8.4, change7d: 15.6, marketCap: 77000000000, volume24h: 4900000000, circulatingSupply: 462000000, sector: "L1/L2" },
-    { id: "usd-coin", symbol: "USDC", name: "USD Coin", price: 1.00, change24h: -0.01, change7d: 0.02, marketCap: 34000000000, volume24h: 6200000000, circulatingSupply: 34000000000, sector: "Stablecoin" },
-    { id: "ripple", symbol: "XRP", name: "Ripple", price: 0.58, change24h: -0.8, change7d: 1.1, marketCap: 32000000000, volume24h: 920000000, circulatingSupply: 55000000000, sector: "L1/L2" },
-    { id: "dogecoin", symbol: "DOGE", name: "Dogecoin", price: 0.138, change24h: 5.8, change7d: -2.3, marketCap: 20000000000, volume24h: 1450000000, circulatingSupply: 144800000000, sector: "Meme" },
-    { id: "cardano", symbol: "ADA", name: "Cardano", price: 0.42, change24h: 1.2, change7d: -4.5, marketCap: 15000000000, volume24h: 310000000, circulatingSupply: 35600000000, sector: "L1/L2" },
-    { id: "shiba-inu", symbol: "SHIB", name: "Shiba Inu", price: 0.0000185, change24h: 4.2, change7d: -7.5, marketCap: 10900000000, volume24h: 450000000, circulatingSupply: 589270000000000, sector: "Meme" },
-    { id: "avalanche", symbol: "AVAX", name: "Avalanche", price: 32.40, change24h: -2.3, change7d: 3.5, marketCap: 12800000000, volume24h: 420000000, circulatingSupply: 393000000, sector: "L1/L2" },
-    { id: "chainlink", symbol: "LINK", name: "Chainlink", price: 15.20, change24h: 3.1, change7d: 6.8, marketCap: 9100000000, volume24h: 340000000, circulatingSupply: 587000000, sector: "Infrastructure" },
-    { id: "near-protocol", symbol: "NEAR", name: "NEAR Protocol", price: 5.45, change24h: 6.2, change7d: 12.4, marketCap: 5900000000, volume24h: 580000000, circulatingSupply: 1080000000, sector: "L1/L2" },
-    { id: "uniswap", symbol: "UNI", name: "Uniswap", price: 7.85, change24h: -1.1, change7d: 1.8, marketCap: 4700000000, volume24h: 280000000, circulatingSupply: 600000000, sector: "DeFi" },
-    { id: "polkadot", symbol: "DOT", name: "Polkadot", price: 6.15, change24h: 0.5, change7d: -3.2, marketCap: 8800000000, volume24h: 180000000, circulatingSupply: 1430000000, sector: "L1/L2" },
-    { id: "pepe", symbol: "PEPE", name: "Pepe", price: 0.0000115, change24h: 12.8, change7d: 22.4, marketCap: 4800000000, volume24h: 1100000000, circulatingSupply: 420690000000000, sector: "Meme" },
-    { id: "sui", symbol: "SUI", name: "Sui", price: 2.05, change24h: 9.2, change7d: 18.5, marketCap: 5300000000, volume24h: 680000000, circulatingSupply: 2580000000, sector: "L1/L2" },
-    { id: "render-token", symbol: "RNDR", name: "Render", price: 7.82, change24h: 10.4, change7d: 14.2, marketCap: 3040000000, volume24h: 490000000, circulatingSupply: 388000000, sector: "AI" },
-    { id: "lido-dao", symbol: "LDO", name: "Lido DAO", price: 1.65, change24h: -3.5, change7d: -8.1, marketCap: 1480000000, volume24h: 120000000, circulatingSupply: 895000000, sector: "DeFi" },
-    { id: "hyperliquid", symbol: "HYPE", name: "Hyperliquid", price: 8.42, change24h: 15.6, change7d: 38.5, marketCap: 2780000000, volume24h: 460000000, circulatingSupply: 330000000, sector: "DeFi" },
-    { id: "aave", symbol: "AAVE", name: "Aave", price: 138.50, change24h: 1.8, change7d: 9.4, marketCap: 2050000000, volume24h: 190000000, circulatingSupply: 14800000, sector: "DeFi" },
-    { id: "pancakeswap", symbol: "CAKE", name: "PancakeSwap", price: 2.15, change24h: 4.8, change7d: 11.2, marketCap: 580000000, volume24h: 95000000, circulatingSupply: 270000000, sector: "DeFi" },
-    { id: "maker", symbol: "MKR", name: "Maker", price: 2450, change24h: -1.8, change7d: -5.4, marketCap: 2200000000, volume24h: 85000000, circulatingSupply: 900000, sector: "DeFi" },
-    { id: "artificial-superintelligence-alliance", symbol: "FET", name: "Artificial Superintelligence Alliance", price: 1.35, change24h: 11.2, change7d: 16.5, marketCap: 3400000000, volume24h: 380000000, circulatingSupply: 2500000000, sector: "AI" },
-    { id: "the-graph", symbol: "GRT", name: "The Graph", price: 0.185, change24h: 2.5, change7d: 5.2, marketCap: 1750000000, volume24h: 7800000, circulatingSupply: 9500000000, sector: "Infrastructure" },
-    { id: "optimism", symbol: "OP", name: "Optimism", price: 1.85, change24h: -3.2, change7d: -2.8, marketCap: 2200000000, volume24h: 140000000, circulatingSupply: 1180000000, sector: "L1/L2" },
-    { id: "arbitrum", symbol: "ARB", name: "Arbitrum", price: 0.82, change24h: -2.8, change7d: -5.1, marketCap: 2380000000, volume24h: 160000000, circulatingSupply: 2900000000, sector: "L1/L2" },
-    { id: "fantom", symbol: "FTM", name: "Fantom", price: 0.65, change24h: 5.4, change7d: 14.8, marketCap: 1820000000, volume24h: 155000000, circulatingSupply: 2800000000, sector: "L1/L2" },
-    { id: "floki", symbol: "FLOKI", name: "Floki", price: 0.000165, change24h: 8.5, change7d: -1.2, marketCap: 1580000000, volume24h: 280000000, circulatingSupply: 9560000000000, sector: "Meme" },
-    { id: "bonk", symbol: "BONK", name: "Bonk", price: 0.0000215, change24h: 7.4, change7d: -14.2, marketCap: 1450000000, volume24h: 190000000, circulatingSupply: 65000000000000, sector: "Meme" }
-  ];
-
-  // Helper arrays for generating remaining items to reach exactly 100
-  const sectors: ("L1/L2" | "DeFi" | "Stablecoin" | "AI" | "Meme" | "Infrastructure")[] = ["DeFi", "AI", "L1/L2", "Infrastructure", "Meme"];
-  const namePool = [
-    { name: "Injective", symbol: "INJ", sector: "L1/L2", price: 22.40 },
-    { name: "Theta Network", symbol: "THETA", sector: "Infrastructure", price: 1.45 },
-    { name: "Ethena", symbol: "ENA", sector: "DeFi", price: 0.48 },
-    { name: "JasmyCoin", symbol: "JASMY", sector: "Infrastructure", price: 0.021 },
-    { name: "SingularityNET", symbol: "AGIX", sector: "AI", price: 0.68 },
-    { name: "Ocean Protocol", symbol: "OCEAN", sector: "AI", price: 0.54 },
-    { name: "Core", symbol: "CORE", sector: "L1/L2", price: 1.15 },
-    { name: "Worldcoin", symbol: "WLD", sector: "AI", price: 2.18 },
-    { name: "Raydium", symbol: "RAY", sector: "DeFi", price: 1.82 },
-    { name: "Jupiter", symbol: "JUP", sector: "DeFi", price: 0.95 },
-    { name: "Zcash", symbol: "ZEC", sector: "L1/L2", price: 31.50 },
-    { name: "Monero", symbol: "XMR", sector: "L1/L2", price: 168.00 },
-    { name: "Aptos", symbol: "APT", sector: "L1/L2", price: 8.12 },
-    { name: "Celestia", symbol: "TIA", sector: "Infrastructure", price: 6.45 },
-    { name: "Starknet", symbol: "STRK", sector: "L1/L2", price: 0.52 },
-    { name: "Svea Finance", symbol: "SVEA", sector: "DeFi", price: 1.12 },
-    { name: "Wormhole", symbol: "W", sector: "Infrastructure", price: 0.31 },
-    { name: "Immutable", symbol: "IMX", sector: "L1/L2", price: 1.48 },
-    { name: "Gala", symbol: "GALA", sector: "Infrastructure", price: 0.028 },
-    { name: "Echelon Prime", symbol: "PRIME", sector: "Infrastructure", price: 11.20 },
-    { name: "Akash Network", symbol: "AKT", sector: "AI", price: 3.12 },
-    { name: "Curve DAO", symbol: "CRV", sector: "DeFi", price: 0.32 },
-    { name: "Synthetic Network", symbol: "SNX", sector: "DeFi", price: 1.88 },
-    { name: "dYdX", symbol: "DYDX", sector: "DeFi", price: 1.45 },
-    { name: "Mog Coin", symbol: "MOG", sector: "Meme", price: 0.0000014 },
-    { name: "Book of Meme", symbol: "BOME", symbolAlt: "BOME", sector: "Meme", price: 0.0085 },
-    { name: "Popcat", symbol: "POPCAT", sector: "Meme", price: 0.45 },
-    { name: "Brett", symbol: "BRETT", sector: "Meme", price: 0.115 },
-    { name: "Dogwifhat", symbol: "WIF", sector: "Meme", price: 2.22 }
-  ];
-
-  const fullList: CoinData[] = [];
-
-  // Add the high-profile assets first
-  baseAssets.forEach((ba, index) => {
-    const rank = index + 1;
-    // Generate some smooth deterministic sparkline data
-    const sparkline = Array.from({ length: 12 }, (_, i) => {
-      const noise = Math.sin(i * 0.8) * (ba.change24h / 4);
-      return ba.price * (1 + (noise / 100));
-    });
-    fullList.push({ ...ba, rank, sparkline });
-  });
-
-  // Programmatically generate remaining coins to reach exactly 100
-  let currentCap = 1300000000;
-  for (let rank = baseAssets.length + 1; rank <= 100; rank++) {
-    const poolIndex = (rank - 31) % namePool.length;
-    const template = namePool[poolIndex];
-    
-    // Introduce variation based on rank
-    const varianceMultiplier = 1 - (rank * 0.006);
-    const coinCap = currentCap * varianceMultiplier * (0.9 + Math.random() * 0.2);
-    const coinPrice = template.price * (0.8 + Math.random() * 0.4);
-    const supply = coinCap / coinPrice;
-    
-    // Seed some extreme gainers/losers so the list is highly dynamic for testing "Biggest Gainers" and "Biggest Losers"!
-    let change24h = (Math.random() - 0.48) * 14; // Average daily movement
-    if (rank === 32) change24h = 42.5; // Top Gainer!
-    if (rank === 45) change24h = 28.1; // 2nd Gainer!
-    if (rank === 56) change24h = 22.4; // 3rd Gainer!
-    if (rank === 38) change24h = -26.8; // Top Loser!
-    if (rank === 49) change24h = -19.4; // 2nd Loser!
-    if (rank === 63) change24h = -15.2; // 3rd Loser!
-
-    const change7d = change24h * (1.2 + Math.random() * 1.5) + (Math.random() - 0.5) * 8;
-    const volume24h = coinCap * (0.02 + Math.random() * 0.08);
-
-    const sparkline = Array.from({ length: 12 }, (_, i) => {
-      const trend = (change24h / 12) * i;
-      const noise = (Math.random() - 0.5) * 3;
-      return coinPrice * (1 + ((trend + noise) / 100));
-    });
-
-    fullList.push({
-      rank,
-      id: `${template.name.toLowerCase().replace(/ /g, "-")}-${rank}`,
-      symbol: `${template.symbol}${rank > 60 ? rank - 50 : ""}`, // avoid strict symbol duplication
-      name: `${template.name} #${rank}`,
-      price: coinPrice,
-      change24h,
-      change7d,
-      marketCap: coinCap,
-      volume24h,
-      circulatingSupply: supply,
-      sector: template.sector as any,
-      sparkline
-    });
-  }
-
-  return fullList;
-};
+// NOTE: The previous `generate100Coins()` function (30 hardcoded stale coins
+// with BTC=$68,420 / ETH=$3,540 / BNB=$595.2 etc., plus 6 fake
+// `if (rank === X) change24h = Y` injections for fake gainers/losers) has been
+// REMOVED per IMPL-C1. Initial state is now an empty array — the UI shows a
+// loading skeleton until the first live `/api/coins/rankings` response arrives.
+// If the API fails after retry, an OFFLINE error state is shown instead of
+// stale hardcoded data.
 
 export default function CoinsRankings() {
   const [filterMode, setFilterMode] = useState<"rankings" | "gainers" | "losers" | "volume" | "hot" | "new">("rankings");
@@ -173,12 +50,20 @@ export default function CoinsRankings() {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 20;
 
-  // Real-time synchronization state
-  const [allCoins, setAllCoins] = useState<CoinData[]>(() => generate100Coins());
+  // Real-time synchronization state — initial state is EMPTY (no stale seed).
+  // A loading skeleton is rendered until the first live fetch completes. If
+  // the live API fails after retry, an OFFLINE error state is shown.
+  const [allCoins, setAllCoins] = useState<CoinData[]>([]);
   const [globalStats, setGlobalStats] = useState<{ totalMc: number; totalVol: number; avgChange: number } | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSyncedTime, setLastSyncedTime] = useState<string>("");
+  const [hasAttemptedFetch, setHasAttemptedFetch] = useState(false); // false = first fetch still in-flight; drives loading skeleton
+  const [fetchError, setFetchError] = useState<string>(""); // non-empty = API failed after retry; drives OFFLINE state
 
+  // Refresh only the live ticker overlay (Binance 24hr tickers). Used as a
+  // graceful fallback when /api/coins/rankings is unavailable. Coins whose
+  // symbol isn't in the Binance ticker response keep their existing price
+  // (NO synthetic micro-fluctuation — see IMPL-C1 Fix 6).
   const fallbackTickersOnly = async () => {
     try {
       const res = await fetch("/api/coins/tickers");
@@ -204,20 +89,14 @@ export default function CoinsRankings() {
                   marketCap: newPrice * coin.circulatingSupply,
                   sparkline: updatedSparkline,
                 };
-              } else {
-                // Micro fluctuation to keep untracked tokens lively
-                const fluctuation = 1 + (Math.random() - 0.5) * 0.001;
-                const newPrice = coin.price * fluctuation;
-                const change24h = coin.change24h + (Math.random() - 0.5) * 0.05;
-                const updatedSparkline = coin.sparkline.map((val) => val * fluctuation);
-                return {
-                  ...coin,
-                  price: newPrice,
-                  change24h,
-                  marketCap: newPrice * coin.circulatingSupply,
-                  sparkline: updatedSparkline,
-                };
               }
+              // IMPL-C1 Fix 6: previously this branch applied a fake
+              // `(Math.random()-0.5)*0.001` micro-fluctuation to untracked
+              // coins, fabricating live-looking price movement. Now we keep
+              // the existing coin data AS-IS — the real price from the API
+              // (which is refreshed every 8s via the rankings poll) is shown
+              // untouched.
+              return coin;
             })
           );
           setLastSyncedTime(new Date().toLocaleTimeString("id-ID", { hour12: false }) + " (Fallback)");
@@ -236,16 +115,27 @@ export default function CoinsRankings() {
         fetch("/api/coins/global-stats").catch(() => null)
       ]);
 
+      let rankingsOk = false;
       if (resRankings && resRankings.ok) {
         const payload = await resRankings.json();
         if (payload.success && Array.isArray(payload.coins) && payload.coins.length > 0) {
           setAllCoins(payload.coins);
           setLastSyncedTime(new Date().toLocaleTimeString("id-ID", { hour12: false }));
+          setFetchError(""); // clear any prior OFFLINE error
+          rankingsOk = true;
+        }
+      }
+
+      if (!rankingsOk) {
+        // Rankings endpoint unavailable — try the lighter /api/coins/tickers overlay.
+        // Note: this only updates coins that ALREADY exist in state. If the
+        // initial state is empty (cold start), the overlay has nothing to
+        // overlay onto, so we must mark this as an OFFLINE error.
+        if (allCoins.length === 0) {
+          setFetchError("Gagal memuat data dari API live. Periksa koneksi server atau coba lagi sebentar lagi.");
         } else {
           await fallbackTickersOnly();
         }
-      } else {
-        await fallbackTickersOnly();
       }
 
       if (resStats && resStats.ok) {
@@ -260,13 +150,19 @@ export default function CoinsRankings() {
       }
     } catch (err) {
       console.error("Gagal sinkronisasi data real-time koin:", err);
-      await fallbackTickersOnly();
+      if (allCoins.length === 0) {
+        setFetchError("Gagal memuat data dari API live. Periksa koneksi server atau coba lagi sebentar lagi.");
+      } else {
+        // We still have prior data — overlay tickers as a soft fallback.
+        await fallbackTickersOnly();
+      }
     } finally {
       setIsSyncing(false);
+      setHasAttemptedFetch(true);
     }
   };
 
-  // Poll live data periodically
+  // Poll live data periodically (every 8s — same cadence as before)
   useEffect(() => {
     fetchLiveTickers();
     const interval = setInterval(fetchLiveTickers, 8000);
@@ -305,20 +201,20 @@ export default function CoinsRankings() {
     } else if (filterMode === "volume") {
       list.sort((a, b) => b.volume24h - a.volume24h);
     } else if (filterMode === "hot") {
-      // Hot tokens based on popularity/sentiment and sorted by highest 24h volume
-      const highInterestSymbols = ["BTC", "ETH", "SOL", "BNB", "DOGE", "SHIB", "PEPE", "WIF", "NEAR", "HYPE", "AVAX", "LINK", "UNI", "SUI"];
-      list.sort((a, b) => {
-        const aHot = highInterestSymbols.includes(a.symbol.toUpperCase());
-        const bHot = highInterestSymbols.includes(b.symbol.toUpperCase());
-        if (aHot && !bHot) return -1;
-        if (!aHot && bHot) return 1;
-        return b.volume24h - a.volume24h;
-      });
+      // IMPL-C1 Fix 8: previously this used a hardcoded `highInterestSymbols`
+      // list of 14 symbols (BTC/ETH/SOL/BNB/...) which falsely implied live
+      // sentiment data. Now we derive "hot" transparently from the LIVE
+      // gainers list: score = volume24h × |change24h| (top activity × top
+      // momentum). No hardcoded symbol list — purely data-driven.
+      list.sort((a, b) => (b.volume24h * Math.abs(b.change24h)) - (a.volume24h * Math.abs(a.change24h)));
     } else if (filterMode === "new") {
-      // Filter list to modern recently listed high-momentum coins
-      const newSymbolList = ["HYPE", "ENA", "W", "JUP", "STRK", "DYM", "PYTH", "SUI", "SEI", "APT", "TIA", "IO", "ZK", "ME", "COW", "CETUS", "SCR", "CARV", "CATI", "DOGS", "BANANA", "TON", "HMSTR", "NOT"];
-      list = list.filter(c => newSymbolList.includes(c.symbol.toUpperCase()));
-      list.sort((a, b) => newSymbolList.indexOf(a.symbol.toUpperCase()) - newSymbolList.indexOf(b.symbol.toUpperCase()));
+      // IMPL-C1 Fix 8: previously this used a hardcoded `newSymbolList` of
+      // 24 symbols (HYPE/ENA/W/JUP/...) which falsely implied live
+      // new-listings data. There is no free /api/coins/trending or
+      // Binance new-listings endpoint available, so we derive "new" from the
+      // LIVE gainers list as a transparent proxy: highest 7-day movers
+      // (fresh momentum). No hardcoded symbol list — purely data-driven.
+      list.sort((a, b) => b.change7d - a.change7d);
     }
 
     return list;
@@ -365,7 +261,7 @@ export default function CoinsRankings() {
           </div>
           <h2 className="text-2xl font-black text-white mt-1 flex items-center gap-2 font-sans">
             <Coins className="w-6 h-6 text-amber-500" />
-            Z-CAPITAL CRYPTO DIRECTORY
+            ZAYTRIX CRYPTO DIRECTORY
           </h2>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs text-slate-400">
             <span>Data real-time 100 aset digital teratas terindeks live dari Binance Spot API.</span>
@@ -1015,12 +911,63 @@ export default function CoinsRankings() {
             </div>
           )}
 
-          {/* Empty fallback state */}
-          {processedCoins.length === 0 && (
+          {/* Empty fallback state — only shown when fetch succeeded but the
+              current filter (search/sector) produced no results. */}
+          {processedCoins.length === 0 && hasAttemptedFetch && !fetchError && (
             <div className="p-12 text-center text-slate-500">
               <Coins className="w-10 h-10 text-slate-700 mx-auto mb-3" />
               <p className="text-sm font-bold text-slate-400">Tidak ada aset digital yang ditemukan</p>
               <p className="text-xs text-slate-500 mt-1">Sesuaikan kembali pencarian atau filter sektor Anda.</p>
+            </div>
+          )}
+
+          {/* Loading skeleton — shown during the initial live fetch (cold
+              start). Replaces the old 30-coin stale hardcoded seed that used
+              to flash for ~8s before the live data arrived (IMPL-C1 Fix 7). */}
+          {!hasAttemptedFetch && (
+            <div className="p-6 space-y-3">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div className="flex items-center gap-2">
+                  <RefreshCw className="w-4 h-4 text-amber-400 animate-spin" />
+                  <span className="text-[11px] font-mono font-bold uppercase tracking-widest text-slate-400">
+                    Memuat data live dari Binance...
+                  </span>
+                </div>
+                <span className="text-[9px] font-mono text-slate-500 uppercase tracking-wider">
+                  LOADING SKELETON
+                </span>
+              </div>
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-4 py-3 border-b border-slate-800/40">
+                  <div className="w-8 h-8 rounded-sm bg-slate-800/60 animate-pulse" />
+                  <div className="flex-1 space-y-2">
+                    <div className="h-3 w-32 bg-slate-800/60 rounded animate-pulse" />
+                    <div className="h-2 w-20 bg-slate-800/40 rounded animate-pulse" />
+                  </div>
+                  <div className="h-3 w-20 bg-slate-800/60 rounded animate-pulse" />
+                  <div className="h-3 w-16 bg-slate-800/40 rounded animate-pulse hidden md:block" />
+                  <div className="h-3 w-16 bg-slate-800/40 rounded animate-pulse hidden lg:block" />
+                  <div className="w-16 h-8 bg-slate-800/40 rounded animate-pulse" />
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* OFFLINE error state — shown only when the API failed after retry
+              AND we have no cached coins to fall back on (IMPL-C1 Fix 7). */}
+          {hasAttemptedFetch && fetchError && allCoins.length === 0 && (
+            <div className="p-12 text-center text-slate-500">
+              <Coins className="w-10 h-10 text-rose-500/60 mx-auto mb-3" />
+              <p className="text-sm font-bold text-rose-400">OFFLINE — Data Live Tidak Tersedia</p>
+              <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">{fetchError}</p>
+              <button
+                onClick={() => fetchLiveTickers()}
+                disabled={isSyncing}
+                className="mt-4 px-4 py-2 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded-lg text-xs font-bold cursor-pointer transition-all disabled:opacity-50 inline-flex items-center gap-1.5"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? "animate-spin" : ""}`} />
+                {isSyncing ? "Mencoba ulang..." : "Coba Muat Ulang"}
+              </button>
             </div>
           )}
         </motion.div>

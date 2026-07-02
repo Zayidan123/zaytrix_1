@@ -65,45 +65,17 @@ export default function Sidebar({
       }`} 
       id="app-sidebar"
     >
-      {/* Upper Logo Section with sleek Z-CAPITAL gold/neon-blue design */}
+      {/* Upper Logo Section with sleek ZAYTRIX gold/neon-blue design */}
       <div className={`p-4 border-b border-slate-800/60 select-none shrink-0 ${isCollapsed ? "flex flex-col items-center" : "p-6"}`}>
         <div className={`flex items-center justify-between ${isCollapsed ? "w-full justify-center flex-col gap-4" : "w-full"}`}>
           <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 flex-shrink-0 flex items-center justify-center shadow-lg shadow-amber-500/10 rounded-lg bg-slate-950/70 border border-slate-800 p-0.5">
-              <svg className="w-full h-full" viewBox="0 0 165 140" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <defs>
-                  <linearGradient id="goldSidebarGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                    <stop offset="0%" stopColor="#b45309" />
-                    <stop offset="30%" stopColor="#f59e0b" />
-                    <stop offset="70%" stopColor="#fbbf24" />
-                    <stop offset="100%" stopColor="#d97706" />
-                  </linearGradient>
-                </defs>
-                
-                {/* Gold Z */}
-                <path d="M 15 25 L 105 25 L 105 40 L 45 90 L 105 90 L 105 105 L 15 105 L 15 90 L 75 40 L 15 40 Z" fill="url(#goldSidebarGrad)" />
-                
-                {/* Gold Coin in the middle of Z */}
-                <circle cx="60" cy="65" r="22" fill="url(#goldSidebarGrad)" stroke="#78350f" strokeWidth="1.5" />
-                <circle cx="60" cy="65" r="18" fill="none" stroke="#fef08a" strokeWidth="0.8" strokeDasharray="1.5 1" />
-                <text x="60" y="73" fontFamily="system-ui, sans-serif" fontWeight="900" fontSize="22" fill="#78350f" textAnchor="middle">$</text>
-                
-                {/* Stock Trend Line on the right */}
-                <path d="M 100 85 L 120 65 L 132 75 L 152 48" fill="none" stroke="url(#goldSidebarGrad)" strokeWidth="5.5" strokeLinecap="round" strokeLinejoin="round" />
-                {/* Arrow Tip */}
-                <path d="M 136 48 L 154 48 L 154 66" fill="none" stroke="url(#goldSidebarGrad)" strokeWidth="5.5" strokeLinecap="round" strokeLinejoin="round" />
-                
-                {/* Small Bar Graphs under trend line */}
-                <rect x="108" y="93" width="3.5" height="12" fill="#d97706" opacity="0.3" rx="0.5" />
-                <rect x="119" y="85" width="3.5" height="20" fill="#d97706" opacity="0.5" rx="0.5" />
-                <rect x="130" y="90" width="3.5" height="15" fill="#d97706" opacity="0.7" rx="0.5" />
-                <rect x="141" y="75" width="3.5" height="30" fill="#d97706" opacity="0.9" rx="0.5" />
-              </svg>
+            <div className="w-14 h-14 flex-shrink-0 flex items-center justify-center shadow-lg shadow-amber-500/10 rounded-lg bg-slate-950/70 border border-slate-800 p-1">
+              <img src="/logo.png" alt="ZAYTRIX Logo" className="w-full h-full object-contain rounded-md" />
             </div>
             {!isCollapsed && (
               <div>
                 <h1 className="text-sm font-black tracking-widest text-amber-500 uppercase font-sans">
-                  Z-CAPITAL
+                  ZAYTRIX
                 </h1>
                 <p className="text-[8px] text-slate-400 uppercase tracking-widest font-mono">INSTITUTIONAL GATEWAY</p>
               </div>

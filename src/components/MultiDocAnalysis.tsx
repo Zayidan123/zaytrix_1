@@ -47,7 +47,7 @@ export default function MultiDocAnalysis() {
   const [loadingStatusIndex, setLoadingStatusIndex] = useState(0);
 
   const loadingStatuses = [
-    "[Z-CAPITAL Engine] Mengunggah buffer sirkuit berkas multi-komparasi...",
+    "[ZAYTRIX Engine] Mengunggah buffer sirkuit berkas multi-komparasi...",
     "[CFA Core Committee] Menyelaraskan sirkulasi data neraca komparatif...",
     "[FRM Desk specialist] Mengekstrak matriks solvabilitas & profil utang...",
     "[Modeler Hub] Memetakan track record pertumbuhan 5 tahun ke belakang...",
@@ -300,7 +300,7 @@ export default function MultiDocAnalysis() {
           </div>
           <h2 className="text-2xl font-black tracking-tight text-white flex items-center gap-2">
             <span className="text-transparent bg-clip-text bg-gradient-to-r from-amber-500 to-yellow-300">
-              Z-CAPITAL
+              ZAYTRIX
             </span>{" "}
             Multi-Document Auditor
           </h2>
@@ -614,7 +614,7 @@ export default function MultiDocAnalysis() {
               <div className="space-y-1">
                 <h4 className="text-sm font-bold text-slate-200">Satu Berkas Terdeteksi</h4>
                 <p className="text-xs text-slate-400">
-                  Sistem komparasi Z-CAPITAL menuntut minimal <span className="text-amber-400 font-bold">2 dokumen PDF</span> yang diunggah secara bersamaan agar AI dapat menyusun laporan komparatif yang komprehensif.
+                  Sistem komparasi ZAYTRIX menuntut minimal <span className="text-amber-400 font-bold">2 dokumen PDF</span> yang diunggah secara bersamaan agar AI dapat menyusun laporan komparatif yang komprehensif.
                 </p>
                 <button
                   onClick={() => document.getElementById("multi-pdf-file-selector")?.click()}
@@ -690,7 +690,7 @@ export default function MultiDocAnalysis() {
                 <div className="flex items-center space-x-2">
                   <CheckCircle className="w-4 h-4 text-emerald-400" />
                   <span className="text-[10px] font-bold font-mono tracking-wider text-slate-400 uppercase">
-                    Hasil Analisis Komparatif bersilang Z-CAPITAL
+                    Hasil Analisis Komparatif bersilang ZAYTRIX
                   </span>
                 </div>
                 

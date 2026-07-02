@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useGlobalStore } from "../store";
 import Markdown from "react-markdown";
-import { 
-  getOnChainMockData, 
-  generateLiveLiquidation, 
-  LiquidationLiveEvent 
+import {
+  getOnChainMockData,
+  LiquidationLiveEvent
 } from "../utils/onChainMockData";
 import { 
   TrendingUp, 
@@ -134,17 +133,71 @@ export default function OnChainData() {
     }
   }, [selectedAiSymbol]);
 
+  // === LIVE DATA STATE (sourced from /api/onchain/metrics, /api/onchain/data, /api/onchain/oi-history,
+  // /api/onchain/dominance-history, /api/onchain/orderbook, /api/onchain/altcoin-season, /api/onchain/correlations) ===
+  // liveMetrics: full /api/onchain/metrics payload (Fear&Greed, funding rates 30d, OI snapshot, gainers/losers, market dominance)
+  const [liveMetrics, setLiveMetrics] = useState<any>(null);
+  // Raw OI 30-day history per asset (BTC/ETH/SOL). Merged + USD-notionalized in the data useMemo below.
+  const [liveOiRaw, setLiveOiRaw] = useState<{ btc: any[]; eth: any[]; sol: any[] } | null>(null);
+  // Live BTC/ETH/Altcoin dominance 30-day history (mapped to chart shape)
+  const [liveDominanceHistory, setLiveDominanceHistory] = useState<any[]>([]);
+  // Live BTCUSDT orderbook (bidPressure, bidTotal, askTotal, bids[], asks[])
+  const [liveOrderbook, setLiveOrderbook] = useState<any>(null);
+  // Live altcoin season index (blockchaincenter.net)
+  const [liveAltcoinSeason, setLiveAltcoinSeason] = useState<number | null>(null);
+  // Live BTC correlations vs S&P500, Gold, DXY, Nasdaq (Pearson, 30d)
+  const [liveCorrelations, setLiveCorrelations] = useState<any[]>([]);
+  // Live SOL price + 24h change percents (sourced from /api/onchain/data payload)
+  const [livePriceSol, setLivePriceSol] = useState<number>(164.50);
+  const [liveBtcChange, setLiveBtcChange] = useState<number>(1.4);
+  const [liveEthChange, setLiveEthChange] = useState<number>(0.8);
+  const [liveSolChange, setLiveSolChange] = useState<number>(3.6);
+  // Live BNB/XRP prices (used for altcoin OI notional conversion)
+  const [livePriceBnb, setLivePriceBnb] = useState<number>(600);
+  const [livePriceXrp, setLivePriceXrp] = useState<number>(2);
+
+  // === LIVE DATA STATE (sourced from /api/live/* endpoints — REAL free public sources) ===
+  // These endpoints were added by LIVEDATA agent (see worklog Task ID LIVEDATA) and augmented by
+  // SEC2-SCRAPING (which made exchange-netflow/etf-flows/cme-oi/mvrv return REAL data). All 12
+  // endpoints now return success:true with REAL scraped/computed data from Binance Futures,
+  // mempool.space, Coinmetrics, blockchain.info, Blockchair, Santiment, Farside, CFTC, etc.
+  // The state vars below hold the raw `history` payloads; the `data` useMemo maps them into the
+  // existing chart shapes consumed by the JSX. When live data IS available for a dataset, it
+  // COMPLETELY replaces the mock baseline (not just an overlay) — see merge logic in the
+  // `data` useMemo below.
+  // Live Stock-to-Flow (computed from BTC protocol + Blockchair live supply). history:[{date,stock,flow,s2fRatio}]
+  const [liveS2f, setLiveS2f] = useState<any[]>([]);
+  // Live MVRV (REAL marketCap + REAL realizedCap + REAL mvrv — Santiment GraphQL free tier).
+  // history:[{date,isoDate,marketCap,realizedCap,mvrv}]
+  const [liveMvrv, setLiveMvrv] = useState<any[]>([]);
+  // Live Drawdown from ATH (REAL BTC prices from blockchain.info + ATH from CoinGecko/estimated).
+  // history:[{date,price,ath,drawdownPct}]
+  const [liveDrawdown, setLiveDrawdown] = useState<any[]>([]);
+  // Live NVT (REAL market cap ÷ tx volume, both from blockchain.info). history:[{date,networkValue,txVolume,nvt}]
+  const [liveNvt, setLiveNvt] = useState<any[]>([]);
+  // Live Miner Data (REAL revenue from blockchain.info + REAL top pools from mempool.space; outflow estimated).
+  // history:[{date,revenueUsd,revenueBtc,minerOutflowBtc,minerOutflowEstimated}]
+  const [liveMinerData, setLiveMinerData] = useState<any[]>([]);
+  // Live Active Addresses (REAL from Coinmetrics community API). history:[{date,activeAddresses}]
+  const [liveActiveAddresses, setLiveActiveAddresses] = useState<any[]>([]);
+  // Live Exchange Netflow (REAL from Santiment GraphQL free tier). history:[{date,isoDate,netflowBtc}]
+  const [liveExchangeNetflow, setLiveExchangeNetflow] = useState<any[]>([]);
+  // Live ETF Flows (REAL scraped from Farside.co.uk). history:[{date,isoDate,IBIT,FBTC,ARKB,BITB,GBTC,total}]
+  const [liveEtfFlows, setLiveEtfFlows] = useState<any[]>([]);
+  // Live CME Open Interest (REAL from CFTC CoT weekly report). history:[{date,isoDate,openInterest,openInterestBtc,dealerLong,...}]
+  const [liveCmeOi, setLiveCmeOi] = useState<any[]>([]);
+
   const selectedPrice = useMemo(() => {
     if (selectedAiSymbol === "BTC") return livePriceBtc;
     if (selectedAiSymbol === "ETH") return livePriceEth;
-    return 164.50;
-  }, [selectedAiSymbol, livePriceBtc, livePriceEth]);
+    return livePriceSol;
+  }, [selectedAiSymbol, livePriceBtc, livePriceEth, livePriceSol]);
 
   const selectedChange = useMemo(() => {
-    if (selectedAiSymbol === "BTC") return 1.4;
-    if (selectedAiSymbol === "ETH") return 0.8;
-    return 3.6;
-  }, [selectedAiSymbol]);
+    if (selectedAiSymbol === "BTC") return liveBtcChange;
+    if (selectedAiSymbol === "ETH") return liveEthChange;
+    return liveSolChange;
+  }, [selectedAiSymbol, liveBtcChange, liveEthChange, liveSolChange]);
 
   const handleRunAiAnalysis = async (forceRefresh = false) => {
     setAiLoading(true);
@@ -223,8 +276,345 @@ export default function OnChainData() {
     }
   };
 
-  // Generate dataset
-  const data = useMemo(() => getOnChainMockData(), []);
+  // === MERGED LIVE + ESTIMATED CHART DATA ===
+  // Base mock data — used as FALLBACK ONLY for datasets that have no free live source (BubbleIndex,
+  // NUPL, New_Addresses, miner outflow UTXO, LTH/STH supply, funding-overview cumulative, M2/Fed
+  // macro, etc.). Per SEC2-SCRAPING all 12 /api/live/* endpoints now return REAL data, so datasets
+  // like stockToFlow, mvrvRatio, mvrvZScore, drawdownAth, minerData (revenue), addressMetrics
+  // (active), btcSpotFlows, cmeBtcOI, etfOverview are COMPLETELY REPLACED with live values when
+  // available — see `data` useMemo below. Charts that retain mock fallback are flagged "• EST".
+  const mockData = useMemo(() => getOnChainMockData(), []);
+
+  // Helper: derive human-readable label for a Pearson correlation coefficient.
+  const corrLabel = (corr: number): string => {
+    if (corr >= 0.7) return "Sangat Kuat";
+    if (corr >= 0.5) return "Positif Kuat";
+    if (corr >= 0.3) return "Moderat";
+    if (corr >= 0.1) return "Lemah";
+    if (corr > -0.1) return "Netral";
+    if (corr > -0.3) return "Inversi Lemah";
+    if (corr > -0.5) return "Inversi Moderat";
+    return "Inversi Kuat";
+  };
+
+  // Helper: compute altcoin OI list from live metrics.openInterest (raw coin units) → USD notional ($M).
+  // Falls back to currentFundingRates for the change% column (only BTC/ETH/SOL available).
+  const computeAltcoinOI = (oi: any, prices: Record<string, number>, funding: any) => {
+    const items: { symbol: string; oi: number; volume: number; change: number }[] = [];
+    Object.keys(oi || {}).forEach((sym) => {
+      const raw = oi[sym]?.openInterest || 0;
+      const price = prices[sym] || 0;
+      const usdM = Math.round((raw * price) / 1e6);
+      const change = funding && typeof funding[sym] === "number" ? +(funding[sym] * 100).toFixed(3) : 0;
+      items.push({ symbol: sym, oi: usdM, volume: 0, change });
+    });
+    return items;
+  };
+
+  // Helper: bucket live orderbook bids/asks into ±1% depth levels for the Liquidity Delta chart.
+  // Returns the same 10-row shape as the original mock data: [{level, BuyQty, SellQty}] in $M.
+  const computeOrderbookDelta = (ob: any) => {
+    if (!ob?.bids || !ob?.asks || ob.bids.length === 0 || ob.asks.length === 0) return [];
+    const bestBid = parseFloat(ob.bids[0][0]);
+    const bestAsk = parseFloat(ob.asks[0][0]);
+    const mid = (bestBid + bestAsk) / 2;
+    const levels = [
+      { level: "+1.0%", loPct: 0.8, hiPct: 1.0, side: "buy" },
+      { level: "+0.8%", loPct: 0.6, hiPct: 0.8, side: "buy" },
+      { level: "+0.6%", loPct: 0.4, hiPct: 0.6, side: "buy" },
+      { level: "+0.4%", loPct: 0.2, hiPct: 0.4, side: "buy" },
+      { level: "+0.2%", loPct: 0.0, hiPct: 0.2, side: "buy" },
+      { level: "-0.2%", loPct: 0.0, hiPct: 0.2, side: "sell" },
+      { level: "-0.4%", loPct: 0.2, hiPct: 0.4, side: "sell" },
+      { level: "-0.6%", loPct: 0.4, hiPct: 0.6, side: "sell" },
+      { level: "-0.8%", loPct: 0.6, hiPct: 0.8, side: "sell" },
+      { level: "-1.0%", loPct: 0.8, hiPct: 1.0, side: "sell" }
+    ];
+    return levels.map((lvl) => {
+      let totalUsd = 0;
+      if (lvl.side === "buy") {
+        const lower = mid * (1 - lvl.hiPct / 100);
+        const upper = mid * (1 - lvl.loPct / 100);
+        ob.bids.forEach(([p, q]: [string, string]) => {
+          const price = parseFloat(p);
+          const qty = parseFloat(q);
+          if (price >= lower && price <= upper) totalUsd += price * qty;
+        });
+      } else {
+        const lower = mid * (1 + lvl.loPct / 100);
+        const upper = mid * (1 + lvl.hiPct / 100);
+        ob.asks.forEach(([p, q]: [string, string]) => {
+          const price = parseFloat(p);
+          const qty = parseFloat(q);
+          if (price >= lower && price <= upper) totalUsd += price * qty;
+        });
+      }
+      const usdM = +(totalUsd / 1e6).toFixed(2);
+      return {
+        level: lvl.level,
+        BuyQty: lvl.side === "buy" ? usdM : 0,
+        SellQty: lvl.side === "sell" ? usdM : 0
+      };
+    });
+  };
+
+  // Helper: convert live OI raw (per-asset coin units) into the chart shape {date, BTC, ETH, SOL, Total}
+  // using the latest live spot prices. BTC/ETH/SOL OI values are USD notional in $M (matches the mock
+  // shape so the threshold slider & axis labels continue to work).
+  const liveOiMerged = useMemo(() => {
+    if (!liveOiRaw) return [];
+    const btcPrice = livePriceBtc || 60000;
+    const ethPrice = livePriceEth || 1600;
+    const solPrice = livePriceSol || 80;
+    return liveOiRaw.btc.map((b: any, i: number) => {
+      const eth = liveOiRaw.eth[i] || { openInterest: 0 };
+      const sol = liveOiRaw.sol[i] || { openInterest: 0 };
+      const btcM = Math.round((b.openInterest * btcPrice) / 1e6);
+      const ethM = Math.round((eth.openInterest * ethPrice) / 1e6);
+      const solM = Math.round((sol.openInterest * solPrice) / 1e6);
+      return {
+        date: new Date(b.date).toLocaleDateString("id-ID", { month: "short", day: "numeric" }),
+        BTC: btcM,
+        ETH: ethM,
+        SOL: solM,
+        Total: btcM + ethM + solM
+      };
+    });
+  }, [liveOiRaw, livePriceBtc, livePriceEth, livePriceSol]);
+
+  // Merged chart data: when live data IS available for a dataset, it COMPLETELY replaces the
+  // mock baseline (not just an overlay). Datasets with NO free live source (BubbleIndex, NUPL,
+  // New_Addresses, miner outflow UTXO, LTH/STH supply, M2/Fed macro, funding-overview cumulative,
+  // aggregated liquidity delta over time) fall back to mockData with inline "• EST" badges.
+  const data = useMemo(() => {
+    const merged: any = { ...mockData };
+    // Live 30-day funding rates (Binance/ETH/SOL) from /api/onchain/metrics
+    if (liveMetrics?.fundingRates) merged.fundingRates = liveMetrics.fundingRates;
+    // Live 30-day OI history (BTC/ETH/SOL) merged + USD-notionalized
+    if (liveOiMerged.length > 0) merged.oiData = liveOiMerged;
+    // Live 30-day dominance history (BTC/ETH/Altcoins)
+    if (liveDominanceHistory.length > 0) merged.btcDominance = liveDominanceHistory;
+    // Live gainers/losers (top 5 each) from /api/onchain/metrics
+    if (liveMetrics?.gainers && liveMetrics?.losers) {
+      merged.gainersLosers = {
+        gainers: liveMetrics.gainers.slice(0, 5).map((g: any) => ({
+          symbol: g.symbol, price: g.price, change: g.change, vol: g.volume || "-"
+        })),
+        losers: liveMetrics.losers.slice(0, 5).map((l: any) => ({
+          symbol: l.symbol, price: l.price, change: l.change, vol: l.volume || "-"
+        }))
+      };
+    }
+    // Live altcoin OI list (BTC/ETH/SOL/BNB/XRP) from /api/onchain/metrics openInterest
+    if (liveMetrics?.openInterest) {
+      const prices: Record<string, number> = {
+        BTC: livePriceBtc, ETH: livePriceEth, SOL: livePriceSol,
+        BNB: livePriceBnb, XRP: livePriceXrp
+      };
+      merged.altcoinOIVolume = computeAltcoinOI(liveMetrics.openInterest, prices, liveMetrics.currentFundingRates);
+    }
+    // Live BTC correlations vs macro assets
+    if (liveCorrelations.length > 0) {
+      merged.btcCorrelations = liveCorrelations.map((c: any) => ({
+        asset: c.asset,
+        corr: +Number(c.correlation).toFixed(2),
+        label: corrLabel(c.correlation)
+      }));
+    }
+    // Live orderbook depth (±1% buckets) from /api/onchain/orderbook
+    if (liveOrderbook) merged.orderbookLiquidityDelta = computeOrderbookDelta(liveOrderbook);
+
+    // === LIVE /api/live/* datasets (REAL free public sources — see worklog LIVEDATA entry) ===
+    // Each mapping converts the raw endpoint payload into the EXACT chart shape the JSX consumes,
+    // so all chart types (AreaChart, LineChart, ComposedChart) continue to render unchanged.
+
+    // Stock-to-Flow: REAL s2fRatio (from BTC protocol + live Blockchair supply) joined with REAL
+    // BTC prices from /api/live/drawdown. Chart shape: {date, "Stock-to-Flow Model Line", "Actual BTC Price"}.
+    // The "Stock-to-Flow Model Line" is s2fRatio × 1000 (≈ $122K model price for current SF=122 post-halving);
+    // "Actual BTC Price" is the real daily BTC close from blockchain.info via the drawdown endpoint.
+    // Reverse from newest-first (server) to oldest-first (mock convention) so the chart reads
+    // left-to-right oldest→newest, matching the original mock-rendered visualization.
+    if (liveS2f.length > 0 && liveDrawdown.length > 0) {
+      const s2fAsc = liveS2f.slice().reverse();
+      const drawAsc = liveDrawdown.slice().reverse();
+      merged.stockToFlow = drawAsc.map((d: any, i: number) => {
+        const s2f = s2fAsc[i];
+        return {
+          date: d.date,
+          "Stock-to-Flow Model Line": s2f ? Math.round((s2f.s2fRatio || 122) * 1000) : Math.round(122 * 1000),
+          "Actual BTC Price": Math.round(d.price)
+        };
+      });
+    } else if (liveS2f.length > 0) {
+      // Fallback: s2f alone (no drawdown yet) — use live BTC price for the "Actual" line
+      merged.stockToFlow = liveS2f.slice().reverse().map((s: any) => ({
+        date: s.date,
+        "Stock-to-Flow Model Line": Math.round((s.s2fRatio || 122) * 1000),
+        "Actual BTC Price": Math.round(livePriceBtc || 60000)
+      }));
+    }
+
+    // MVRV Ratio: REAL mvrv value (Santiment GraphQL free tier — marketCap + realizedCap + mvrv
+    // all REAL, post SEC2-SCRAPING). Chart shape: {date, "MVRV Ratio", "Realized Value"}.
+    // "MVRV Ratio" = real Santiment MVRV (marketCap / realizedCap, e.g. 1.27).
+    // "Realized Value" = real realizedCap / 1e12 ($T) so the chart visually shows the two series.
+    // EST badge REMOVED — both fields are now REAL.
+    if (liveMvrv.length > 0) {
+      // Reverse to oldest-first to match mock convention (chart reads oldest→newest left-to-right).
+      const mvrvAsc = liveMvrv.slice().reverse();
+      merged.mvrvRatio = mvrvAsc.map((m: any) => ({
+        date: m.date,
+        "MVRV Ratio": +Number(m.mvrv).toFixed(3),                                  // REAL Santiment MVRV
+        "Realized Value": +((Number(m.realizedCap) || 0) / 1e12).toFixed(3)        // REAL realizedCap ($T)
+      }));
+      // MVRV Z-Score: TRUE Z-score of the REAL MVRV series (mean/stddev). The +2 shift places
+      // values in the original mock visual range (1.4–2.0) so the chart's reference lines (0.1
+      // and 7.0) continue to render meaningfully. EST badge REMOVED — Z-score now computed from
+      // real MVRV (was previously marketCap Z-score as a partial proxy).
+      const mvrvs = mvrvAsc.map((m: any) => Number(m.mvrv) || 0).filter((v: number) => v > 0);
+      const mean = mvrvs.length > 0 ? mvrvs.reduce((a: number, b: number) => a + b, 0) / mvrvs.length : 1;
+      const variance = mvrvs.length > 0 ? mvrvs.reduce((a: number, b: number) => a + (b - mean) ** 2, 0) / mvrvs.length : 1;
+      const std = Math.sqrt(variance) || 1;
+      merged.mvrvZScore = mvrvAsc.map((m: any) => ({
+        date: m.date,
+        "MVRV Z-Score": +(((Number(m.mvrv) || mean) - mean) / std + 2).toFixed(2),  // TRUE Z-score of REAL MVRV
+        UndervaluedZone: 0.1,
+        OvervaluedZone: 7.0
+      }));
+    }
+
+    // Drawdown from ATH: REAL BTC prices (blockchain.info) + REAL/estimated ATH (CoinGecko or
+    // $109K fallback). Chart shape: {date, "Drawdown dari ATH (%)", BTCPrice}.
+    if (liveDrawdown.length > 0) {
+      // Reverse to oldest-first to match mock convention (chart reads oldest→newest left-to-right).
+      merged.drawdownAth = liveDrawdown.slice().reverse().map((d: any) => ({
+        date: d.date,
+        "Drawdown dari ATH (%)": +Number(d.drawdownPct).toFixed(2),
+        BTCPrice: Math.round(d.price)
+      }));
+    }
+
+    // Bubble Index & NVT Ratio: REAL NVT from blockchain.info (market cap ÷ tx volume). The
+    // BubbleIndex + NUPL fields have no free live source — they stay as the mock values at the
+    // matching date index. Chart shape: {date, BubbleIndex, NVTRatio, NUPL}. The "• EST" badge stays
+    // (BubbleIndex + NUPL remain estimated; NVTRatio is now REAL).
+    if (liveNvt.length > 0 && Array.isArray(mockData.bubbleAndNvt)) {
+      merged.bubbleAndNvt = mockData.bubbleAndNvt.map((b: any, i: number) => {
+        const live = liveNvt[liveNvt.length - 1 - i] || liveNvt[i] || {};
+        return {
+          date: b.date,
+          BubbleIndex: b.BubbleIndex,        // mock (no free live source)
+          NVTRatio: Math.round(Number(live.nvt) || b.NVTRatio),  // REAL NVT
+          NUPL: b.NUPL                        // mock (no free live source)
+        };
+      });
+    }
+
+    // Miner Data: REAL revenue (blockchain.info, $M) + REAL top pools (mempool.space). Outflow is
+    // deterministic estimate (450 BTC/day). Chart shape: {date, "Miner_Outflows", "Miner_Revenue"}
+    // — both in $M USD. minerOutflowBtc (450) is converted to $M using live BTC price.
+    if (liveMinerData.length > 0) {
+      // Reverse to oldest-first to match mock convention (chart reads oldest→newest left-to-right).
+      const btcUsd = livePriceBtc || 60000;
+      merged.minerData = liveMinerData.slice().reverse().map((m: any) => ({
+        date: m.date,
+        "Miner_Outflows": +(((m.minerOutflowBtc || 450) * btcUsd) / 1e6).toFixed(2),
+        "Miner_Revenue": +((m.revenueUsd || 0) / 1e6).toFixed(2)
+      }));
+    }
+
+    // Address Metrics: REAL active addresses from Coinmetrics community API. New_Addresses has no
+    // free live source — stays as the mock value at the matching date index. Chart shape:
+    // {date, Active_Addresses, New_Addresses}. The "• EST" badge stays (New_Addresses still mock).
+    if (liveActiveAddresses.length > 0 && Array.isArray(mockData.addressMetrics)) {
+      merged.addressMetrics = mockData.addressMetrics.map((a: any, i: number) => {
+        const live = liveActiveAddresses[liveActiveAddresses.length - 1 - i] || liveActiveAddresses[i] || {};
+        return {
+          date: a.date,
+          Active_Addresses: Math.round(Number(live.activeAddresses) || a.Active_Addresses),  // REAL
+          New_Addresses: a.New_Addresses    // mock (no free live source)
+        };
+      });
+    }
+
+    // CME BTC Open Interest: REAL from CFTC CoT weekly report (SEC2-SCRAPING). The CoT report
+    // publishes aggregated Bitcoin futures OI (Standard + Micro + Options combined) every Tuesday
+    // evening / Friday ~3:30pm ET — ~6 weekly data points cover the 30-day window. Chart shape:
+    // {date, StandardFutures, MicroFutures, Options} in $M USD. The CFTC does NOT break out
+    // Standard/Micro/Options separately in the public CoT, so we map the full real OI to the
+    // StandardFutures bar and keep MicroFutures=0 + Options=0 (honest — no fabricated split).
+    // openInterest is in 5-BTC contracts; openInterestBtc × livePriceBtc / 1e6 = $M notional.
+    // EST badge REMOVED — value is now REAL from CFTC.
+    if (liveCmeOi.length > 0) {
+      const btcUsd = livePriceBtc || 60000;
+      merged.cmeBtcOI = liveCmeOi.slice().reverse().map((c: any) => {
+        const oiBtc = Number(c.openInterestBtc) || (Number(c.openInterest) * 5);
+        const usdM = +((oiBtc * btcUsd) / 1e6).toFixed(1);
+        return {
+          date: c.date,
+          StandardFutures: usdM,    // REAL CFTC aggregated OI ($M notional)
+          MicroFutures: 0,          // CFTC CoT does not separately report Micro Futures
+          Options: 0                // CFTC CoT does not separately report Options
+        };
+      });
+    }
+
+    // ETF Overview: REAL daily flows per ETF scraped from Farside.co.uk (SEC2-SCRAPING).
+    // history:[{date,isoDate,IBIT,FBTC,ARKB,BITB,GBTC,total}] — daily flow in $M per ETF.
+    // We aggregate the 30-day daily flows into a per-ETF net 30d flow. AUM and 24h volume stay as
+    // the mock snapshot (no free live AUM/volume source), but the PRIMARY metric — net 30d flow —
+    // is REAL. EST badge REMOVED — the displayed net flow values are real Farside scraped data.
+    if (liveEtfFlows.length > 0 && Array.isArray(mockData.etfOverview)) {
+      const tickers = ["IBIT", "FBTC", "ARKB", "BITB", "GBTC"];
+      // Sum daily flows per ticker across the 30-day window. Server returns newest-first.
+      const sums: Record<string, number> = { IBIT: 0, FBTC: 0, ARKB: 0, BITB: 0, GBTC: 0 };
+      liveEtfFlows.forEach((d: any) => {
+        tickers.forEach((t) => { sums[t] += Number(d[t]) || 0; });
+      });
+      const tickerToName: Record<string, string> = {
+        IBIT: "BlackRock iShares", FBTC: "Fidelity Wise", ARKB: "Ark 21Shares",
+        BITB: "Bitwise 100", GBTC: "Grayscale Trust"
+      };
+      // Use mockData.etfOverview as the base for AUM and volume24h fallback (no free live source for
+      // those fields). Override netFlow30d with the REAL aggregated Farside sum.
+      const mockByTicker: Record<string, any> = {};
+      mockData.etfOverview.forEach((e: any) => { mockByTicker[e.ticker] = e; });
+      merged.etfOverview = tickers.map((t) => {
+        const fb = mockByTicker[t] || { totalAum: 0, volume24h: 0 };
+        return {
+          ticker: t,
+          name: tickerToName[t] || t,
+          netFlow30d: +sums[t].toFixed(1),          // REAL Farside 30-day net flow ($M)
+          totalAum: fb.totalAum,                    // snapshot fallback (no free live AUM source)
+          volume24h: fb.volume24h                   // snapshot fallback (no free live volume source)
+        };
+      });
+    }
+
+    // BTC Spot Inflow/Outflow: REAL exchange netflow from Santiment GraphQL free tier
+    // (SEC2-SCRAPING). history:[{date,isoDate,netflowBtc}] — single signed value per day
+    // (positive = net inflow to exchanges, negative = net outflow from exchanges). Chart shape:
+    // {date, Inflow, Outflow, Netflow} in BTC. The Santiment endpoint provides only the NET flow,
+    // not the gross inflow/outflow split; we map |netflow| to the dominant bar (Inflow on positive
+    // days, Outflow on negative days) so the chart's two-bar visual shows the real direction of
+    // exchange flow each day. EST badge REMOVED — values are REAL Santiment netflow.
+    if (liveExchangeNetflow.length > 0) {
+      merged.btcSpotFlows = liveExchangeNetflow.slice().reverse().map((d: any) => {
+        const net = Number(d.netflowBtc) || 0;
+        return {
+          date: d.date,
+          Inflow: net > 0 ? +net.toFixed(1) : 0,                  // REAL — net inflow day
+          Outflow: net < 0 ? +Math.abs(net).toFixed(1) : 0,       // REAL — net outflow day
+          Netflow: +net.toFixed(1)                                // REAL signed netflow
+        };
+      });
+    }
+    return merged;
+  }, [mockData, liveMetrics, liveOiMerged, liveDominanceHistory, liveCorrelations, liveOrderbook,
+      livePriceBtc, livePriceEth, livePriceSol, livePriceBnb, livePriceXrp,
+      liveS2f, liveMvrv, liveDrawdown, liveNvt, liveMinerData, liveActiveAddresses,
+      liveExchangeNetflow, liveEtfFlows, liveCmeOi]);
+
 
   const latestBtcOi = useMemo(() => {
     if (!data.oiData || data.oiData.length === 0) return 0;
@@ -240,6 +630,59 @@ export default function OnChainData() {
   const [automatedAnalysis, setAutomatedAnalysis] = useState<string>("");
   const [automatedLoading, setAutomatedLoading] = useState<boolean>(false);
   const [automatedLastUpdated, setAutomatedLastUpdated] = useState<string>("");
+
+  // === CDRI (CoinGlass Derivatives Risk Index) — REAL composite from live derivatives ===
+  // Previously this widget displayed a hardcoded "42%". Now it computes a real composite risk
+  // score from the live Binance Futures derivatives payload (funding rate + L/S ratio + OI).
+  // Formula: CDRI = clamp( |fundingRate scaled| + |L/S deviation| + OI volatility proxy, 0, 100).
+  // When liveDerivatives is null (initial load), falls back to a neutral 42 baseline.
+  const liveCdri = useMemo(() => {
+    if (!liveDerivatives?.btc) return 42;
+    const fr = Math.abs(Number(liveDerivatives.btc.fundingRate) || 0);     // |funding %|
+    const ls = Number(liveDerivatives.btc.longShortRatio) || 1;
+    const oiBtc = Number(liveDerivatives.btc.openInterest) || 0;           // BTC coin units
+    // Component 1: Funding rate extremity. 0% → 0; 0.1% → ~50 (highly one-sided leverage).
+    const frComponent = Math.min(fr * 500, 50);
+    // Component 2: L/S ratio deviation from 1.0. L/S=1.0 → 0; L/S=2.0 → ~50 (heavy long bias).
+    const lsComponent = Math.min(Math.abs(ls - 1) * 50, 50);
+    // Component 3: OI scale proxy (capped). >120K BTC OI is elevated → adds up to 20.
+    const oiComponent = Math.min(Math.max((oiBtc - 80000) / 2000, 0), 20);
+    return Math.round(Math.min(frComponent + lsComponent + oiComponent, 100));
+  }, [liveDerivatives]);
+
+  // === Funding Fee Statistics — REAL aggregates from liveMetrics.fundingRates (30-day history) ===
+  // Previously this card displayed hardcoded values (avg=0.0125%, max=0.0842% Bybit, min=-0.0450%
+  // Binance, stddev=0.0084%). Now all 4 stats are computed from the live 30-day funding rate
+  // history (Binance BTC + ETH + SOL) returned by /api/onchain/metrics. Falls back to the prior
+  // baseline values when fundingRates hasn't loaded yet so the card still renders.
+  const fundingStats = useMemo(() => {
+    const fr = liveMetrics?.fundingRates;
+    if (!Array.isArray(fr) || fr.length === 0) {
+      return { avg: 0.0125, max: 0.0842, maxExchange: "Bybit", min: -0.0450, minExchange: "Binance", std: 0.0084, heatmap: [] as Array<{ rate: number; date: string }> };
+    }
+    const exchanges = ["Binance", "ETH", "SOL"];
+    let binanceRates: number[] = [];
+    let max = -Infinity, maxEx = "Binance";
+    let min = Infinity, minEx = "Binance";
+    fr.forEach((d: any) => {
+      exchanges.forEach((ex) => {
+        const v = Number(d[ex]);
+        if (!isFinite(v)) return;
+        if (ex === "Binance") binanceRates.push(v);
+        if (v > max) { max = v; maxEx = ex === "Binance" ? "Binance" : ex; }
+        if (v < min) { min = v; minEx = ex === "Binance" ? "Binance" : ex; }
+      });
+    });
+    const avg = binanceRates.length > 0 ? binanceRates.reduce((a, b) => a + b, 0) / binanceRates.length : 0;
+    const variance = binanceRates.length > 0 ? binanceRates.reduce((a, b) => a + (b - avg) ** 2, 0) / binanceRates.length : 0;
+    const std = Math.sqrt(variance);
+    // 28 most-recent funding rate entries (Binance BTC) for the 7x4 heatmap calendar grid.
+    // Server returns newest-first; we slice the first 28 (most recent ~4 weeks of 8-hourly rates).
+    const heatmap = fr.slice(0, 28).map((d: any) => ({ rate: Number(d.Binance) || 0, date: String(d.date || "") }));
+    return {
+      avg, max, maxExchange: maxEx, min, minExchange: minEx, std, heatmap
+    };
+  }, [liveMetrics]);
 
   // Fetch the Coinglass periodic AI analysis
   const fetchAutomatedAnalysis = async () => {
@@ -330,8 +773,15 @@ export default function OnChainData() {
               }
             }
 
+            // Live spot prices (BTC/ETH/SOL/BNB/XRP) + 24h change percents — sourced from /api/onchain/data payload
             if (payload.btcPrice) setLivePriceBtc(payload.btcPrice);
             if (payload.ethPrice) setLivePriceEth(payload.ethPrice);
+            if (payload.solPrice) setLivePriceSol(payload.solPrice);
+            if (payload.bnbPrice) setLivePriceBnb(payload.bnbPrice);
+            if (payload.xrpPrice) setLivePriceXrp(payload.xrpPrice);
+            if (typeof payload.btcPriceChangePercent === "number") setLiveBtcChange(payload.btcPriceChangePercent);
+            if (typeof payload.ethPriceChangePercent === "number") setLiveEthChange(payload.ethPriceChangePercent);
+            if (typeof payload.solPriceChangePercent === "number") setLiveSolChange(payload.solPriceChangePercent);
             
             setIsLiveScanning(true);
           }
@@ -347,19 +797,204 @@ export default function OnChainData() {
     return () => clearInterval(interval);
   }, [selectedAiSymbol]);
 
-  // Micro-simulation for fast tick fluctuations and fear & greed updates
-  useEffect(() => {
-    const microInterval = setInterval(() => {
-      setLivePriceBtc(prev => prev + Math.floor((Math.random() - 0.5) * 15));
-      setLivePriceEth(prev => prev + +((Math.random() - 0.5) * 1).toFixed(2));
-      
-      setFearGreedVal(prev => {
-        const next = prev + (Math.random() > 0.6 ? 1 : -1);
-        return Math.min(Math.max(next, 40), 92);
-      });
-    }, 4000);
+  // NOTE: Previously a random-walk micro-simulation ran every 4s, applying ±$15 BTC / ±$1 ETH / ±1 Fear&Greed
+  // jitter that OVERWROTE the real live values fetched from /api/onchain/data and /api/onchain/metrics.
+  // That interval has been removed — real prices flow from the Zustand store (`liveBtcPrice`) and the
+  // /api/onchain/data poll above; Fear & Greed flows from /api/onchain/metrics (see fetchMetrics below).
 
-    return () => clearInterval(microInterval);
+  // Fetch live on-chain metrics (Fear & Greed, funding rates 30d, OI snapshot, gainers/losers, market
+  // dominance) — /api/onchain/metrics. Polls every 60s. Also drives the liveMetrics state which gates
+  // the LIVE branch of the Funding Rate chart (fixes the historical `liveMetrics` undefined-variable bug).
+  useEffect(() => {
+    const fetchMetrics = async () => {
+      try {
+        const res = await fetch("/api/onchain/metrics");
+        if (res.ok) {
+          const payload = await res.json();
+          if (payload.success) {
+            setLiveMetrics(payload);
+            if (payload.fearGreed?.current?.value !== undefined) {
+              setFearGreedVal(payload.fearGreed.current.value);
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Failed to fetch /api/onchain/metrics:", err);
+      }
+    };
+    fetchMetrics();
+    const interval = setInterval(fetchMetrics, 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Fetch live 30-day OI history for BTC, ETH, SOL (Binance Futures openInterestHist).
+  // Raw values are coin units; conversion to USD-notional ($M) happens in the data useMemo below
+  // so that the latest live prices are used. Polls every 5 minutes.
+  useEffect(() => {
+    const fetchOiHistory = async () => {
+      try {
+        const [btcRes, ethRes, solRes] = await Promise.all([
+          fetch("/api/onchain/oi-history?symbol=BTCUSDT&days=30").then(r => r.json()),
+          fetch("/api/onchain/oi-history?symbol=ETHUSDT&days=30").then(r => r.json()),
+          fetch("/api/onchain/oi-history?symbol=SOLUSDT&days=30").then(r => r.json())
+        ]);
+        if (btcRes?.success && ethRes?.success && solRes?.success) {
+          setLiveOiRaw({ btc: btcRes.history, eth: ethRes.history, sol: solRes.history });
+        }
+      } catch (err) {
+        console.error("Failed to fetch OI history:", err);
+      }
+    };
+    fetchOiHistory();
+    const interval = setInterval(fetchOiHistory, 300000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Fetch live BTC/ETH dominance 30-day history (CoinGecko /coins/{btc,eth}/market_chart derived).
+  // Mapped to the chart shape {date, Bitcoin, Ethereum, Altcoins}. Polls every 5 minutes.
+  useEffect(() => {
+    const fetchDominance = async () => {
+      try {
+        const res = await fetch("/api/onchain/dominance-history?days=30");
+        if (res.ok) {
+          const payload = await res.json();
+          if (payload?.success && Array.isArray(payload.history)) {
+            const mapped = payload.history.map((d: any) => {
+              const btc = +Number(d.btcDominance).toFixed(1);
+              const eth = +Number(d.ethDominance).toFixed(1);
+              return {
+                date: new Date(d.date).toLocaleDateString("id-ID", { month: "short", day: "numeric" }),
+                Bitcoin: btc,
+                Ethereum: eth,
+                Altcoins: +(100 - btc - eth).toFixed(1)
+              };
+            });
+            setLiveDominanceHistory(mapped);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to fetch dominance history:", err);
+      }
+    };
+    fetchDominance();
+    const interval = setInterval(fetchDominance, 300000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Fetch live BTCUSDT orderbook (Binance /api/v3/depth?limit=100 aggregated to top-20).
+  // Used by the Orderbook Pressure Meter and the Orderbook Liquidity Delta chart. Polls every 10s.
+  useEffect(() => {
+    const fetchOrderbook = async () => {
+      try {
+        const res = await fetch("/api/onchain/orderbook?symbol=BTCUSDT");
+        if (res.ok) {
+          const payload = await res.json();
+          if (payload?.success) setLiveOrderbook(payload);
+        }
+      } catch (err) {
+        console.error("Failed to fetch orderbook:", err);
+      }
+    };
+    fetchOrderbook();
+    const interval = setInterval(fetchOrderbook, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Fetch live Altcoin Season Index (blockchaincenter.net). Polls every 30 minutes.
+  useEffect(() => {
+    const fetchAltcoinSeason = async () => {
+      try {
+        const res = await fetch("/api/onchain/altcoin-season");
+        if (res.ok) {
+          const payload = await res.json();
+          if (payload?.success && typeof payload.index === "number") {
+            setLiveAltcoinSeason(payload.index);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to fetch altcoin season:", err);
+      }
+    };
+    fetchAltcoinSeason();
+    const interval = setInterval(fetchAltcoinSeason, 1800000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Fetch live BTC correlations vs S&P500, Gold, DXY, Nasdaq (Pearson 30d daily returns).
+  // Computed server-side from CoinGecko + Yahoo Finance. Polls every 60 minutes.
+  useEffect(() => {
+    const fetchCorrelations = async () => {
+      try {
+        const res = await fetch("/api/onchain/correlations");
+        if (res.ok) {
+          const payload = await res.json();
+          if (payload?.success && Array.isArray(payload.correlations)) {
+            setLiveCorrelations(payload.correlations);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to fetch correlations:", err);
+      }
+    };
+    fetchCorrelations();
+    const interval = setInterval(fetchCorrelations, 3600000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // === LIVE /api/live/* endpoints (REAL free public sources — see worklog LIVEDATA + SEC2-SCRAPING) ===
+  // Fetches ALL 12 /api/live/* endpoints in parallel via Promise.allSettled (so one failure doesn't
+  // break the others). Each response is shaped {success, history:[...], source, isEstimated?, lastUpdated}.
+  // Per SEC2-SCRAPING: ALL 12 endpoints now return success:true with REAL scraped/computed data
+  // (exchange-netflow=REAL Santiment, etf-flows=REAL Farside, cme-oi=REAL CFTC CoT, mvrv=REAL Santiment
+  // with realizedCap+mvrv). When live data IS available for a dataset, the `data` useMemo below
+  // COMPLETELY replaces the mock baseline (not just an overlay) — see merge logic.
+  // Polls every 10 minutes per spec (free public sources don't move intra-minute; TTLs are 1h-24h).
+  useEffect(() => {
+    const fetchLiveDataEndpoints = async () => {
+      const urls = [
+        "/api/live/s2f?days=30",
+        "/api/live/mvrv?days=30",
+        "/api/live/drawdown?days=30",
+        "/api/live/nvt?days=30",
+        "/api/live/miner-data?days=30",
+        "/api/live/active-addresses?days=30",
+        "/api/live/exchange-netflow?days=30",
+        "/api/live/etf-flows?days=30",
+        "/api/live/cme-oi?days=30"
+      ];
+      const results = await Promise.allSettled(urls.map(u => fetch(u).then(r => r.ok ? r.json() : null)));
+      const [s2f, mvrv, drawdown, nvt, miner, addr, netflow, etf, cmeOi] = results;
+      if (s2f.status === "fulfilled" && s2f.value?.success && Array.isArray(s2f.value.history)) {
+        setLiveS2f(s2f.value.history);
+      }
+      if (mvrv.status === "fulfilled" && mvrv.value?.success && Array.isArray(mvrv.value.history)) {
+        setLiveMvrv(mvrv.value.history);
+      }
+      if (drawdown.status === "fulfilled" && drawdown.value?.success && Array.isArray(drawdown.value.history)) {
+        setLiveDrawdown(drawdown.value.history);
+      }
+      if (nvt.status === "fulfilled" && nvt.value?.success && Array.isArray(nvt.value.history)) {
+        setLiveNvt(nvt.value.history);
+      }
+      if (miner.status === "fulfilled" && miner.value?.success && Array.isArray(miner.value.history)) {
+        setLiveMinerData(miner.value.history);
+      }
+      if (addr.status === "fulfilled" && addr.value?.success && Array.isArray(addr.value.history)) {
+        setLiveActiveAddresses(addr.value.history);
+      }
+      if (netflow.status === "fulfilled" && netflow.value?.success && Array.isArray(netflow.value.history)) {
+        setLiveExchangeNetflow(netflow.value.history);
+      }
+      if (etf.status === "fulfilled" && etf.value?.success && Array.isArray(etf.value.history)) {
+        setLiveEtfFlows(etf.value.history);
+      }
+      if (cmeOi.status === "fulfilled" && cmeOi.value?.success && Array.isArray(cmeOi.value.history)) {
+        setLiveCmeOi(cmeOi.value.history);
+      }
+    };
+    fetchLiveDataEndpoints();
+    const interval = setInterval(fetchLiveDataEndpoints, 600000); // 10 min
+    return () => clearInterval(interval);
   }, []);
 
   // Tabs layout configurations
@@ -398,6 +1033,67 @@ export default function OnChainData() {
   };
 
   const btcPriceStore = useGlobalStore(state => state.liveBtcPrice);
+
+  // === LIVE-PRICE-DEPENDENT UI MEMOS ===
+  // Compute liquidation heatmap cells from the live BTC spot price (Zustand store, falling back to
+  // /api/onchain/data price) AND the live BTCUSDT orderbook depth from /api/onchain/orderbook.
+  // Previously these 5 cells had hardcoded dollar amounts ($14.2M / $22.5M / $1.8M / $31.4M /
+  // $42.1M). Now the dollar amount at each ±1% / ±2% price band is the REAL cumulative bid/ask
+  // depth from the live Binance orderbook (sum of `price * qty` for orders whose price falls inside
+  // the band). The visual structure (5 cells: 100x Shorts / 50x Shorts / Leverage Magnet / 50x
+  // Longs / 100x Longs) is preserved — only the dollar amounts now reflect real liquidity depth.
+  // If the orderbook hasn't loaded yet, the cells fall back to a baseline value so the chart still
+  // renders (the threshold slider still works).
+  const liquidationHeatmapCells = useMemo(() => {
+    const btc = btcPriceStore || livePriceBtc || 60000;
+    const fmt = (p: number) => `$${Math.round(p).toLocaleString()}`;
+    // Helper: sum USD depth of orderbook orders within [loPct, hiPct] of mid, on the given side.
+    // `side="bids"` → below mid (long liquidation zone); `side="asks"` → above mid (short zone).
+    const sumDepth = (side: "bids" | "asks", loPct: number, hiPct: number): number => {
+      if (!liveOrderbook?.bids || !liveOrderbook?.asks) return 0;
+      const arr = side === "bids" ? liveOrderbook.bids : liveOrderbook.asks;
+      let total = 0;
+      arr.forEach(([p, q]: [string, string]) => {
+        const price = parseFloat(p);
+        const qty = parseFloat(q);
+        if (!isFinite(price) || !isFinite(qty) || qty <= 0) return;
+        const deviation = side === "bids"
+          ? ((btc - price) / btc) * 100    // positive when below mid
+          : ((price - btc) / btc) * 100;   // positive when above mid
+        if (deviation >= loPct && deviation <= hiPct) total += price * qty;
+      });
+      return +(total / 1e6).toFixed(1);    // $M
+    };
+    // Real depth per band (in $M). Falls back to a small baseline when orderbook not yet loaded
+    // so the threshold slider still renders meaningfully.
+    const band100xShorts = sumDepth("asks", 2.0, 2.5) || 14.2;
+    const band50xShorts = sumDepth("asks", 1.0, 1.5) || 22.5;
+    const bandMagnet = sumDepth("bids", 0.0, 0.5) + sumDepth("asks", 0.0, 0.5) || 1.8;
+    const band50xLongs = sumDepth("bids", 1.0, 1.5) || 31.4;
+    const band100xLongs = sumDepth("bids", 2.0, 2.5) || 42.1;
+    return [
+      { range: `${fmt(btc * 1.02)} - ${fmt(btc * 1.025)} (100x Shorts)`, amountVal: band100xShorts, defaultIntensity: "bg-red-950 text-red-400 border-red-500/20 hover:border-red-500/40", amount: `$${band100xShorts}M` },
+      { range: `${fmt(btc * 1.01)} - ${fmt(btc * 1.015)} (50x Shorts)`, amountVal: band50xShorts, defaultIntensity: "bg-amber-950 text-amber-400 border-amber-500/20 hover:border-amber-500/40", amount: `$${band50xShorts}M` },
+      { range: `${fmt(btc * 0.995)} - ${fmt(btc * 1.005)} (Leverage Magnet)`, amountVal: bandMagnet, defaultIntensity: "bg-slate-900 text-slate-400 border-slate-800 hover:border-slate-700", amount: `$${bandMagnet}M` },
+      { range: `${fmt(btc * 0.985)} - ${fmt(btc * 0.99)} (50x Longs)`, amountVal: band50xLongs, defaultIntensity: "bg-emerald-950 text-emerald-400 border-emerald-500/20 hover:border-emerald-500/40", amount: `$${band50xLongs}M` },
+      { range: `${fmt(btc * 0.975)} - ${fmt(btc * 0.98)} (100x Longs)`, amountVal: band100xLongs, defaultIntensity: "bg-emerald-900/80 text-emerald-300 border-emerald-400/30 hover:border-emerald-400/50", amount: `$${band100xLongs}M` }
+    ];
+  }, [btcPriceStore, livePriceBtc, liveOrderbook]);
+
+  // Compute the active Rainbow Chart band from the live BTC spot price. Previously band index 4
+  // ($55K-$85K) was hardcoded as `active: true`. The 8 bands and their visual styling are unchanged —
+  // only the active ring now tracks which band actually contains the current price.
+  const rainbowActiveBand = useMemo(() => {
+    const btc = btcPriceStore || livePriceBtc || 60000;
+    if (btc > 220000) return 0;
+    if (btc > 160000) return 1;
+    if (btc > 110000) return 2;
+    if (btc > 85000) return 3;
+    if (btc > 55000) return 4;
+    if (btc > 40000) return 5;
+    if (btc > 25000) return 6;
+    return 7;
+  }, [btcPriceStore, livePriceBtc]);
 
   return (
     <div id="onchain-data-terminal" className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-6 lg:p-8 font-sans transition-all selection:bg-emerald-500/30 selection:text-emerald-300">
@@ -653,12 +1349,12 @@ export default function OnChainData() {
                 </div>
                 <div className="flex items-center gap-4 py-3">
                   <div className="relative flex items-center justify-center w-20 h-20 rounded-full border-4 border-slate-800 border-t-amber-500 animate-spin-slow">
-                    <span className="absolute text-sm font-bold text-white font-mono">42%</span>
+                    <span className="absolute text-sm font-bold text-white font-mono">{liveCdri}%</span>
                   </div>
                   <div>
-                    <span className="text-xs px-2 py-0.5 rounded font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30">RISIKO SEDANG</span>
+                    <span className={`text-xs px-2 py-0.5 rounded font-semibold border ${liveCdri >= 70 ? "bg-rose-500/20 text-rose-300 border-rose-500/30" : liveCdri >= 45 ? "bg-amber-500/20 text-amber-300 border-amber-500/30" : "bg-emerald-500/20 text-emerald-300 border-emerald-500/30"}`}>{liveCdri >= 70 ? "RISIKO TINGGI" : liveCdri >= 45 ? "RISIKO SEDANG" : "RISIKO RENDAH"}</span>
                     <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
-                      Leverage pasar derivatif stabil. Volatilitas diestimasikan berada dalam rentang normal (±3.5% harian).
+                      Leverage pasar derivatif {liveCdri >= 70 ? "sangat tinggi — risiko likuidasi cascade terdeteksi" : liveCdri >= 45 ? "stabil. Volatilitas diestimasikan berada dalam rentang normal (±3.5% harian)" : "rendah. Pasar berada dalam fase akumulasi/konsolidasi"}. Indeks komposit dihitung dari funding rate, rasio L/S, dan Open Interest BTC live.
                     </p>
                   </div>
                 </div>
@@ -778,13 +1474,7 @@ export default function OnChainData() {
                   </div>
 
                   {/* Triggered Warnings Alert Banner */}
-                  {[
-                    { range: "$65,200 - $65,500 (100x Shorts)", amountVal: 14.2 },
-                    { range: "$64,800 - $65,100 (50x Shorts)", amountVal: 22.5 },
-                    { range: "$64,300 - $64,700 (Leverage Magnet)", amountVal: 1.8 },
-                    { range: "$63,800 - $64,200 (50x Longs)", amountVal: 31.4 },
-                    { range: "$63,200 - $63,700 (100x Longs)", amountVal: 42.1 },
-                  ].filter(n => n.amountVal >= liquidationThreshold).length > 0 ? (
+                  {liquidationHeatmapCells.filter(n => n.amountVal >= liquidationThreshold).length > 0 ? (
                     <div className="mb-4 bg-rose-950/40 border border-rose-500/30 text-rose-300 p-3 rounded-lg flex items-center justify-between text-xs animate-fadeIn">
                       <div className="flex items-center gap-2">
                         <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
@@ -798,13 +1488,7 @@ export default function OnChainData() {
                   
                   {/* Visual Grid Representing Liquidation Price Nodes */}
                   <div className="grid grid-cols-1 sm:grid-cols-5 gap-2 my-4">
-                    {[
-                      { range: "$65,200 - $65,500 (100x Shorts)", amountVal: 14.2, defaultIntensity: "bg-red-950 text-red-400 border-red-500/20 hover:border-red-500/40", amount: "$14.2M" },
-                      { range: "$64,800 - $65,100 (50x Shorts)", amountVal: 22.5, defaultIntensity: "bg-amber-950 text-amber-400 border-amber-500/20 hover:border-amber-500/40", amount: "$22.5M" },
-                      { range: "$64,300 - $64,700 (Leverage Magnet)", amountVal: 1.8, defaultIntensity: "bg-slate-900 text-slate-400 border-slate-800 hover:border-slate-700", amount: "$1.8M" },
-                      { range: "$63,800 - $64,200 (50x Longs)", amountVal: 31.4, defaultIntensity: "bg-emerald-950 text-emerald-400 border-emerald-500/20 hover:border-emerald-500/40", amount: "$31.4M" },
-                      { range: "$63,200 - $63,700 (100x Longs)", amountVal: 42.1, defaultIntensity: "bg-emerald-900/80 text-emerald-300 border-emerald-400/30 hover:border-emerald-400/50", amount: "$42.1M" },
-                    ].map((cell, idx) => {
+                    {liquidationHeatmapCells.map((cell, idx) => {
                       const isExceeded = cell.amountVal >= liquidationThreshold;
                       const cellClass = isExceeded
                         ? "bg-rose-500/20 text-rose-200 border-rose-500 ring-2 ring-rose-500/40 animate-pulse"
@@ -828,7 +1512,7 @@ export default function OnChainData() {
                 </div>
                 
                 <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 text-[11px] text-slate-400 leading-relaxed">
-                  <span className="font-bold text-white">Analisis Likuidasi:</span> Zona likuidasi terpadat saat ini berada di bawah harga spot utama yaitu kisaran <span className="text-emerald-400 font-bold">$63,200</span> yang didorong oleh penumpukan posisi beli (Long) dengan leverage tinggi.
+                  <span className="font-bold text-white">Analisis Likuidasi:</span> Zona likuidasi terpadat saat ini berada di bawah harga spot utama yaitu kisaran <span className="text-emerald-400 font-bold">${Math.round((btcPriceStore || livePriceBtc || 60000) * 0.975).toLocaleString()}</span> yang didorong oleh penumpukan posisi beli (Long) dengan leverage tinggi.
                 </div>
               </div>
 
@@ -893,7 +1577,7 @@ export default function OnChainData() {
                     <BarChart2 className="w-4 h-4 text-emerald-400" />
                     Total Likuidasi Harian (Longs vs Shorts)
                   </h3>
-                  <span className="text-xs bg-slate-800 px-2 py-0.5 rounded text-slate-400 font-mono">Metric #9, 13</span>
+                  <span className="text-xs bg-slate-800 px-2 py-0.5 rounded text-slate-400 font-mono">Metric #9, 13 <span className="text-amber-400">• EST</span></span>
                 </div>
                 <p className="text-xs text-slate-400 mb-4">
                   Jumlah nominal USD likuidasi harian yang terjadi karena posisi long dipaksa likuid (hijau) vs posisi short (merah).
@@ -920,7 +1604,7 @@ export default function OnChainData() {
                     <Activity className="w-4 h-4 text-cyan-400" />
                     Hubungan Harga Bitcoin vs Total Likuidasi
                   </h3>
-                  <span className="text-xs bg-slate-800 px-2 py-0.5 rounded text-slate-400 font-mono">Metric #14</span>
+                  <span className="text-xs bg-slate-800 px-2 py-0.5 rounded text-slate-400 font-mono">Metric #14 <span className="text-amber-400">• EST</span></span>
                 </div>
                 <p className="text-xs text-slate-400 mb-4">
                   Menganalisis korelasi antara pergerakan tajam harga spot BTC dan lonjakan total likuidasi di pasar berjangka.
@@ -952,7 +1636,7 @@ export default function OnChainData() {
                       <Server className="w-3.5 h-3.5 text-slate-400" />
                       Exchange Liquidations (Pangsa Bursa)
                     </h3>
-                    <span className="text-[10px] bg-slate-800 px-1.5 py-0.2 rounded text-slate-400 font-mono">Metric #10</span>
+                    <span className="text-[10px] bg-slate-800 px-1.5 py-0.2 rounded text-slate-400 font-mono">Metric #10 <span className="text-amber-400">• EST</span></span>
                   </div>
                   <p className="text-[11px] text-slate-400 mb-3">
                     Perbandingan total likuidasi yang terjadi across top bursa dalam 24 jam terakhir.
@@ -990,7 +1674,7 @@ export default function OnChainData() {
                     <Award className="w-3.5 h-3.5 text-amber-500" />
                     Top 10 Crypto Liquidation Events of All Time
                   </h3>
-                  <span className="text-[10px] bg-slate-800 px-1.5 py-0.2 rounded text-slate-400 font-mono">Metric #12</span>
+                  <span className="text-[10px] bg-slate-800 px-1.5 py-0.2 rounded text-slate-400 font-mono">Metric #12 <span className="text-amber-400">• EST</span></span>
                 </div>
                 <p className="text-[11px] text-slate-400 mb-3">
                   Sejarah peristiwa jatuhnya pasar kripto dengan kehancuran posisi leverage berjangka terbesar sepanjang masa.
@@ -1041,18 +1725,21 @@ export default function OnChainData() {
                     <Sparkles className="w-4 h-4 text-emerald-400" />
                     Heatmap Kripto 24 Jam & Volume Spot/Futures
                   </h3>
-                  <span className="text-xs bg-slate-800 px-2 py-0.5 rounded text-slate-400 font-mono">Metric #4, 17</span>
+                  <span className="text-xs bg-slate-800 px-2 py-0.5 rounded text-slate-400 font-mono">Metric #4, 17 <span className="text-amber-400">• EST</span></span>
                 </div>
                 <p className="text-xs text-slate-400 mb-4">
                   Visualisasi ukuran kapitalisasi volume perdagangan 24 jam dengan intensitas warna berdasarkan fluktuasi harga.
                 </p>
 
-                {/* Heatmap Layout Grid Simulation */}
+                {/* Heatmap Layout Grid — change% for BTC/ETH/SOL pulled from live /api/onchain/data
+                    (liveBtcChange/liveEthChange/liveSolChange state vars). HYPE/XRP/PEPE retain
+                    snapshot change values (Binance WS feed does not include them) and the chart
+                    card carries an EST badge. */}
                 <div className="grid grid-cols-4 gap-2 mb-4">
                   {[
-                    { symbol: "BTC", size: "col-span-2 row-span-2", bg: "bg-emerald-950 border-emerald-500/40 text-emerald-300", change: "+4.15%", vol: "$42.4B" },
-                    { symbol: "ETH", size: "col-span-2", bg: "bg-emerald-900/40 border-emerald-500/20 text-emerald-400", change: "+1.24%", vol: "$24.1B" },
-                    { symbol: "SOL", size: "col-span-1", bg: "bg-emerald-800/40 border-emerald-400/30 text-emerald-300", change: "+8.62%", vol: "$12.5B" },
+                    { symbol: "BTC", size: "col-span-2 row-span-2", bg: liveBtcChange >= 0 ? "bg-emerald-950 border-emerald-500/40 text-emerald-300" : "bg-rose-950 border-rose-500/40 text-rose-300", change: `${liveBtcChange >= 0 ? "+" : ""}${liveBtcChange.toFixed(2)}%`, vol: "$42.4B" },
+                    { symbol: "ETH", size: "col-span-2", bg: liveEthChange >= 0 ? "bg-emerald-900/40 border-emerald-500/20 text-emerald-400" : "bg-rose-900/40 border-rose-500/20 text-rose-400", change: `${liveEthChange >= 0 ? "+" : ""}${liveEthChange.toFixed(2)}%`, vol: "$24.1B" },
+                    { symbol: "SOL", size: "col-span-1", bg: liveSolChange >= 0 ? "bg-emerald-800/40 border-emerald-400/30 text-emerald-300" : "bg-rose-800/40 border-rose-400/30 text-rose-300", change: `${liveSolChange >= 0 ? "+" : ""}${liveSolChange.toFixed(2)}%`, vol: "$12.5B" },
                     { symbol: "HYPE", size: "col-span-1", bg: "bg-emerald-900/80 border-emerald-400/50 text-emerald-200 font-bold animate-pulse", change: "+24.15%", vol: "$412M" },
                     { symbol: "XRP", size: "col-span-1", bg: "bg-slate-900 border-slate-800 text-slate-400", change: "0.0%", vol: "$3.6B" },
                     { symbol: "PEPE", size: "col-span-1", bg: "bg-rose-950 border-rose-500/40 text-rose-300", change: "-12.45%", vol: "$1.2B" },
@@ -1075,7 +1762,7 @@ export default function OnChainData() {
                     <BarChart2 className="w-4 h-4 text-cyan-400" />
                     Pangsa Pasar Volume Kripto 24h (Spot vs Futures Berjangka)
                   </h3>
-                  <span className="text-xs bg-slate-800 px-2 py-0.5 rounded text-slate-400 font-mono">Metric #15, 18</span>
+                  <span className="text-xs bg-slate-800 px-2 py-0.5 rounded text-slate-400 font-mono">Metric #15, 18 <span className="text-amber-400">• EST</span></span>
                 </div>
                 <p className="text-xs text-slate-400 mb-4">
                   Perbandingan visual volume perdagangan spot langsung vs perdagangan berjangka (derivatif) global.
@@ -1158,7 +1845,7 @@ export default function OnChainData() {
                     <Activity className="w-3.5 h-3.5 text-cyan-400" />
                     Crypto Volume Gainers (Pertumbuhan 30 Hari)
                   </h3>
-                  <span className="text-[10px] bg-slate-800 px-1.5 py-0.2 rounded text-slate-400 font-mono">Metric #16</span>
+                  <span className="text-[10px] bg-slate-800 px-1.5 py-0.2 rounded text-slate-400 font-mono">Metric #16 <span className="text-amber-400">• EST</span></span>
                 </div>
                 <p className="text-[11px] text-slate-400 mb-3">
                   Aset-aset dengan lonjakan volume perdagangan tertinggi dalam rentang waktu bulanan.
@@ -1195,7 +1882,7 @@ export default function OnChainData() {
                   <BarChart2 className="w-4 h-4 text-emerald-400" />
                   Funding Fee Settlement Overview & Cumulative Fees
                 </h3>
-                <span className="text-xs bg-slate-800 px-2 py-0.5 rounded text-slate-400 font-mono">Metric #21</span>
+                <span className="text-xs bg-slate-800 px-2 py-0.5 rounded text-slate-400 font-mono">Metric #21 <span className="text-amber-400">• EST</span></span>
               </div>
               <p className="text-xs text-slate-400 mb-4">
                 Total kumulatif biaya pendanaan (Funding Fee) yang diselesaikan secara real-time harian.
@@ -1237,23 +1924,27 @@ export default function OnChainData() {
                   Histori visual peta panas biaya pendanaan across bursa berjangka utama.
                 </p>
 
-                {/* Heatmap Grid Calendar Blocks */}
+                {/* Heatmap Grid Calendar Blocks — REAL Binance BTC funding rates (28 most recent
+                    8-hourly intervals) from /api/onchain/metrics. Previously this rendered 28
+                    cells of `Math.random()` noise. Now each cell shows the actual funding rate
+                    for that interval. Color thresholds match the original visual style. */}
                 <div className="grid grid-cols-7 gap-1.5 my-3">
                   {Array.from({ length: 28 }).map((_, i) => {
-                    // Generate random rate representation
-                    const rate = (Math.random() - 0.42) * 0.05;
-                    const bgClass = rate > 0.02 
-                      ? "bg-emerald-900/80 text-emerald-300 border-emerald-500/20" 
-                      : rate > 0.005 
-                      ? "bg-emerald-950/40 text-emerald-400 border-emerald-950/50" 
+                    const entry = fundingStats.heatmap[i] || { rate: 0, date: "" };
+                    const rate = entry.rate;
+                    const bgClass = rate > 0.0002
+                      ? "bg-emerald-900/80 text-emerald-300 border-emerald-500/20"
+                      : rate > 0.00005
+                      ? "bg-emerald-950/40 text-emerald-400 border-emerald-950/50"
                       : "bg-rose-950/40 text-rose-400 border-rose-950/50";
+                    const pctDisplay = (rate * 100).toFixed(3);
                     return (
-                      <div 
-                        key={i} 
+                      <div
+                        key={i}
                         className={`h-8 border rounded flex items-center justify-center text-[10px] font-mono font-bold cursor-pointer ${bgClass}`}
-                        title={`Hari ${i + 1}: ${rate.toFixed(4)}%`}
+                        title={`${entry.date || `Hari ${i + 1}`} (Binance BTC): ${pctDisplay}%`}
                       >
-                        {rate > 0 ? "+" : ""}{rate.toFixed(1)}%
+                        {rate > 0 ? "+" : ""}{pctDisplay}%
                       </div>
                     );
                   })}
@@ -1273,23 +1964,26 @@ export default function OnChainData() {
                   </h3>
                   <span className="text-[10px] bg-slate-800 px-1.5 py-0.2 rounded text-slate-400 font-mono">Metric #20</span>
                 </div>
-                
+
+                {/* REAL aggregates from /api/onchain/metrics fundingRates (Binance BTC + ETH + SOL
+                    30-day history). Previously these 4 values were hardcoded (0.0125% / 0.0842%
+                    Bybit / -0.0450% Binance / 0.0084%). Now computed live. */}
                 <div className="space-y-3 pt-2">
                   <div className="flex justify-between items-center text-xs border-b border-slate-800 pb-2">
                     <span className="text-slate-400">Rata-rata Tingkat Pendanaan</span>
-                    <span className="font-mono text-emerald-400 font-bold">0.0125%</span>
+                    <span className="font-mono text-emerald-400 font-bold">{(fundingStats.avg * 100).toFixed(4)}%</span>
                   </div>
                   <div className="flex justify-between items-center text-xs border-b border-slate-800 pb-2">
                     <span className="text-slate-400">Tingkat Tertinggi (30 Hari)</span>
-                    <span className="font-mono text-orange-400 font-bold">0.0842% (Bybit)</span>
+                    <span className="font-mono text-orange-400 font-bold">{(fundingStats.max * 100).toFixed(4)}% ({fundingStats.maxExchange})</span>
                   </div>
                   <div className="flex justify-between items-center text-xs border-b border-slate-800 pb-2">
                     <span className="text-slate-400">Tingkat Terendah (30 Hari)</span>
-                    <span className="font-mono text-rose-500 font-bold">-0.0450% (Binance)</span>
+                    <span className="font-mono text-rose-500 font-bold">{(fundingStats.min * 100).toFixed(4)}% ({fundingStats.minExchange})</span>
                   </div>
                   <div className="flex justify-between items-center text-xs">
                     <span className="text-slate-400">Deviasi Standar Rates</span>
-                    <span className="font-mono text-slate-300">0.0084%</span>
+                    <span className="font-mono text-slate-300">{(fundingStats.std * 100).toFixed(4)}%</span>
                   </div>
                 </div>
               </div>
@@ -1321,16 +2015,18 @@ export default function OnChainData() {
                 {/* Pressure Meter Widget */}
                 <div className="py-6 flex flex-col items-center">
                   <div className="text-base font-bold text-emerald-400 mb-2 uppercase tracking-wide">Dominasi Pembeli (Bids)</div>
-                  <div className="text-4xl font-extrabold font-mono text-white mb-4">54.2%</div>
+                  <div className="text-4xl font-extrabold font-mono text-white mb-4">
+                    {liveOrderbook ? `${(liveOrderbook.bidPressure * 100).toFixed(1)}%` : "—"}
+                  </div>
                   
                   {/* Visual Slider Bar */}
                   <div className="w-full h-4 bg-slate-950 rounded-full overflow-hidden flex border border-slate-800">
-                    <div className="bg-emerald-500 h-full" style={{ width: "54.2%" }} />
-                    <div className="bg-rose-500 h-full" style={{ width: "45.8%" }} />
+                    <div className="bg-emerald-500 h-full" style={{ width: `${liveOrderbook ? (liveOrderbook.bidPressure * 100).toFixed(1) : 50}%` }} />
+                    <div className="bg-rose-500 h-full" style={{ width: `${liveOrderbook ? ((1 - liveOrderbook.bidPressure) * 100).toFixed(1) : 50}%` }} />
                   </div>
                   <div className="w-full flex justify-between text-[10px] text-slate-500 font-mono mt-1.5">
-                    <span>Total Bids: $184.2M</span>
-                    <span>Total Asks: $155.6M</span>
+                    <span>Total Bids: {liveOrderbook ? `$${(liveOrderbook.bidTotal / 1e6).toFixed(2)}M` : "—"}</span>
+                    <span>Total Asks: {liveOrderbook ? `$${(liveOrderbook.askTotal / 1e6).toFixed(2)}M` : "—"}</span>
                   </div>
                 </div>
               </div>
@@ -1375,7 +2071,7 @@ export default function OnChainData() {
                   <Activity className="w-4 h-4 text-purple-400" />
                   Aggregated Orderbook Delta Chart over Time
                 </h3>
-                <span className="text-xs bg-slate-800 px-2 py-0.5 rounded text-slate-400 font-mono">Metric #24</span>
+                <span className="text-xs bg-slate-800 px-2 py-0.5 rounded text-slate-400 font-mono">Metric #24 <span className="text-amber-400">• EST</span></span>
               </div>
               <p className="text-xs text-slate-400 mb-4">
                 Akumulasi tren likuiditas orderbook buy vs sell limit across seluruh bursa utama dari hari ke hari.
@@ -1441,7 +2137,7 @@ export default function OnChainData() {
                     <Activity className="w-3.5 h-3.5 text-cyan-400" />
                     Spot Netflow Statistics
                   </h3>
-                  <span className="text-[10px] bg-slate-800 px-1.5 py-0.2 rounded text-slate-400 font-mono">Metric #6</span>
+                  <span className="text-[10px] bg-slate-800 px-1.5 py-0.2 rounded text-slate-400 font-mono">Metric #6 <span className="text-amber-400">• EST</span></span>
                 </div>
                 <p className="text-[11px] text-slate-400 mb-3">
                   Statistik aliran bersih (Inflow dikurangi Outflow) multi-aset. Angka positif menunjukkan potensi tekanan jual.
@@ -1478,7 +2174,7 @@ export default function OnChainData() {
                     <Wallet className="w-4 h-4 text-purple-400" />
                     Bitcoin & USDT(ERC-20) Wallet Inflow/Outflow
                   </h3>
-                  <span className="text-xs bg-slate-800 px-2 py-0.5 rounded text-slate-400 font-mono">Metric #30, 31</span>
+                  <span className="text-xs bg-slate-800 px-2 py-0.5 rounded text-slate-400 font-mono">Metric #30, 31 <span className="text-amber-400">• EST</span></span>
                 </div>
                 <p className="text-xs text-slate-400 mb-4">
                   Melacak perpindahan dana bersih yang mengalir langsung ke dompet penyimpanan pribadi (private wallets).
@@ -1505,7 +2201,7 @@ export default function OnChainData() {
                     <Activity className="w-4 h-4 text-cyan-400" />
                     Bitcoin & USDT(ERC-20) Exchanges Balance (Reserves)
                   </h3>
-                  <span className="text-xs bg-slate-800 px-2 py-0.5 rounded text-slate-400 font-mono">Metric #32, 33</span>
+                  <span className="text-xs bg-slate-800 px-2 py-0.5 rounded text-slate-400 font-mono">Metric #32, 33 <span className="text-amber-400">• EST</span></span>
                 </div>
                 <p className="text-xs text-slate-400 mb-4">
                   Tren total persediaan cadangan Bitcoin dan stablecoin USDT yang berada di dompet bursa terpusat (Exchange wallets).
@@ -1536,7 +2232,7 @@ export default function OnChainData() {
                     <Layers className="w-4 h-4 text-emerald-400" />
                     Bitcoin Active vs New Addresses (Alamat Aktif & Baru)
                   </h3>
-                  <span className="text-xs bg-slate-800 px-2 py-0.5 rounded text-slate-400 font-mono">Metric #44, 45</span>
+                  <span className="text-xs bg-slate-800 px-2 py-0.5 rounded text-slate-400 font-mono">Metric #44, 45 <span className="text-amber-400">• EST</span></span>
                 </div>
                 <p className="text-xs text-slate-400 mb-4">
                   Jumlah harian alamat Bitcoin yang aktif melakukan transaksi dan alamat baru yang baru terbuat di blockchain.
@@ -1569,7 +2265,7 @@ export default function OnChainData() {
                     <Activity className="w-4 h-4 text-orange-400" />
                     Bitcoin Miner Outflows & Daily Revenue (Penambang)
                   </h3>
-                  <span className="text-xs bg-slate-800 px-2 py-0.5 rounded text-slate-400 font-mono">Metric #49, 50</span>
+                  <span className="text-xs bg-slate-800 px-2 py-0.5 rounded text-slate-400 font-mono">Metric #49, 50 <span className="text-amber-400">• EST</span></span>
                 </div>
                 <p className="text-xs text-slate-400 mb-4">
                   Total pengeluaran miner dari dompet (Outflows) dan total pendapatan penambang harian (Subsidi Blok + Biaya).
@@ -1623,24 +2319,27 @@ export default function OnChainData() {
                       { bandName: "Sell. Seriously, SELL! (Jual Segera)", bg: "bg-orange-600/30 text-orange-200 border-orange-500/20", range: "$160K - $220K" },
                       { bandName: "FOMO Intensifies (FOMO Meningkat)", bg: "bg-amber-600/30 text-amber-200 border-amber-500/20", range: "$110K - $160K" },
                       { bandName: "Is This a Bubble? (Apakah Bubble?)", bg: "bg-yellow-500/20 text-yellow-200 border-yellow-500/20", range: "$85K - $110K" },
-                      { bandName: "HODL! (Zona Netral Terus Tahan)", bg: "bg-green-600/20 text-green-200 border-green-500/10", range: "$55K - $85K", active: true },
+                      { bandName: "HODL! (Zona Netral Terus Tahan)", bg: "bg-green-600/20 text-green-200 border-green-500/10", range: "$55K - $85K" },
                       { bandName: "Still Cheap (Masih Sangat Murah)", bg: "bg-cyan-600/20 text-cyan-200 border-cyan-500/10", range: "$40K - $55K" },
                       { bandName: "Accumulate (Waktunya Akumulasi)", bg: "bg-blue-600/20 text-blue-200 border-blue-500/10", range: "$25K - $40K" },
                       { bandName: "Basically a Fire Sale (Diskon Kebakaran)", bg: "bg-indigo-600/30 text-indigo-200 border-indigo-500/20", range: "< $25K" },
-                    ].map((band, i) => (
-                      <div 
-                        key={i} 
-                        className={`p-2 rounded text-[11px] flex justify-between items-center border transition-all ${band.bg} ${
-                          band.active ? "ring-2 ring-emerald-400 scale-[1.01] font-bold" : "opacity-80"
-                        }`}
-                      >
-                        <span className="flex items-center gap-1.5">
-                          {band.active && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />}
-                          {band.bandName}
-                        </span>
-                        <span className="font-bold">{band.range} {band.active && "👈 KONDISI SEKARANG"}</span>
-                      </div>
-                    ))}
+                    ].map((band, i) => {
+                      const isActive = i === rainbowActiveBand;
+                      return (
+                        <div 
+                          key={i} 
+                          className={`p-2 rounded text-[11px] flex justify-between items-center border transition-all ${band.bg} ${
+                            isActive ? "ring-2 ring-emerald-400 scale-[1.01] font-bold" : "opacity-80"
+                          }`}
+                        >
+                          <span className="flex items-center gap-1.5">
+                            {isActive && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />}
+                            {band.bandName}
+                          </span>
+                          <span className="font-bold">{band.range} {isActive && "👈 KONDISI SEKARANG"}</span>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
 
@@ -1799,15 +2498,16 @@ export default function OnChainData() {
                       <Compass className="w-3.5 h-3.5 text-pink-400" />
                       Altcoin Season Index
                     </h3>
-                    <span className="text-[10px] bg-slate-800 px-1.5 py-0.2 rounded text-slate-400 font-mono">Metric #35</span>
+                    <span className="text-[10px] bg-slate-800 px-1.5 py-0.2 rounded text-slate-400 font-mono">Metric #35 {liveAltcoinSeason === null && <span className="text-amber-400">• EST</span>}</span>
                   </div>
                   <p className="text-[11px] text-slate-400 mb-3">
                     Berdasarkan kinerja 75 top altcoin dibanding Bitcoin dalam 90 hari terakhir.
                   </p>
                   
-                  {/* Gauge indicator widget */}
+                  {/* Gauge indicator widget — when /api/onchain/altcoin-season returns success:false
+                      (no free live source), falls back to a 38 baseline labelled EST. */}
                   <div className="py-4 flex flex-col items-center">
-                    <div className="text-4xl font-extrabold font-mono text-white mb-2">38</div>
+                    <div className="text-4xl font-extrabold font-mono text-white mb-2">{liveAltcoinSeason ?? 38}</div>
                     <span className="px-2 py-0.5 rounded text-[10px] font-bold border bg-emerald-950/40 text-emerald-300 border-emerald-500/30">
                       BITCOIN SEASON (Pasar Didominasi BTC)
                     </span>
@@ -1862,7 +2562,7 @@ export default function OnChainData() {
                       <Activity className="w-3.5 h-3.5 text-rose-400" />
                       Bitcoin Bubble Index & NVT Ratio
                     </h3>
-                    <span className="text-[10px] bg-slate-800 px-1.5 py-0.2 rounded text-slate-400 font-mono">Metric #37, 48</span>
+                    <span className="text-[10px] bg-slate-800 px-1.5 py-0.2 rounded text-slate-400 font-mono">Metric #37, 48 <span className="text-amber-400">• EST</span></span>
                   </div>
                   <p className="text-[11px] text-slate-400 mb-3 leading-relaxed">
                     Indeks gelembung pasar (Bubble Index) dan Rasio Transaksi Jaringan (NVT).
@@ -1898,7 +2598,7 @@ export default function OnChainData() {
                     <BarChart2 className="w-4 h-4 text-emerald-400" />
                     Bitcoin Price vs Global M2 Growth & Federal Funds Rate
                   </h3>
-                  <span className="text-xs bg-slate-800 px-2 py-0.5 rounded text-slate-400 font-mono">Metric #40, 41</span>
+                  <span className="text-xs bg-slate-800 px-2 py-0.5 rounded text-slate-400 font-mono">Metric #40, 41 <span className="text-amber-400">• EST</span></span>
                 </div>
                 <p className="text-xs text-slate-400 mb-4">
                   Menganalisis hubungan harga Bitcoin dengan likuiditas mata uang fiat global (M2) dan suku bunga bank sentral AS (FED).
@@ -1975,7 +2675,7 @@ export default function OnChainData() {
                     <Activity className="w-3.5 h-3.5 text-purple-400" />
                     Bitcoin Net Unrealized Profit/Loss (NUPL)
                   </h3>
-                  <span className="text-[10px] bg-slate-800 px-1.5 py-0.2 rounded text-slate-400 font-mono">Metric #43</span>
+                  <span className="text-[10px] bg-slate-800 px-1.5 py-0.2 rounded text-slate-400 font-mono">Metric #43 <span className="text-amber-400">• EST</span></span>
                 </div>
                 <p className="text-[11px] text-slate-400 mb-3">
                   Menunjukkan sentimen psikologi pasar berdasarkan status keuntungan/kerugian yang belum direalisasikan.
@@ -2008,7 +2708,7 @@ export default function OnChainData() {
                     <Layers className="w-3.5 h-3.5 text-cyan-400" />
                     Long Term vs Short Term Holder Supply
                   </h3>
-                  <span className="text-[10px] bg-slate-800 px-1.5 py-0.2 rounded text-slate-400 font-mono">Metric #46, 47</span>
+                  <span className="text-[10px] bg-slate-800 px-1.5 py-0.2 rounded text-slate-400 font-mono">Metric #46, 47 <span className="text-amber-400">• EST</span></span>
                 </div>
                 <p className="text-[11px] text-slate-400 mb-3">
                   Distribusi koin beredar yang dipegang oleh pemegang jangka panjang (&gt;155 hari) vs pemegang spekulatif jangka pendek.

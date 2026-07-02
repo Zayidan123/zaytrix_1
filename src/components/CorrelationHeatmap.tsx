@@ -43,6 +43,9 @@ export default function CorrelationHeatmap({ portfolio }: CorrelationHeatmapProp
   const [showDemo, setShowDemo] = useState(false);
   const [historyCache, setHistoryCache] = useState<Record<string, { date: string; close: number }[]>>({});
   const [loadingHistory, setLoadingHistory] = useState(false);
+  // True when live history fetch failed or returned insufficient data and the
+  // matrix is therefore showing deterministic fallback coefficients.
+  const [usingFallback, setUsingFallback] = useState(false);
 
   // Fallback benchmark assets when user portfolio is empty or has < 2 unique tickers
   const benchmarkAssets = useMemo(() => [
@@ -96,8 +99,13 @@ export default function CorrelationHeatmap({ portfolio }: CorrelationHeatmapProp
           newCache[res.symbol] = res.history;
         });
         setHistoryCache(newCache);
+        // If every fetched history is empty/insufficient, the matrix will rely
+        // on the deterministic fallback. Surface that to the user.
+        const insufficient = results.every(res => !res.history || res.history.length < 5);
+        setUsingFallback(insufficient);
       } catch (err) {
         console.log("Error loading real historical correlations:", err);
+        if (active) setUsingFallback(true);
       } finally {
         if (active) {
           setLoadingHistory(false);
@@ -327,9 +335,9 @@ export default function CorrelationHeatmap({ portfolio }: CorrelationHeatmapProp
         const textContent = `
           <div class="space-y-1">
             <div class="flex items-center justify-between gap-4 font-bold border-b border-slate-800 pb-1 mb-1">
-              <span class="text-slate-250 font-sans text-xs">${dItem.x} ↔ ${dItem.y}</span>
+              <span class="text-slate-200 font-sans text-xs">${dItem.x} ↔ ${dItem.y}</span>
             </div>
-            <div>Koefisien Korelasi: <span class="font-bold ${dItem.value > 0.5 ? 'text-amber-400' : dItem.value < 0 ? 'text-rose-400' : 'text-slate-350'}">${dItem.value.toFixed(2)}</span></div>
+            <div>Koefisien Korelasi: <span class="font-bold ${dItem.value > 0.5 ? 'text-amber-400' : dItem.value < 0 ? 'text-rose-400' : 'text-slate-300'}">${dItem.value.toFixed(2)}</span></div>
             <div class="text-[10px] text-slate-400 font-sans mt-1">
               ${dItem.x === dItem.y 
                 ? "Korelasi diri sempurna." 
@@ -418,6 +426,14 @@ export default function CorrelationHeatmap({ portfolio }: CorrelationHeatmapProp
           <h3 className="text-sm sm:text-md font-bold text-slate-100 flex items-center gap-1.5">
             <Layers className="w-4 h-4 text-amber-500" />
             <span>Peta Korelasi Diversifikasi Aset</span>
+            {usingFallback && !loadingHistory && (
+              <span
+                className="ml-1 text-[9px] uppercase font-mono font-bold px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30"
+                title="Data riwayat harga tidak tersedia atau gagal dimuat. Nilai korelasi ditampilkan sebagai estimasi deterministik (bukan kalkulasi riil Pearson)."
+              >
+                ESTIMATED
+              </span>
+            )}
           </h3>
           <p className="text-xs text-slate-400 mt-1">
             Mengidentifikasi tingkat integrasi harga harian antar instrumen bursa (IHSG) dan kripto di portofolio Anda.

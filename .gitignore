@@ -6,3 +6,14 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Runtime/cache files
+onchain-cache.json
+automated-analysis.json
+notifications-config.json
+.zscripts/dev.pid
+.zscripts/dev.log
+.zscripts/mini-service-*.log
+preview-*.png
+tool-results/
+.github/workflows/ci.yml

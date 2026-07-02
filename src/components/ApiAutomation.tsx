@@ -30,8 +30,15 @@ export default function ApiAutomation() {
   const [apiKey, setApiKey] = useState("SANDBOX_MOCK_PROX_KEY_FIN_9958");
   const [apiSecret, setApiSecret] = useState("");
   const [exchangePassphrase, setExchangePassphrase] = useState("");
-  const [masterPin, setMasterPin] = useState("Z-CAPITAL-ACCESS-2026");
-  const [webHookUrl, setWebHookUrl] = useState("https://api.z-capital.co/v1/webhook");
+  // Default Master PIN is intentionally empty — user must enter their own PIN to derive the AES key.
+  // Previously hardcoded "ZAYTRIX-ACCESS-2026" was a publicly-known default that anyone with source code could use to decrypt stored keys.
+  const [masterPin, setMasterPin] = useState("");
+  const [webHookUrl, setWebHookUrl] = useState("https://api.zaytrix.co/v1/webhook");
+
+  // User-configurable trade parameters (previously hardcoded BTC 0.05).
+  const [tradeSymbol, setTradeSymbol] = useState("BTC");
+  const [tradeAmount, setTradeAmount] = useState("0.05");
+  const [tradeSide, setTradeSide] = useState<"buy" | "sell">("buy");
   
   const [showSecretField, setShowSecretField] = useState(false);
   const [isEncrypted, setIsEncrypted] = useState(false);
@@ -113,9 +120,9 @@ export default function ApiAutomation() {
   
   const [executionLogs, setExecutionLogs] = useState<string[]>([
     `[SYSTEM] Otentikasi Workspace Terintegrasi. Inisialisasi Terminal API Tanggal: ${new Date().toISOString()}`,
-    "[SECURITY] Standar Enkripsi End-To-End (E2EE) AES-GCM 256-bit Aktif untuk mengunci API Key.",
+    "[SECURITY] Enkripsi End-To-End (E2EE) AES-GCM 256-bit tersedia — belum aktif sampai Anda memasukkan Master PIN dan mengenkripsi kredensial.",
     "[STATUS] Pemantauan Gateway Bursa: Menggunakan Mode Sandboxing Utama.",
-    "[STATUS] Semua rahasia tersimpan di browser terenkripsi penuh client-side."
+    "[STATUS] Kredensial bursa tersimpan plaintext di memori sampai Anda mengekripsi (Master PIN wajib diisi)."
   ]);
 
   // Load E2E encrypted key states from local storage if existing
@@ -125,7 +132,7 @@ export default function ApiAutomation() {
     setStatusDetails("");
     setLastCheckLatency(null);
 
-    const savedCipher = safeLocalStorage.getItem(`zcapital_e2ee_${selectedExchange}_key`);
+    const savedCipher = safeLocalStorage.getItem(`zaytrix_e2ee_${selectedExchange}_key`);
     if (savedCipher) {
       setApiKey("••••••••••••••••••••••••••••••••");
       setApiSecret("••••••••••••••••••••••••••••••••");
@@ -178,7 +185,7 @@ export default function ApiAutomation() {
         ["deriveKey"]
       );
 
-      const salt = encoder.encode(`zcapital_e2ee_api_${selectedExchange}_salt`);
+      const salt = encoder.encode(`zaytrix_e2ee_api_${selectedExchange}_salt`);
       const derivedKey = await window.crypto.subtle.deriveKey(
         {
           name: "PBKDF2",
@@ -214,7 +221,7 @@ export default function ApiAutomation() {
       const cipherText = btoa(binary);
 
       // Save secure payload locally
-      safeLocalStorage.setItem(`zcapital_e2ee_${selectedExchange}_key`, cipherText);
+      safeLocalStorage.setItem(`zaytrix_e2ee_${selectedExchange}_key`, cipherText);
       setIsEncrypted(true);
       
       setExecutionLogs(prev => [
@@ -231,7 +238,7 @@ export default function ApiAutomation() {
 
   // Delete saved keys
   const handleClearSavedKeys = () => {
-    safeLocalStorage.removeItem(`zcapital_e2ee_${selectedExchange}_key`);
+    safeLocalStorage.removeItem(`zaytrix_e2ee_${selectedExchange}_key`);
     setApiKey("");
     setApiSecret("");
     setExchangePassphrase("");
@@ -252,7 +259,7 @@ export default function ApiAutomation() {
     }
     
     // Decrypt on demand
-    const savedCipher = safeLocalStorage.getItem(`zcapital_e2ee_${selectedExchange}_key`);
+    const savedCipher = safeLocalStorage.getItem(`zaytrix_e2ee_${selectedExchange}_key`);
     if (!savedCipher) return null;
     
     try {
@@ -270,7 +277,7 @@ export default function ApiAutomation() {
         ["deriveKey"]
       );
 
-      const salt = encoder.encode(`zcapital_e2ee_api_${selectedExchange}_salt`);
+      const salt = encoder.encode(`zaytrix_e2ee_api_${selectedExchange}_salt`);
       const derivedKey = await window.crypto.subtle.deriveKey(
         {
           name: "PBKDF2",
@@ -365,10 +372,15 @@ export default function ApiAutomation() {
       if (reply.success && !reply.error) {
         setConnectionStatus("connected");
         setStatusDetails(`Sah Terhubung (${latency}ms)`);
+        // Honest balance-source labeling per IMPL-S server contract.
+        const balanceSourceLabel =
+          reply.balanceSource === "live" ? "live" :
+          reply.balanceSource === "estimated" ? "estimasi" :
+          reply.balanceSource === "sandbox" ? "sandbox" : "estimasi";
         setExecutionLogs(prev => [
           ...prev,
           `[STATUS] KONEKSI ONLINE: Berhasil sinkronisasi status bursa ${selectedExchange}.`,
-          `[SYSTEM] Real Order Book Price: $${reply.tickerPrice.toLocaleString()} - Saldo Portofolio Terkait: $${reply.balance.toLocaleString()} USDT.`,
+          `[SYSTEM] Real Order Book Price: $${reply.tickerPrice.toLocaleString()} - Saldo Portofolio Terkait: $${reply.balance.toLocaleString()} USDT [sumber: ${balanceSourceLabel}].`,
           `[SECURITY] Enkripsi end-to-end terverifikasi aman antara browser dan bursa ${selectedExchange} (${reply.hasE2EEncountered ? 'E2EE' : 'Plain-Secured'}).`
         ]);
       } else {
@@ -419,8 +431,9 @@ export default function ApiAutomation() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           exchange: selectedExchange,
-          symbol: "BTC",
-          amount: 0.05,
+          symbol: tradeSymbol.trim() || "BTC",
+          amount: parseFloat(tradeAmount) || 0,
+          side: tradeSide,
           useSandbox,
           apiKey: decryptedKeys?.key || "",
           apiSecret: decryptedKeys?.secret || ""
@@ -429,11 +442,20 @@ export default function ApiAutomation() {
 
       const reply = await res.json();
       if (reply.success) {
+        // Honest simulation labeling: server (IMPL-S) now returns isSimulation + simulationNote.
+        // We no longer claim "Real order terisi secara aman" when no real order was placed.
+        const isSim = reply.isSimulation === true;
+        const note = reply.simulationNote || (isSim
+          ? "SIMULASI — order tidak dieksekusi di bursa sungguhan"
+          : "Order terisi");
         setExecutionLogs(prev => [
           ...prev,
           `[AES] Transmisi pesan order terenkripsi E2E berhasil dilewati bursa.`,
-          `[ORDER] SUCCESS: Real order INSTANT BUY terisi secara aman!`,
-          `[BROKER] Exchange Gateway: Terisi di harga $${reply.executedPrice.toLocaleString()} USD. No Resi: ${reply.txRef}`
+          isSim
+            ? `[ORDER] SIMULASI: ${tradeSide.toUpperCase()} ${tradeAmount} ${tradeSymbol.toUpperCase()} diproses pada harga live (TIDAK dieksekusi di bursa sungguhan).`
+            : `[ORDER] SUCCESS: Real order ${tradeSide.toUpperCase()} ${tradeAmount} ${tradeSymbol.toUpperCase()} terisi secara aman!`,
+          `[BROKER] Exchange Gateway: Harga live $${reply.executedPrice.toLocaleString()} USD. No Resi: ${reply.txRef}`,
+          `[INFO] ${note}`
         ]);
       } else {
         setExecutionLogs(prev => [
@@ -670,12 +692,17 @@ export default function ApiAutomation() {
                   <button
                     type="button"
                     onClick={handleClientSideEncryptKeys}
-                    disabled={encrypting}
-                    className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold p-2.5 rounded-lg text-xs transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-blue-900/10"
+                    disabled={encrypting || masterPin.length === 0}
+                    className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold p-2.5 rounded-lg text-xs transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-blue-900/10 disabled:opacity-45 disabled:cursor-not-allowed"
                   >
                     {encrypting ? <RefreshCw className="w-3.5 h-3.5 animate-spin text-white" /> : <Lock className="w-3.5 h-3.5 text-white" />}
                     <span>Enkripsi Riil & Simpan Kredensial (Client AES)</span>
                   </button>
+                )}
+                {masterPin.length === 0 && !isEncrypted && !useSandbox && (
+                  <p className="text-[9.5px] text-amber-400 font-mono leading-snug">
+                    ⚠ Master PIN wajib diisi sebelum dapat mengenkripsi kredensial. Jangan gunakan PIN default publik.
+                  </p>
                 )}
               </>
             )}
@@ -754,6 +781,54 @@ export default function ApiAutomation() {
             </div>
           </div>
 
+          {/* Trade configuration inputs — previously hardcoded BTC 0.05 (AUDIT-3 high-severity bug). */}
+          <div className="bg-slate-950 p-4 rounded-xl border border-slate-850 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-300 font-sans tracking-wide">Konfigurasi Eksekusi Order</span>
+              <span className="text-[9px] text-amber-400 font-mono">SIMULASI (server tidak menembak order bursa)</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              <div>
+                <label className="block text-[9px] text-slate-400 font-mono uppercase mb-1">SIMBOL</label>
+                <input
+                  type="text"
+                  value={tradeSymbol}
+                  onChange={(e) => setTradeSymbol(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))}
+                  placeholder="BTC"
+                  id="trade-symbol-input"
+                  className="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-[9px] text-slate-400 font-mono uppercase mb-1">JUMLAH</label>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={tradeAmount}
+                  onChange={(e) => setTradeAmount(e.target.value.replace(/[^0-9.]/g, ""))}
+                  placeholder="0.05"
+                  id="trade-amount-input"
+                  className="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-[9px] text-slate-400 font-mono uppercase mb-1">ARAH</label>
+                <select
+                  value={tradeSide}
+                  onChange={(e) => setTradeSide(e.target.value as "buy" | "sell")}
+                  id="trade-side-select"
+                  className="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-blue-500"
+                >
+                  <option value="buy">BUY</option>
+                  <option value="sell">SELL</option>
+                </select>
+              </div>
+            </div>
+            <p className="text-[9.5px] text-slate-500 leading-snug">
+              Catatan: endpoint <span className="font-mono text-slate-400">/api/trade/execute</span> di server hanya mengambil harga live dari bursa — order TIDAK diteruskan ke bursa. Hasil eksekusi selalu berupa simulasi.
+            </p>
+          </div>
+
           <div className="flex flex-col sm:flex-row gap-3 pt-2">
             <button
               onClick={handleTriggerSync}
@@ -813,10 +888,12 @@ export default function ApiAutomation() {
 
           <div className="mt-4 border-t border-slate-850/85 pt-4 flex flex-col sm:flex-row justify-between items-start sm:items-center text-[10px] font-mono text-slate-500 gap-2">
             <div>
-              Status: <span className="text-emerald-400 font-bold">AES-256 E2EE LOCKED</span>
+              Status: <span className={`font-bold ${isEncrypted ? "text-emerald-400" : "text-amber-400"}`}>
+                {isEncrypted ? "AES-256 E2EE LOCKED" : "TIDAK TERENKRIPSI"}
+              </span>
             </div>
             <div>
-              Cyber Protection: <span className="text-emerald-400 font-bold">NON-INTERFERENCE API</span>
+              Trade Mode: <span className="text-amber-400 font-bold">SIMULASI HARGA LIVE</span>
             </div>
           </div>
         </div>

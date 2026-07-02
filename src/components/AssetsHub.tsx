@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Markdown from "react-markdown";
 import { useGlobalStore } from "../store";
 import { 
@@ -106,6 +106,53 @@ export default function AssetsHub({ assets }: AssetsHubProps) {
       }
     ];
   }, [assetA, assetB]);
+
+  // Live stock fundamentals (P/E + dividend yield) — fetched from
+  // /api/stocks/fundamentals/:symbol because the /api/assets payload does
+  // not populate these fields. Yahoo symbol suffix `.JK` is required for
+  // Indonesian listed stocks. Null entries mean "no data / fetch failed".
+  const [fundamentalsCache, setFundamentalsCache] = useState<Record<string, { peRatio: number | null; dividendYield: number | null }>>({});
+
+  useEffect(() => {
+    let active = true;
+    const stockSymbols = assets
+      .filter(a => a.category === "stock")
+      .map(a => a.symbol.toUpperCase());
+
+    if (stockSymbols.length === 0) return;
+
+    const fetchAll = async () => {
+      const results = await Promise.all(
+        stockSymbols.map(async (sym) => {
+          try {
+            const res = await fetch(`/api/stocks/fundamentals/${encodeURIComponent(`${sym}.JK`)}`);
+            if (!res.ok) return { sym, data: { peRatio: null, dividendYield: null } };
+            const json = await res.json();
+            if (!json || json.success !== true) {
+              return { sym, data: { peRatio: null, dividendYield: null } };
+            }
+            return {
+              sym,
+              data: {
+                peRatio: typeof json.peRatio === "number" ? json.peRatio : null,
+                dividendYield: typeof json.dividendYield === "number" ? json.dividendYield : null
+              }
+            };
+          } catch {
+            return { sym, data: { peRatio: null, dividendYield: null } };
+          }
+        })
+      );
+
+      if (!active) return;
+      const newCache: Record<string, { peRatio: number | null; dividendYield: number | null }> = {};
+      results.forEach(r => { newCache[r.sym] = r.data; });
+      setFundamentalsCache(prev => ({ ...prev, ...newCache }));
+    };
+
+    fetchAll();
+    return () => { active = false; };
+  }, [assets]);
 
   // Request comparison report from server proxy using server-side Gemini
   const handleRequestCompareReport = async () => {
@@ -424,7 +471,25 @@ export default function AssetsHub({ assets }: AssetsHubProps) {
                               <div>
                                 <span className="text-[10px] text-slate-500 block">DEV YIELD / PER</span>
                                 <span className="text-xs font-mono text-teal-400">
-                                  {asset.dividendYield}% / {asset.peRatio}x
+                                  {(() => {
+                                    const sym = asset.symbol.toUpperCase();
+                                    const f = fundamentalsCache[sym];
+                                    // Use live fundamentals from /api/stocks/fundamentals when available;
+                                    // otherwise fall back to asset.* (which are usually undefined for stocks).
+                                    const dyRaw = f ? f.dividendYield : (asset.dividendYield ?? null);
+                                    const peRaw = f ? f.peRatio : (asset.peRatio ?? null);
+                                    // dividendYield from Yahoo is a fraction (e.g. 0.0123 = 1.23%); normalize to %.
+                                    const dyPct = dyRaw != null
+                                      ? (dyRaw > 1 ? dyRaw : dyRaw * 100)
+                                      : null;
+                                    const dyStr = dyPct != null && isFinite(dyPct)
+                                      ? `${dyPct.toFixed(2)}%`
+                                      : "N/A";
+                                    const peStr = peRaw != null && isFinite(peRaw)
+                                      ? `${peRaw.toFixed(2)}x`
+                                      : "N/A";
+                                    return `${dyStr} / ${peStr}`;
+                                  })()}
                                 </span>
                               </div>
                             ) : (
@@ -649,7 +714,7 @@ export default function AssetsHub({ assets }: AssetsHubProps) {
                     <Upload className="w-4 h-4 text-emerald-500 animate-pulse" /> Konfigurasi Dokumen
                   </h3>
                   <p className="text-xs text-slate-400 mt-1">
-                    Pilih klasifikasi subjek laporan audit Anda untuk kalibrasi analitik AI Z-CAPITAL.
+                    Pilih klasifikasi subjek laporan audit Anda untuk kalibrasi analitik AI ZAYTRIX.
                   </p>
                 </div>
 

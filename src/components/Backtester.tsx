@@ -286,12 +286,8 @@ export default function Backtester({ assets }: BacktesterProps) {
       }
     });
 
-    // Fallback default just in case no equity change occurred
-    if (maxDrawdown === 0) {
-      maxDrawdown = strategyName === "BUY_HODL" ? 18.5 : strategyName === "RSI_SWING" ? 6.2 : 9.4;
-    } else {
-      maxDrawdown = parseFloat(maxDrawdown.toFixed(2));
-    }
+    // Real drawdown is reported as-is. Do NOT fabricate values when 0.
+    maxDrawdown = parseFloat(maxDrawdown.toFixed(2));
 
     return {
       roi,
@@ -548,8 +544,8 @@ export default function Backtester({ assets }: BacktesterProps) {
                 <div className="bg-[#0F172A] border border-slate-800 p-4 rounded-xl">
                   <span className="text-[10px] text-slate-400 uppercase font-semibold font-mono block">WIN RATE</span>
                   <div className="text-xl font-bold text-blue-400 mt-1">
-                    {backtestResult.winRate !== undefined || backtestResult.totalTrades > 0 ? (
-                      `${backtestResult.winRate?.toFixed(1) || ((backtestResult.winningTrades / Math.max(1, backtestResult.totalTrades / 2)) * 100).toFixed(1)}%`
+                    {backtestResult.winRate !== undefined && backtestResult.totalTrades > 0 ? (
+                      `${backtestResult.winRate.toFixed(1)}%`
                     ) : "N/A"}
                   </div>
                 </div>

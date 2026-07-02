@@ -132,30 +132,71 @@ export default function AiSignals({ assets }: AiSignalsProps) {
     setSimulating(true);
     setSimSuccessMsg(null);
     try {
+      // Resolve the live asset price for the currently selected symbol so the
+      // manually-simulated signal carries a realistic entryPrice. Falls back
+      // to the most recent signal history entry price if no live asset match.
+      const liveAsset = cryptoAssets.find(a => a.symbol === selectedSymbol);
+      const fallbackFromHistory = historyList.find(s => s.symbol === selectedSymbol);
+      const basePrice =
+        (liveAsset && typeof liveAsset.price === "number" && liveAsset.price > 0)
+          ? liveAsset.price
+          : (fallbackFromHistory ? fallbackFromHistory.entryPrice : 0);
+
+      if (!(basePrice > 0)) {
+        setSimSuccessMsg(`Gagal: tidak ada harga live tersedia untuk ${selectedSymbol}. Pilih aset lain atau tunggu data live tersedia.`);
+        setTimeout(() => setSimSuccessMsg(null), 6000);
+        return;
+      }
+
+      // Compute sensible TP/SL levels based on the chosen direction:
+      // - BUY-side: TP above entry, SL below entry.
+      // - SELL-side: TP below entry, SL above entry.
+      // - HOLD: symmetric tight band (informational only).
+      const isBuy = simRecommendation === "STRONG BUY" || simRecommendation === "BUY";
+      const isSell = simRecommendation === "STRONG SELL" || simRecommendation === "SELL";
+      const tpMultiplier = isBuy ? 1.05 : isSell ? 0.95 : 1.02;
+      const slMultiplier = isBuy ? 0.97 : isSell ? 1.03 : 0.98;
+
+      const payload = {
+        symbol: selectedSymbol,
+        direction: simRecommendation, // server field is `direction`, NOT `recommendation`
+        entryPrice: basePrice,
+        tpPrice: parseFloat((basePrice * tpMultiplier).toFixed(2)),
+        slPrice: parseFloat((basePrice * slMultiplier).toFixed(2)),
+        timeframe: "intraday" as "intraday" | "daily" | "weekly",
+        notes: `Simulasi manual (confidence target ${Number(simConfidence)}%)`
+      };
+
       const res = await fetch("/api/trading-signals/generate-manual", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({
-          symbol: selectedSymbol,
-          recommendation: simRecommendation,
-          confidence: Number(simConfidence)
-        })
+        body: JSON.stringify(payload)
       });
       if (res.ok) {
-        const payload = await res.json();
-        setSimSuccessMsg(`Sinyal ${payload.signal.recommendation} baru untuk ${payload.signal.symbol} berhasil disimulasikan dan beredar secara live!`);
+        const data = await res.json();
+        setSimSuccessMsg(`Sinyal ${data.signal.recommendation} baru untuk ${data.signal.symbol} berhasil disimulasikan dan beredar secara live!`);
         fetchHistoryAndMetrics();
         // Reset to first page so the freshly generated signal shows at the top immediately
         setCurrentPage(1);
         setTimeout(() => setSimSuccessMsg(null), 4000);
       } else {
-        const errorData = await res.json();
-        console.log("Simulasi sinyal gagal diperkenalkan:", errorData.error);
+        let serverMsg = "Respons server tidak valid.";
+        try {
+          const errorData = await res.json();
+          serverMsg = errorData?.error || serverMsg;
+        } catch {
+          /* keep default message */
+        }
+        // Surface failure to the user instead of silently console.log-ing.
+        setSimSuccessMsg(`Gagal mensimulasikan sinyal: ${serverMsg}`);
+        setTimeout(() => setSimSuccessMsg(null), 6000);
       }
     } catch (err: any) {
-      console.error("Kesalahan koneksi mengirim stimulasi simulasi:", err.message || err);
+      const msg = err?.message || String(err) || "Kesalahan jaringan tidak diketahui.";
+      setSimSuccessMsg(`Gagal koneksi ke server simulasi sinyal: ${msg}`);
+      setTimeout(() => setSimSuccessMsg(null), 6000);
     } finally {
       setSimulating(false);
     }
@@ -832,13 +873,13 @@ export default function AiSignals({ assets }: AiSignalsProps) {
           <div className="bg-slate-950/60 border border-slate-850 p-4 rounded-xl flex flex-col justify-between">
             <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block mb-1">Tingkat Akurasi (Win-Rate)</span>
             <div className="my-2 flex items-baseline gap-1.5">
-              <span className="text-3xl font-mono font-black text-emerald-400">{metrics?.winRate ?? 75.0}%</span>
+              <span className="text-3xl font-mono font-black text-emerald-400">{metrics?.winRate != null ? `${metrics.winRate}%` : "—"}</span>
               <span className="text-[10px] text-slate-500 font-mono">CFA Target &gt;70%</span>
             </div>
             <div className="w-full bg-slate-900 h-1.5 rounded-full overflow-hidden">
               <div 
                 className="bg-emerald-500 h-full rounded-full transition-all duration-1000" 
-                style={{ width: `${metrics?.winRate ?? 75.0}%` }}
+                style={{ width: `${metrics?.winRate ?? 0}%` }}
               />
             </div>
           </div>
@@ -847,7 +888,7 @@ export default function AiSignals({ assets }: AiSignalsProps) {
           <div className="bg-slate-950/60 border border-slate-850 p-4 rounded-xl flex flex-col justify-between">
             <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block mb-1">Target TP Terpenuhi</span>
             <div className="my-2 flex items-baseline gap-1.5">
-              <span className="text-3xl font-mono font-black text-slate-100">{metrics?.totalTp ?? 6}</span>
+              <span className="text-3xl font-mono font-black text-slate-100">{metrics?.totalTp ?? "—"}</span>
               <span className="text-xs text-emerald-500 font-semibold">Sinyal Profit</span>
             </div>
             <p className="text-[9px] text-slate-500 font-mono leading-none">Mencapai Target Take Profit Utama</p>
@@ -857,7 +898,7 @@ export default function AiSignals({ assets }: AiSignalsProps) {
           <div className="bg-slate-950/60 border border-slate-850 p-4 rounded-xl flex flex-col justify-between">
             <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block mb-1">Stop Loss (SL) Terpicu</span>
             <div className="my-2 flex items-baseline gap-1.5">
-              <span className="text-3xl font-mono font-black text-rose-400">{metrics?.totalSl ?? 2}</span>
+              <span className="text-3xl font-mono font-black text-rose-400">{metrics?.totalSl ?? "—"}</span>
               <span className="text-xs text-rose-500 font-semibold">Batas Proteksi</span>
             </div>
             <p className="text-[9px] text-slate-500 font-mono leading-none">Mengaktifkan Fitur Batas Risiko Defensif</p>
@@ -867,7 +908,7 @@ export default function AiSignals({ assets }: AiSignalsProps) {
           <div className="bg-slate-950/60 border border-slate-850 p-4 rounded-xl flex flex-col justify-between">
             <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block mb-1">Sinyal Berjalan (Live)</span>
             <div className="my-2 flex items-baseline gap-1.5">
-              <span className="text-3xl font-mono font-black text-amber-500 animate-pulse">{metrics?.totalPending ?? 2}</span>
+              <span className="text-3xl font-mono font-black text-amber-500 animate-pulse">{metrics?.totalPending ?? "—"}</span>
               <span className="text-xs text-amber-500 font-semibold">Pending</span>
             </div>
             <p className="text-[9px] text-slate-500 font-mono leading-none">Menunggu Sentuhan Batas TP / SL</p>
@@ -889,29 +930,29 @@ export default function AiSignals({ assets }: AiSignalsProps) {
               <div className="flex justify-between items-center border-b border-slate-800/55 pb-2">
                 <span className="text-xs font-bold text-slate-200">⏱️ Intraday (Menit - Jam)</span>
                 <span className="text-xs font-mono font-bold text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
-                  WR {metrics?.timeframeRecap?.intraday?.winRate ?? 80}%
+                  WR {metrics?.timeframeRecap?.intraday?.winRate != null ? `${metrics.timeframeRecap.intraday.winRate}%` : "—"}
                 </span>
               </div>
               <div className="grid grid-cols-4 gap-2 text-center text-[10px] font-mono font-medium">
                 <div className="bg-slate-900/40 p-1.5 rounded">
                   <div className="text-slate-500 font-sans">Total</div>
-                  <div className="text-slate-300 font-bold">{metrics?.timeframeRecap?.intraday?.total ?? 4}</div>
+                  <div className="text-slate-300 font-bold">{metrics?.timeframeRecap?.intraday?.total ?? "—"}</div>
                 </div>
                 <div className="bg-emerald-950/20 p-1.5 rounded text-emerald-400">
                   <div className="text-slate-500 font-sans">TP Hit</div>
-                  <div className="text-emerald-400 font-bold">{metrics?.timeframeRecap?.intraday?.tp ?? 2}</div>
+                  <div className="text-emerald-400 font-bold">{metrics?.timeframeRecap?.intraday?.tp ?? "—"}</div>
                 </div>
                 <div className="bg-rose-950/20 p-1.5 rounded text-rose-400">
                   <div className="text-slate-500 font-sans">SL Hit</div>
-                  <div className="text-rose-400 font-bold">{metrics?.timeframeRecap?.intraday?.sl ?? 0}</div>
+                  <div className="text-rose-400 font-bold">{metrics?.timeframeRecap?.intraday?.sl ?? "—"}</div>
                 </div>
                 <div className="bg-amber-950/20 p-1.5 rounded text-amber-500">
                   <div className="text-slate-500 font-sans">Aktif</div>
-                  <div className="text-amber-500 font-bold">{metrics?.timeframeRecap?.intraday?.pending ?? 2}</div>
+                  <div className="text-amber-500 font-bold">{metrics?.timeframeRecap?.intraday?.pending ?? "—"}</div>
                 </div>
               </div>
               <div className="w-full bg-slate-900 h-1 rounded-full overflow-hidden">
-                <div className="bg-emerald-500 h-full" style={{ width: `${metrics?.timeframeRecap?.intraday?.winRate ?? 80}%` }} />
+                <div className="bg-emerald-500 h-full" style={{ width: `${metrics?.timeframeRecap?.intraday?.winRate ?? 0}%` }} />
               </div>
               <p className="text-[10px] text-slate-500 leading-tight">Ideal untuk strategi Scalping cepat berdaya volatilitas tinggi harian bursa.</p>
             </div>
@@ -921,29 +962,29 @@ export default function AiSignals({ assets }: AiSignalsProps) {
               <div className="flex justify-between items-center border-b border-slate-800/55 pb-2">
                 <span className="text-xs font-bold text-slate-200">📅 Harian (Swing 1-3 Hari)</span>
                 <span className="text-xs font-mono font-bold text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
-                  WR {metrics?.timeframeRecap?.daily?.winRate ?? 75}%
+                  WR {metrics?.timeframeRecap?.daily?.winRate != null ? `${metrics.timeframeRecap.daily.winRate}%` : "—"}
                 </span>
               </div>
               <div className="grid grid-cols-4 gap-2 text-center text-[10px] font-mono font-medium">
                 <div className="bg-slate-900/40 p-1.5 rounded">
                   <div className="text-slate-500 font-sans">Total</div>
-                  <div className="text-slate-300 font-bold">{metrics?.timeframeRecap?.daily?.total ?? 3}</div>
+                  <div className="text-slate-300 font-bold">{metrics?.timeframeRecap?.daily?.total ?? "—"}</div>
                 </div>
                 <div className="bg-emerald-950/20 p-1.5 rounded text-emerald-400">
                   <div className="text-slate-500 font-sans">TP Hit</div>
-                  <div className="text-emerald-400 font-bold">{metrics?.timeframeRecap?.daily?.tp ?? 2}</div>
+                  <div className="text-emerald-400 font-bold">{metrics?.timeframeRecap?.daily?.tp ?? "—"}</div>
                 </div>
                 <div className="bg-rose-950/20 p-1.5 rounded text-rose-400">
                   <div className="text-slate-500 font-sans">SL Hit</div>
-                  <div className="text-rose-400 font-bold">{metrics?.timeframeRecap?.daily?.sl ?? 0}</div>
+                  <div className="text-rose-400 font-bold">{metrics?.timeframeRecap?.daily?.sl ?? "—"}</div>
                 </div>
                 <div className="bg-amber-950/20 p-1.5 rounded text-amber-500">
                   <div className="text-slate-500 font-sans">Aktif</div>
-                  <div className="text-amber-500 font-bold">{metrics?.timeframeRecap?.daily?.pending ?? 1}</div>
+                  <div className="text-amber-500 font-bold">{metrics?.timeframeRecap?.daily?.pending ?? "—"}</div>
                 </div>
               </div>
               <div className="w-full bg-slate-900 h-1 rounded-full overflow-hidden">
-                <div className="bg-emerald-500 h-full" style={{ width: `${metrics?.timeframeRecap?.daily?.winRate ?? 75}%` }} />
+                <div className="bg-emerald-500 h-full" style={{ width: `${metrics?.timeframeRecap?.daily?.winRate ?? 0}%` }} />
               </div>
               <p className="text-[10px] text-slate-500 leading-tight">Strategi Swing momentum mengejar likuiditas onchain dari paus jangka pendek.</p>
             </div>
@@ -953,29 +994,29 @@ export default function AiSignals({ assets }: AiSignalsProps) {
               <div className="flex justify-between items-center border-b border-slate-800/55 pb-2">
                 <span className="text-xs font-bold text-slate-200">🛡️ Mingguan (Trend Ayunan)</span>
                 <span className="text-xs font-mono font-bold text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
-                  WR {metrics?.timeframeRecap?.weekly?.winRate ?? 70}%
+                  WR {metrics?.timeframeRecap?.weekly?.winRate != null ? `${metrics.timeframeRecap.weekly.winRate}%` : "—"}
                 </span>
               </div>
               <div className="grid grid-cols-4 gap-2 text-center text-[10px] font-mono font-medium">
                 <div className="bg-slate-900/40 p-1.5 rounded">
                   <div className="text-slate-500 font-sans">Total</div>
-                  <div className="text-slate-300 font-bold">{metrics?.timeframeRecap?.weekly?.total ?? 3}</div>
+                  <div className="text-slate-300 font-bold">{metrics?.timeframeRecap?.weekly?.total ?? "—"}</div>
                 </div>
                 <div className="bg-emerald-950/20 p-1.5 rounded text-emerald-400">
                   <div className="text-slate-500 font-sans">TP Hit</div>
-                  <div className="text-emerald-400 font-bold">{metrics?.timeframeRecap?.weekly?.tp ?? 2}</div>
+                  <div className="text-emerald-400 font-bold">{metrics?.timeframeRecap?.weekly?.tp ?? "—"}</div>
                 </div>
                 <div className="bg-rose-950/20 p-1.5 rounded text-rose-400">
                   <div className="text-slate-500 font-sans">SL Hit</div>
-                  <div className="text-rose-400 font-bold">{metrics?.timeframeRecap?.weekly?.sl ?? 2}</div>
+                  <div className="text-rose-400 font-bold">{metrics?.timeframeRecap?.weekly?.sl ?? "—"}</div>
                 </div>
                 <div className="bg-amber-950/20 p-1.5 rounded text-amber-500">
                   <div className="text-slate-500 font-sans">Aktif</div>
-                  <div className="text-amber-500 font-bold">{metrics?.timeframeRecap?.weekly?.pending ?? 0}</div>
+                  <div className="text-amber-500 font-bold">{metrics?.timeframeRecap?.weekly?.pending ?? "—"}</div>
                 </div>
               </div>
               <div className="w-full bg-slate-900 h-1 rounded-full overflow-hidden">
-                <div className="bg-emerald-500 h-full" style={{ width: `${metrics?.timeframeRecap?.weekly?.winRate ?? 70}%` }} />
+                <div className="bg-emerald-500 h-full" style={{ width: `${metrics?.timeframeRecap?.weekly?.winRate ?? 0}%` }} />
               </div>
               <p className="text-[10px] text-slate-500 leading-tight">Kompatibel untuk mengawal siklus akumulasi fundamental makro investor bursa.</p>
             </div>

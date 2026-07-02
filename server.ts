@@ -9,11 +9,37 @@ import { createServer as createViteServer } from "vite";
 import { fetchLiveOnChainDataModular, isLargeTransaction, isValidOnChainTransaction } from "./onchainDataHelper";
 import WebSocket from "ws";
 
+// SEC-BACKEND: security + auth + audit + API key storage.
+import { applySecurityMiddleware, sanitizeError, authLimiter, apiNotFound } from "./src/server/security";
+import { authRouter, requireAuth, optionalAuth } from "./src/server/auth";
+import { logAudit } from "./src/server/audit";
+import { apiKeysRouter } from "./src/server/apiKeys";
+// SEC2-INFRA: monitoring (Sentry)
+import { initMonitoring, captureError } from "./src/server/monitoring";
+// SEC3: WAF + data retention
+import { wafMiddleware, strictBotCheck } from "./src/server/waf";
+import { startDataRetentionJob, exportUserData, deleteAllUserData } from "./src/server/dataRetention";
+
 dotenv.config();
+
+// SEC2-INFRA: initialize Sentry/error monitoring early
+initMonitoring();
+
+// SEC3: start data retention background job (purges old audit logs, expired sessions/tokens)
+startDataRetentionJob();
 
 const app = express();
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
+
+// SEC-BACKEND: install helmet + cors + cookie-parser + general rate limiter.
+// This MUST come after express.json/urlencoded so the body is parsed before
+// any auth handler runs, but BEFORE any route is mounted.
+applySecurityMiddleware(app);
+
+// SEC3: WAF middleware — blocks SQL injection, XSS, path traversal, attack tools.
+// Runs AFTER security middleware (helmet/cors/rate-limit) but BEFORE routes.
+app.use("/api", wafMiddleware);
 
 const PORT = 3000;
 
@@ -587,7 +613,7 @@ app.post("/api/send-alert", async (req, res) => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ 
             chat_id: finalChatId, 
-            text: `🤖 [Z-CAPITAL BOT]\n${cleanMsg}` 
+            text: `🤖 [ZAYTRIX BOT]\n${cleanMsg}` 
           })
         });
 
@@ -626,7 +652,7 @@ app.post("/api/send-alert", async (req, res) => {
         const response = await fetch(rawUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ content: `🔔 **[Z-CAPITAL ALARM]** \n${messageText}` })
+          body: JSON.stringify({ content: `🔔 **[ZAYTRIX ALARM]** \n${messageText}` })
         });
         if (response.ok) {
           results.discord = { success: true };
@@ -2187,7 +2213,7 @@ async function scrapeWebsiteContent(url: string): Promise<string> {
     return cleaned || "[Konten tekstual kosong]";
   } catch (error: any) {
     console.error("Gagal melakukan scrap untuk URL:", url, error.message);
-    return `[Sistem pembatasan eksternal / keamanan mencegah pengunduhan naskah secara dinamis untuk domain ini. Mohon analis mengkaji secara komprehensif berdasarkan basis data keahlian Z-CAPITAL terkait situs resmi ${url}.]`;
+    return `[Sistem pembatasan eksternal / keamanan mencegah pengunduhan naskah secara dinamis untuk domain ini. Mohon analis mengkaji secara komprehensif berdasarkan basis data keahlian ZAYTRIX terkait situs resmi ${url}.]`;
   }
 }
 
@@ -2442,10 +2468,10 @@ function updatePendingSignals() {
         sig.status = "STOP LOSS (SL)";
       }
     } else {
-      // HOLD target criteria
-      if (Math.random() > 0.95) { // Slow natural random closing
-        sig.status = Math.random() > 0.5 ? "TARGET HIT (TP)" : "STOP LOSS (SL)";
-      }
+      // HOLD signals remain ACTIVE/PENDING until manually closed by the user.
+      // Previously this branch randomly closed HOLD signals which fabricated
+      // fake win/loss outcomes. HOLD signals intentionally have no TP/SL hit
+      // criteria — they wait for the user to take action.
     }
   });
 }
@@ -2513,12 +2539,22 @@ interface SavedNotificationConfig {
   telegramEnabled: boolean;
   telegramBotToken: string;
   telegramChatId: string;
+  discordEnabled: boolean;
+  discordWebhookUrl: string;
+  whatsappEnabled: boolean;
+  whatsappWebhookUrl: string;
+  whatsappPhoneNumber: string;
 }
 
 let activeNotificationConfig: SavedNotificationConfig = {
   telegramEnabled: false,
   telegramBotToken: "",
-  telegramChatId: ""
+  telegramChatId: "",
+  discordEnabled: false,
+  discordWebhookUrl: "",
+  whatsappEnabled: false,
+  whatsappWebhookUrl: "",
+  whatsappPhoneNumber: ""
 };
 
 const CONFIG_FILE_PATH = path.join(process.cwd(), "notifications-config.json");
@@ -2562,7 +2598,7 @@ async function sendTelegramAlert(botToken: string, chatId: string, message: stri
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ 
         chat_id: finalChatId, 
-        text: `🤖 [Z-CAPITAL BOT]\n${cleanMsg}` 
+        text: `🤖 [ZAYTRIX BOT]\n${cleanMsg}` 
       })
     });
 
@@ -3252,11 +3288,25 @@ setInterval(() => {
 // Endpoint to synchronize notification settings from front-end
 app.post("/api/settings/notifications", (req, res) => {
   try {
-    const { telegramEnabled, telegramBotToken, telegramChatId } = req.body;
+    const {
+      telegramEnabled,
+      telegramBotToken,
+      telegramChatId,
+      discordEnabled,
+      discordWebhookUrl,
+      whatsappEnabled,
+      whatsappWebhookUrl,
+      whatsappPhoneNumber
+    } = req.body;
     activeNotificationConfig = {
       telegramEnabled: !!telegramEnabled,
       telegramBotToken: telegramBotToken || "",
-      telegramChatId: telegramChatId || ""
+      telegramChatId: telegramChatId || "",
+      discordEnabled: !!discordEnabled,
+      discordWebhookUrl: discordWebhookUrl || "",
+      whatsappEnabled: !!whatsappEnabled,
+      whatsappWebhookUrl: whatsappWebhookUrl || "",
+      whatsappPhoneNumber: whatsappPhoneNumber || ""
     };
     try {
       fs.writeFileSync(CONFIG_FILE_PATH, JSON.stringify(activeNotificationConfig, null, 2), "utf-8");
@@ -3874,225 +3924,121 @@ setInterval(() => {
   });
 }, 600000); // every 10 minutes
 
-// 1. SECURE EXCHANGE API GATEWAY CONNECTION SINK
-app.post("/api/trade/connect", async (req, res) => {
-  const { exchange, useSandbox, apiKey, apiSecret, passphrase, hasE2E } = req.body;
-  
+// ===========================================================================
+// SEC-BACKEND: protect sensitive trade endpoints with requireAuth.
+// Both /api/trade/connect and /api/trade/execute accept real exchange API
+// secrets and should NOT be callable by anonymous clients. The auth middleware
+// reads the `zaytrix_session` cookie JWT and 401s if invalid/missing.
+// ===========================================================================
+app.use("/api/trade", requireAuth);
+
+// ===========================================================================
+// SEC2-DATA: /api/trade/connect and /api/trade/execute are now handled by the
+// tradeExecutionRouter (mounted at /api/trade) which supports REAL signed order
+// placement to Binance/Bybit/KuCoin when valid API keys are stored, with
+// simulation fallback when no keys or sandbox mode. The old simulation-only
+// routes below were removed to avoid route shadowing (Express runs the first
+// matching handler, and these were defined before the new router mount).
+// ===========================================================================
+
+
+// ---------------------------------------------------------------------------
+// Live BTC on-chain data cache (refreshed in the background).
+// We keep this as a module-level cache because getOnChainMetrics() is invoked
+// synchronously inside the trading-signals prompt builder; we cannot await a
+// network fetch there. The background worker refreshes the values every 60s.
+// ---------------------------------------------------------------------------
+let liveBtcMempoolFeeSatVb: number | null = null; // halfHourFee from mempool.space (sat/vB)
+let liveBtcBlockHeight: number | null = null;     // block count from blockchain.info
+let liveBtcMempoolLastUpdated = 0;
+
+async function refreshLiveBtcOnChainCache() {
+  // Try to refresh both mempool fee and block height. Failures are caught and
+  // simply leave the previous cached value in place (or null on first run).
   try {
-    // Dynamic connectivity routing: query official exchange Spot price feeds in real-time
-    let targetUrl = "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT";
-    if (exchange === "KuCoin") {
-      targetUrl = "https://api.kucoin.com/api/v1/market/orderbook/level1?symbol=BTC-USDT";
-    } else if (exchange === "Bybit") {
-      targetUrl = "https://api.bybit.com/v5/market/tickers?category=spot&symbol=BTCUSDT";
-    } else if (exchange === "BingX") {
-      targetUrl = "https://open-api.bingx.com/openApi/market/v2/getTicker?symbol=BTC-USDT";
-    } else if (exchange === "MEXC") {
-      targetUrl = "https://api.mexc.com/api/v3/ticker/price?symbol=BTCUSDT";
-    }
-
-    let tickerPrice = 68412.50;
-    try {
-      const response = await fetch(targetUrl, { 
-        headers: { 
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" 
-        } 
-      });
-      if (response.ok) {
-        const data = await response.json() as any;
-        if (exchange === "KuCoin") {
-          tickerPrice = parseFloat(data?.data?.price) || 68412.50;
-        } else if (exchange === "Bybit") {
-          tickerPrice = parseFloat(data?.result?.list?.[0]?.lastPrice) || 68412.50;
-        } else if (exchange === "BingX") {
-          tickerPrice = parseFloat(data?.data?.lastPrice) || 68412.50;
-        } else {
-          tickerPrice = parseFloat(data?.price) || 68412.50;
-        }
-      }
-    } catch (e: any) {
-      console.log(`[Exchange public API check info] ${exchange}: ${e.message}`);
-    }
-
-    // Defensive Cryptographic key parsing & real live HMAC signature validation
-    if (!useSandbox && apiKey && apiSecret) {
-      // Sanity checks to ensure no shell injections or credential leaks are allowed
-      const sanitizedKey = String(apiKey).trim();
-      const sanitizedSecret = String(apiSecret).trim();
-      
-      if (sanitizedKey.length < 8 || sanitizedSecret.length < 8) {
-        return res.status(400).json({
-          success: false,
-          error: "Konfigurasi gagal: API Key atau Secret Key bursa terlalu pendek. Periksa kembali kredensial Anda!"
-        });
-      }
-
-      const timestamp = Date.now().toString();
-      
-      // Perform genuine SHA-256 HMAC digest creation to match enterprise security logs
-      if (exchange === "Binance" && !sanitizedKey.includes("MOCK") && !sanitizedKey.startsWith("••••")) {
-        try {
-          const payloadString = `recvWindow=5000&timestamp=${timestamp}`;
-          const generatedSignature = crypto
-            .createHmac("sha256", sanitizedSecret)
-            .update(payloadString)
-            .digest("hex");
-
-          const authTestUrl = `https://api.binance.com/api/v3/account?${payloadString}&signature=${generatedSignature}`;
-          const authResponse = await fetch(authTestUrl, {
-            method: "GET",
-            headers: {
-              "X-MBX-APIKEY": sanitizedKey,
-              "Content-Type": "application/json"
-            }
-          });
-          const authData = await authResponse.json() as any;
-          if (authResponse.status === 401 || authData?.code === -2015 || authData?.msg?.includes("Invalid")) {
-            return res.json({
-              success: false,
-              error: `Otentikasi Binance Gagal: Kunci API bursa Binance yang anda berikan tidak valid hmac signature-nya. (${authData.msg || "Unauthorized"})`
-            });
-          }
-        } catch (err: any) {
-          console.log("Binance auth network handled gently", err.message);
-        }
-      } else if (exchange === "Bybit" && !sanitizedKey.includes("MOCK") && !sanitizedKey.startsWith("••••")) {
-        try {
-          const bybitSignature = crypto
-            .createHmac("sha256", sanitizedSecret)
-            .update(timestamp + sanitizedKey + "5000" + "accountType=UNIFIED")
-            .digest("hex");
-          
-          const authResponse = await fetch("https://api.bybit.com/v5/account/wallet-balance?accountType=UNIFIED", {
-            method: "GET",
-            headers: {
-              "X-BAPI-API-KEY": sanitizedKey,
-              "X-BAPI-TIMESTAMP": timestamp,
-              "X-BAPI-RECV-WINDOW": "5000",
-              "X-BAPI-SIGN": bybitSignature
-            }
-          });
-          const authData = await authResponse.json() as any;
-          if (authResponse.status === 401 || authData?.retCode !== 0) {
-            return res.json({
-              success: false,
-              error: `Otentikasi Bybit Gagal: Kunci atau Signature API Bybit tidak sah. (${authData?.retMsg || "Code " + authData?.retCode})`
-            });
-          }
-        } catch (err: any) {
-          console.log("Bybit auth network handled gently", err.message);
-        }
-      } else if (exchange === "KuCoin" && !sanitizedKey.includes("MOCK") && !sanitizedKey.startsWith("••••")) {
-        try {
-          // KuCoin requires passphrase signature check
-          const endpoint = "/api/v1/accounts";
-          const strToSign = timestamp + "GET" + endpoint;
-          const generatedSignature = crypto
-            .createHmac("sha256", sanitizedSecret)
-            .update(strToSign)
-            .digest("base64");
-
-          const authResponse = await fetch(`https://api.kucoin.com${endpoint}`, {
-            method: "GET",
-            headers: {
-              "KC-API-KEY": sanitizedKey,
-              "KC-API-SIGN": generatedSignature,
-              "KC-API-TIMESTAMP": timestamp,
-              "KC-API-PASSPHRASE": passphrase || "",
-              "KC-API-KEY-VERSION": "2"
-            }
-          });
-          const authData = await authResponse.json() as any;
-          if (authResponse.status === 401 || authData?.code !== "200000") {
-            return res.json({
-              success: false,
-              error: `Otentikasi KuCoin Gagal: ${authData?.msg || "Signature atau passphrase salah"}`
-            });
-          }
-        } catch (err: any) {
-          console.log("KuCoin auth network handled", err.message);
-        }
+    const feeRes = await fetchWithTimeout(
+      "https://mempool.space/api/v1/fees/recommended",
+      { headers: { "Accept": "application/json" } },
+      5000
+    );
+    if (feeRes.ok) {
+      const feeData = await feeRes.json() as any;
+      const halfHour = parseFloat(feeData?.halfHourFee);
+      if (isFinite(halfHour) && halfHour > 0) {
+        liveBtcMempoolFeeSatVb = Math.round(halfHour);
       }
     }
-
-    const baseBalance = useSandbox ? 15000.00 : 4250.75 + (Math.random() * 5);
-
-    return res.json({
-      success: true,
-      exchange,
-      useSandbox,
-      tickerPrice,
-      balance: parseFloat(baseBalance.toFixed(2)),
-      hasE2EEncountered: !!hasE2E,
-      timestamp: new Date().toISOString()
-    });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    // Network/parse failure — keep previous cached value (or null).
+    console.log("[BTC On-Chain Cache] mempool.space fetch handled:", err.message);
   }
-});
-
-// 2. SECURE EXCHANGE API TRANSACTION ORDER EXECUTOR
-app.post("/api/trade/execute", async (req, res) => {
-  const { exchange, symbol, amount, useSandbox, apiKey, apiSecret } = req.body;
 
   try {
-    let fetchedPrice = 68450.00;
-    try {
-      const livePriceRes = await fetch("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT");
-      if (livePriceRes.ok) {
-        const livePriceObj = await livePriceRes.json() as any;
-        fetchedPrice = parseFloat(livePriceObj.price) || 68450.00;
+    const bhRes = await fetchWithTimeout(
+      "https://blockchain.info/q/getblockcount",
+      { headers: { "Accept": "text/plain" } },
+      5000
+    );
+    if (bhRes.ok) {
+      const text = (await bhRes.text()).trim();
+      const height = parseInt(text, 10);
+      if (isFinite(height) && height > 0) {
+        liveBtcBlockHeight = height;
       }
-    } catch (e) {
-      console.log("Execution route live valuation price handled.");
     }
-
-    // Encrypt-Decrypt log safety check. Ensure no raw secrets are logged to secure trails
-    if (!useSandbox && apiKey && apiSecret) {
-      const secureTruncKey = String(apiKey).substring(0, 8) + "••••";
-      console.log(`[E2EE SECURE BROKER ROUTE] Menembakkan order buy BTC pada bursa ${exchange} menggunakan apiKey=${secureTruncKey}`);
-    }
-
-    // Include subtle slippage deviation simulating authentic execution broker matching
-    const executedPrice = parseFloat((fetchedPrice * (1 + (Math.random() * 0.0002 - 0.0001))).toFixed(2));
-    const randomTxId = "TX-" + exchange.toUpperCase().substring(0, 3) + "-" + Math.floor(100000 + Math.random() * 900000);
-
-    return res.json({
-      success: true,
-      exchange,
-      symbol,
-      amount,
-      executedPrice,
-      txRef: randomTxId,
-      timestamp: new Date().toISOString()
-    });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    console.log("[BTC On-Chain Cache] blockchain.info fetch handled:", err.message);
   }
-});
 
-// Helper function to synthesize/scrapes real-time on-chain blockchain metrics data
+  liveBtcMempoolLastUpdated = Date.now();
+}
+
+// Kick off initial fetch and refresh every 60 seconds.
+refreshLiveBtcOnChainCache().catch(() => { /* swallow on boot */ });
+setInterval(() => {
+  refreshLiveBtcOnChainCache().catch(() => { /* background refresh */ });
+}, 60000);
+
+// Helper that produces deterministic on-chain metric estimates.
+// NOTE: The values returned here are ESTIMATES derived from a deterministic
+// model (symbol + UTC date seeded). They are NOT live RPC-scraped data, with
+// the single exception of BTC's `averageGasFee` which is sourced live from
+// mempool.space when the background cache has a fresh value. Each return
+// object includes an `isEstimated` flag so downstream consumers (UI/AI) can
+// label the data honestly.
 function getOnChainMetrics(symbol: string) {
   const sym = symbol.toUpperCase();
   const seed = sym.charCodeAt(0) + (sym.charCodeAt(1) || 0);
   
-  // Custom deterministic randomness based on symbol & current date to simulate dynamic true-live scraping
+  // Custom deterministic randomness based on symbol & current date to produce stable per-day estimates
   const dateSeed = new Date().getUTCDate();
   const rand = (offset: number) => {
     const x = Math.sin(seed + dateSeed * 13 + offset) * 10000;
     return x - Math.floor(x);
   };
 
+  const ESTIMATED_SOURCE = "Estimated from public market data (deterministic model). Live on-chain RPC integration pending.";
+
   if (sym === "BTC") {
+    // BTC averageGasFee is sourced LIVE from mempool.space when available;
+    // otherwise we fall back to a deterministic estimate and flag it.
+    const hasLiveFee = liveBtcMempoolFeeSatVb !== null && liveBtcMempoolFeeSatVb > 0;
+    const gasFeeValue = hasLiveFee
+      ? `${liveBtcMempoolFeeSatVb} Sat/vB`
+      : `${Math.round(20 + rand(5) * 45)} Sat/vB (est.)`;
+    const scrapedSource = hasLiveFee
+      ? `Live mempool fee from mempool.space (halfHourFee). Block height: ${liveBtcBlockHeight ?? "n/a"} from blockchain.info. Other metrics: ${ESTIMATED_SOURCE}`
+      : ESTIMATED_SOURCE;
     return {
       activeAddresses: Math.round(920000 + rand(1) * 150000),
-      exchangeNetflow24h: parseFloat((-5200 + rand(2) * 4000).toFixed(2)), // Net outflow: typical bullish BTC trend
+      exchangeNetflow24h: parseFloat((-5200 + rand(2) * 4000).toFixed(2)),
       smartMoneyAction: rand(3) > 0.4 ? "Accumulation" : "Neutral",
       onchainHealthScore: Math.round(78 + rand(4) * 18),
-      averageGasFee: `${Math.round(20 + rand(5) * 45)} Sat/vB`,
+      averageGasFee: gasFeeValue,
       whaleTransactions24h: Math.round(1100 + rand(6) * 400),
       socialSentiment: rand(7) > 0.3 ? "Highly Positive" : "Bullish",
-      scrapedSource: "Scraped via Mempool Space Core, Bitcoin Core Ledger RPC, Glassnode Analytics Node"
+      scrapedSource,
+      isEstimated: !hasLiveFee
     };
   } else if (sym === "ETH") {
     return {
@@ -4100,10 +4046,11 @@ function getOnChainMetrics(symbol: string) {
       exchangeNetflow24h: parseFloat((-18000 + rand(2) * 15000).toFixed(2)),
       smartMoneyAction: rand(3) > 0.5 ? "Accumulation" : "Holding",
       onchainHealthScore: Math.round(74 + rand(4) * 20),
-      averageGasFee: `${Math.round(8 + rand(5) * 15)} Gwei`,
+      averageGasFee: `${Math.round(8 + rand(5) * 15)} Gwei (est.)`,
       whaleTransactions24h: Math.round(450 + rand(6) * 200),
       socialSentiment: rand(7) > 0.4 ? "Positive" : "Highly Bullish",
-      scrapedSource: "Scraped via Etherscan API Node, Ultra Sound Money Core Statistics Engine"
+      scrapedSource: ESTIMATED_SOURCE,
+      isEstimated: true
     };
   } else if (sym === "SOL") {
     return {
@@ -4111,21 +4058,23 @@ function getOnChainMetrics(symbol: string) {
       exchangeNetflow24h: parseFloat((-250000 + rand(2) * 400000).toFixed(2)),
       smartMoneyAction: rand(3) > 0.3 ? "Aggressive Buy" : "Accumulation",
       onchainHealthScore: Math.round(82 + rand(4) * 15),
-      averageGasFee: `${parseFloat((0.00005 + rand(5) * 0.00004).toFixed(6))} SOL`,
+      averageGasFee: `${parseFloat((0.00005 + rand(5) * 0.00004).toFixed(6))} SOL (est.)`,
       whaleTransactions24h: Math.round(2800 + rand(6) * 1200),
       socialSentiment: rand(7) > 0.2 ? "Highly Bullish" : "FOMO Momentum",
-      scrapedSource: "Scraped via Solscan RPC Validator Logs, Jupiter Dex Swaps API Indexer"
+      scrapedSource: ESTIMATED_SOURCE,
+      isEstimated: true
     };
   } else if (sym === "BNB") {
     return {
       activeAddresses: Math.round(250000 + rand(1) * 80000),
-      exchangeNetflow24h: parseFloat((1500 + rand(2) * 8000).toFixed(2)), // Net inflow: slightly bearish
+      exchangeNetflow24h: parseFloat((1500 + rand(2) * 8000).toFixed(2)),
       smartMoneyAction: rand(3) > 0.6 ? "Distribution" : "Neutral",
       onchainHealthScore: Math.round(65 + rand(4) * 15),
-      averageGasFee: `${parseFloat((0.00025 + rand(5) * 0.0001).toFixed(5))} BNB`,
+      averageGasFee: `${parseFloat((0.00025 + rand(5) * 0.0001).toFixed(5))} BNB (est.)`,
       whaleTransactions24h: Math.round(210 + rand(6) * 100),
       socialSentiment: "Neutral",
-      scrapedSource: "Scraped via BSCScan RPC Node Tracker, Binance Launchpool Stats"
+      scrapedSource: ESTIMATED_SOURCE,
+      isEstimated: true
     };
   } else {
     // Other assets, including custom or Indonesian stocks
@@ -4135,10 +4084,11 @@ function getOnChainMetrics(symbol: string) {
       exchangeNetflow24h: parseFloat((-1200 + rand(2) * 2500).toFixed(2)),
       smartMoneyAction: rand(3) > 0.55 ? "Accumulation" : "Neutral",
       onchainHealthScore: Math.round(60 + rand(4) * 30),
-      averageGasFee: isCrypto ? "Murah (Gas Terkelola)" : "N/A (Bursa Terpusat)",
+      averageGasFee: isCrypto ? "Murah (Gas Terkelola) (est.)" : "N/A (Bursa Terpusat)",
       whaleTransactions24h: Math.round(50 + rand(6) * 180),
       socialSentiment: rand(7) > 0.5 ? "Bullish" : "Optimistic",
-      scrapedSource: isCrypto ? "Scraped via CoinGecko Public Ledger Scraper, CoinMarketCap On-Chain tracker" : "Scraped via KSEI Record Vault, Bloomberg Terminal Feed Mirror, Yahoo Finance Pro"
+      scrapedSource: ESTIMATED_SOURCE,
+      isEstimated: true
     };
   }
 }
@@ -4500,6 +4450,852 @@ Berdasarkan korelasi matematika kedua aset tersebut, porsi investasi teoritis ya
   }
 }
 
+// ===========================================================================
+// NEW LIVE-DATA ENDPOINTS (IMPL-S)
+// ===========================================================================
+// All endpoints below are pure additions; they do not alter any existing
+// endpoint contract. Caches are module-level variables per the existing
+// metricsCache pattern. Inserted before the Vite catch-all.
+
+// --- 1. GET /api/fx/usd-idr ------------------------------------------------
+// Live USD -> IDR exchange rate from open.er-api.com (free, no API key).
+// Cached for 10 minutes to respect the public rate limit.
+let fxUsdIdrCache: { rate: number; lastUpdated: string } | null = null;
+let fxUsdIdrCacheTime = 0;
+const FX_USD_IDR_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+
+app.get("/api/fx/usd-idr", async (req, res) => {
+  try {
+    const now = Date.now();
+    if (fxUsdIdrCache && now - fxUsdIdrCacheTime < FX_USD_IDR_CACHE_TTL) {
+      return res.json({
+        success: true,
+        rate: fxUsdIdrCache.rate,
+        source: "open.er-api.com",
+        lastUpdated: fxUsdIdrCache.lastUpdated
+      });
+    }
+
+    const response = await fetchWithTimeout(
+      "https://open.er-api.com/v6/latest/USD",
+      { headers: { "Accept": "application/json" } },
+      5000
+    );
+    if (!response.ok) {
+      throw new Error(`open.er-api.com returned HTTP ${response.status}`);
+    }
+    const data = await response.json() as any;
+    const rate = parseFloat(data?.rates?.IDR);
+    if (!isFinite(rate) || rate <= 0) {
+      throw new Error("IDR rate missing in open.er-api.com response");
+    }
+    const lastUpdated = (data?.time_last_update_utc as string) || new Date().toISOString();
+    fxUsdIdrCache = { rate, lastUpdated };
+    fxUsdIdrCacheTime = now;
+    return res.json({
+      success: true,
+      rate,
+      source: "open.er-api.com",
+      lastUpdated
+    });
+  } catch (err: any) {
+    return res.json({
+      success: false,
+      error: err.message || String(err),
+      rate: null
+    });
+  }
+});
+
+// --- 2. GET /api/news ------------------------------------------------------
+// Live crypto news aggregator. Fetches RSS feeds in parallel and parses XML
+// with a dependency-free regex extractor. Cached for 5 minutes.
+interface NewsArticle {
+  id: string;
+  title: string;
+  summary: string;
+  url: string;
+  publishedAt: string;
+  image: string | null;
+  source: string;
+}
+
+let newsCache: { articles: NewsArticle[]; source: string; lastUpdated: string } | null = null;
+let newsCacheTime = 0;
+const NEWS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+// Decode basic HTML entities and strip CDATA wrappers + HTML tags.
+function decodeHtmlEntities(input: string): string {
+  if (!input) return "";
+  let s = input.trim();
+  // Strip CDATA wrappers
+  s = s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1");
+  // Decode common entities
+  s = s.replace(/&amp;/gi, "&")
+       .replace(/&lt;/gi, "<")
+       .replace(/&gt;/gi, ">")
+       .replace(/&quot;/gi, "\"")
+       .replace(/&#0?39;/gi, "'")
+       .replace(/&apos;/gi, "'");
+  return s;
+}
+
+function stripHtmlTags(input: string): string {
+  if (!input) return "";
+  return decodeHtmlEntities(input)
+    .replace(/<[^>]*>/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Extract first attribute value from an XML tag string.
+function extractAttr(xml: string, tag: string, attr: string): string | null {
+  const re = new RegExp(`<${tag}[^>]*\\s${attr}=["']([^"']+)["']`, "i");
+  const m = xml.match(re);
+  return m ? decodeHtmlEntities(m[1]) : null;
+}
+
+function extractTag(xml: string, tag: string): string | null {
+  const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i");
+  const m = xml.match(re);
+  return m ? decodeHtmlEntities(m[1]) : null;
+}
+
+function parseRssItems(xml: string, sourceName: string): NewsArticle[] {
+  const articles: NewsArticle[] = [];
+  const itemRe = /<item>([\s\S]*?)<\/item>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = itemRe.exec(xml)) !== null) {
+    const block = match[1] || "";
+    const title = extractTag(block, "title") || "";
+    const link = extractTag(block, "link") || "";
+    const pubDate = extractTag(block, "pubDate") || "";
+    const descriptionRaw = extractTag(block, "description") || "";
+    const summary = stripHtmlTags(descriptionRaw).slice(0, 300);
+
+    // Image: try <enclosure url="..."> then <media:content url="..."> then <media:thumbnail url="...">
+    let image: string | null = extractAttr(block, "enclosure", "url");
+    if (!image) image = extractAttr(block, "media:content", "url");
+    if (!image) image = extractAttr(block, "media:thumbnail", "url");
+
+    if (!title || !link) continue;
+    const id = crypto.createHash("md5").update(`${sourceName}:${link}`).digest("hex").slice(0, 16);
+    articles.push({
+      id,
+      title: stripHtmlTags(title),
+      summary,
+      url: link,
+      publishedAt: pubDate ? new Date(pubDate).toISOString() : new Date().toISOString(),
+      image,
+      source: sourceName
+    });
+  }
+  return articles;
+}
+
+app.get("/api/news", async (req, res) => {
+  try {
+    const now = Date.now();
+    if (newsCache && now - newsCacheTime < NEWS_CACHE_TTL) {
+      return res.json({
+        success: true,
+        articles: newsCache.articles,
+        source: newsCache.source,
+        lastUpdated: newsCache.lastUpdated
+      });
+    }
+
+    const feeds = [
+      { url: "https://www.coindesk.com/arc/outboundfeeds/rss/", name: "CoinDesk" },
+      { url: "https://cointelegraph.com/rss", name: "Cointelegraph" },
+      { url: "https://cryptoslate.com/feed/", name: "CryptoSlate" }
+    ];
+
+    const results = await Promise.allSettled(
+      feeds.map(async (feed) => {
+        const r = await fetchWithTimeout(feed.url, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/rss+xml, application/xml, text/xml, */*"
+          }
+        }, 6000);
+        if (!r.ok) throw new Error(`${feed.name} HTTP ${r.status}`);
+        const text = await r.text();
+        const items = parseRssItems(text, feed.name);
+        if (!items.length) throw new Error(`${feed.name} returned no items`);
+        return { feed, items };
+      })
+    );
+
+    // Take the first feed that worked; if multiple worked, merge them.
+    const okResults = results
+      .filter((r): r is PromiseFulfilledResult<any> => r.status === "fulfilled")
+      .map(r => r.value);
+
+    if (okResults.length === 0) {
+      const reasons = results
+        .map(r => r.status === "rejected" ? (r.reason?.message || String(r.reason)) : "")
+        .filter(Boolean);
+      return res.json({
+        success: false,
+        articles: [],
+        error: `All RSS feeds failed: ${reasons.join("; ")}`
+      });
+    }
+
+    // Merge and dedupe by URL, then take first 30.
+    const seen = new Set<string>();
+    const merged: NewsArticle[] = [];
+    for (const r of okResults) {
+      for (const a of r.items) {
+        if (seen.has(a.url)) continue;
+        seen.add(a.url);
+        merged.push(a);
+        if (merged.length >= 30) break;
+      }
+      if (merged.length >= 30) break;
+    }
+
+    const payload = {
+      success: true,
+      articles: merged,
+      source: okResults.map(r => r.feed.name).join(", "),
+      lastUpdated: new Date().toISOString()
+    };
+    newsCache = {
+      articles: merged,
+      source: payload.source,
+      lastUpdated: payload.lastUpdated
+    };
+    newsCacheTime = now;
+    return res.json(payload);
+  } catch (err: any) {
+    return res.json({
+      success: false,
+      articles: [],
+      error: err.message || String(err)
+    });
+  }
+});
+
+// --- 3. GET /api/onchain/orderbook -----------------------------------------
+// Live Binance orderbook depth with bid/ask pressure analysis. 5s cache.
+let orderbookCache: Map<string, { data: any; ts: number }> = new Map();
+const ORDERBOOK_CACHE_TTL = 5 * 1000; // 5 seconds
+
+app.get("/api/onchain/orderbook", async (req, res) => {
+  try {
+    const symbol = String(req.query.symbol || "BTCUSDT").toUpperCase().trim();
+    const now = Date.now();
+    const cached = orderbookCache.get(symbol);
+    if (cached && now - cached.ts < ORDERBOOK_CACHE_TTL) {
+      return res.json(cached.data);
+    }
+
+    const url = `https://api.binance.com/api/v3/depth?symbol=${encodeURIComponent(symbol)}&limit=100`;
+    const response = await fetchWithTimeout(url, { headers: { "Accept": "application/json" } }, 5000);
+    if (!response.ok) {
+      throw new Error(`Binance depth returned HTTP ${response.status}`);
+    }
+    const data = await response.json() as any;
+    const bids: [string, string][] = Array.isArray(data?.bids) ? data.bids : [];
+    const asks: [string, string][] = Array.isArray(data?.asks) ? data.asks : [];
+
+    let bidTotal = 0;
+    for (const [p, q] of bids) {
+      const price = parseFloat(p); const qty = parseFloat(q);
+      if (isFinite(price) && isFinite(qty)) bidTotal += price * qty;
+    }
+    let askTotal = 0;
+    for (const [p, q] of asks) {
+      const price = parseFloat(p); const qty = parseFloat(q);
+      if (isFinite(price) && isFinite(qty)) askTotal += price * qty;
+    }
+    const bidPressure = (bidTotal + askTotal) > 0
+      ? parseFloat((bidTotal / (bidTotal + askTotal)).toFixed(4))
+      : 0.5;
+
+    const bestBid = bids.length ? parseFloat(bids[0][0]) : 0;
+    const bestAsk = asks.length ? parseFloat(asks[0][0]) : 0;
+    const spread = (bestBid > 0 && bestAsk > 0)
+      ? parseFloat((bestAsk - bestBid).toFixed(8))
+      : 0;
+
+    const payload = {
+      success: true,
+      symbol,
+      bids: bids.slice(0, 20),
+      asks: asks.slice(0, 20),
+      bidTotal: parseFloat(bidTotal.toFixed(2)),
+      askTotal: parseFloat(askTotal.toFixed(2)),
+      bidPressure,
+      spread,
+      lastUpdated: new Date().toISOString()
+    };
+    orderbookCache.set(symbol, { data: payload, ts: now });
+    return res.json(payload);
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message || String(err) });
+  }
+});
+
+// --- 4. GET /api/onchain/altcoin-season -----------------------------------
+// Altcoin Season Index from blockchaincenter.net. 30 min cache.
+let altcoinSeasonCache: { index: number; isAltcoinSeason: boolean; lastUpdated: string } | null = null;
+let altcoinSeasonCacheTime = 0;
+const ALTCOIN_SEASON_CACHE_TTL = 30 * 60 * 1000;
+
+app.get("/api/onchain/altcoin-season", async (req, res) => {
+  try {
+    const now = Date.now();
+    if (altcoinSeasonCache && now - altcoinSeasonCacheTime < ALTCOIN_SEASON_CACHE_TTL) {
+      return res.json({
+        success: true,
+        index: altcoinSeasonCache.index,
+        isAltcoinSeason: altcoinSeasonCache.isAltcoinSeason,
+        lastUpdated: altcoinSeasonCache.lastUpdated
+      });
+    }
+
+    let index: number | null = null;
+    try {
+      const r = await fetchWithTimeout(
+        "https://api.blockchaincenter.net/v1/altcoinseason/",
+        { headers: { "Accept": "application/json" } },
+        6000
+      );
+      if (r.ok) {
+        const text = (await r.text()).trim();
+        // API may return a bare integer or JSON; handle both.
+        const parsed = JSON.parse(text);
+        if (typeof parsed === "number") {
+          index = parsed;
+        } else if (parsed && typeof parsed === "object") {
+          index = parseFloat(parsed?.value ?? parsed?.index ?? parsed?.altcoinSeasonIndex);
+        }
+      }
+    } catch (err: any) {
+      console.log("[Altcoin Season] blockchaincenter fetch handled:", err.message);
+    }
+
+    // Fallback: derive a simple proxy from CoinGecko global dominance.
+    if (index === null || !isFinite(index)) {
+      try {
+        const cg = await fetchWithTimeout(
+          "https://api.coingecko.com/api/v3/global",
+          { headers: { "Accept": "application/json" } },
+          6000
+        );
+        if (cg.ok) {
+          const cgData = await cg.json() as any;
+          const btcDom = parseFloat(cgData?.data?.market_cap_percentage?.btc);
+          if (isFinite(btcDom)) {
+            // Heuristic: when BTC dominance is low (<40), altcoins are stronger.
+            // Map 25% dom -> 100 index, 60% dom -> 0 index (clamped).
+            const proxy = Math.round(Math.max(0, Math.min(100, (60 - btcDom) / (60 - 25) * 100)));
+            index = proxy;
+          }
+        }
+      } catch (err: any) {
+        console.log("[Altcoin Season] CoinGecko proxy fetch handled:", err.message);
+      }
+    }
+
+    if (index === null || !isFinite(index)) {
+      return res.status(502).json({
+        success: false,
+        error: "Altcoin Season Index unavailable from all sources."
+      });
+    }
+
+    const isAltcoinSeason = index >= 75;
+    const payload = {
+      success: true,
+      index: Math.round(index),
+      isAltcoinSeason,
+      lastUpdated: new Date().toISOString()
+    };
+    altcoinSeasonCache = {
+      index: payload.index,
+      isAltcoinSeason,
+      lastUpdated: payload.lastUpdated
+    };
+    altcoinSeasonCacheTime = now;
+    return res.json(payload);
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message || String(err) });
+  }
+});
+
+// --- 5. GET /api/onchain/oi-history ---------------------------------------
+// Binance Futures open-interest history. 10 min cache.
+let oiHistoryCache: Map<string, { data: any; ts: number }> = new Map();
+const OI_HISTORY_CACHE_TTL = 10 * 60 * 1000;
+
+app.get("/api/onchain/oi-history", async (req, res) => {
+  try {
+    const symbol = String(req.query.symbol || "BTCUSDT").toUpperCase().trim();
+    const days = Math.max(1, Math.min(90, parseInt(String(req.query.days || "30"), 10) || 30));
+    const now = Date.now();
+    const cacheKey = `${symbol}_${days}`;
+    const cached = oiHistoryCache.get(cacheKey);
+    if (cached && now - cached.ts < OI_HISTORY_CACHE_TTL) {
+      return res.json(cached.data);
+    }
+
+    const url = `https://fapi.binance.com/futures/data/openInterestHist?symbol=${encodeURIComponent(symbol)}&period=1d&limit=${days}`;
+    const r = await fetchWithTimeout(url, { headers: { "Accept": "application/json" } }, 6000);
+    if (!r.ok) throw new Error(`Binance fapi OI history HTTP ${r.status}`);
+    const raw = await r.json() as any[];
+    const history = (Array.isArray(raw) ? raw : []).map((row: any) => ({
+      date: row?.timestamp ? new Date(row.timestamp).toISOString().slice(0, 10) : "",
+      openInterest: parseFloat(row?.sumOpenInterest) || 0
+    })).filter(h => h.date);
+
+    const payload = {
+      success: true,
+      symbol,
+      history,
+      lastUpdated: new Date().toISOString()
+    };
+    oiHistoryCache.set(cacheKey, { data: payload, ts: now });
+    return res.json(payload);
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message || String(err) });
+  }
+});
+
+// --- 6. GET /api/onchain/dominance-history --------------------------------
+// BTC/ETH dominance 30d history. CoinGecko's `/global/market_cap_chart`
+// endpoint now requires a DEMO API key (returns 401 for free tier), so we
+// derive the history from public per-coin market_chart endpoints for BTC and
+// ETH plus a single /global call to anchor the BTC+ETH share of total market
+// cap. 30 min cache.
+let dominanceHistoryCache: Map<string, { data: any; ts: number }> = new Map();
+const DOMINANCE_HISTORY_CACHE_TTL = 30 * 60 * 1000;
+
+app.get("/api/onchain/dominance-history", async (req, res) => {
+  try {
+    const days = Math.max(1, Math.min(90, parseInt(String(req.query.days || "30"), 10) || 30));
+    const now = Date.now();
+    const cacheKey = `d_${days}`;
+    const cached = dominanceHistoryCache.get(cacheKey);
+    if (cached && now - cached.ts < DOMINANCE_HISTORY_CACHE_TTL) {
+      return res.json(cached.data);
+    }
+
+    // Fetch BTC and ETH market_cap series (free /coins/{id}/market_chart).
+    const [btcRes, ethRes, globalRes] = await Promise.allSettled([
+      fetchWithTimeout(
+        `https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=${days}&interval=daily`,
+        { headers: { "Accept": "application/json" } },
+        8000
+      ),
+      fetchWithTimeout(
+        `https://api.coingecko.com/api/v3/coins/ethereum/market_chart?vs_currency=usd&days=${days}&interval=daily`,
+        { headers: { "Accept": "application/json" } },
+        8000
+      ),
+      fetchWithTimeout(
+        "https://api.coingecko.com/api/v3/global",
+        { headers: { "Accept": "application/json" } },
+        5000
+      )
+    ]);
+
+    if (btcRes.status !== "fulfilled" || !btcRes.value.ok) {
+      throw new Error("Failed to fetch BTC market_chart from CoinGecko.");
+    }
+    if (ethRes.status !== "fulfilled" || !ethRes.value.ok) {
+      throw new Error("Failed to fetch ETH market_chart from CoinGecko.");
+    }
+
+    const btcData = await btcRes.value.json() as any;
+    const ethData = await ethRes.value.json() as any;
+    const btcMcArr: [number, number][] = btcData?.market_caps || [];
+    const ethMcArr: [number, number][] = ethData?.market_caps || [];
+
+    if (!btcMcArr.length || !ethMcArr.length) {
+      throw new Error("CoinGecko returned no usable dominance history rows.");
+    }
+
+    // Anchor: from /global we read the CURRENT market_cap_percentage for BTC
+    // and ETH. We assume the BTC+ETH share of total market cap is approximately
+    // constant over the requested window; this lets us back out a historical
+    // total market cap from the sum of BTC + ETH market caps.
+    let btcPctNow = 0;
+    let ethPctNow = 0;
+    if (globalRes.status === "fulfilled" && globalRes.value.ok) {
+      try {
+        const gData = await globalRes.value.json() as any;
+        btcPctNow = parseFloat(gData?.data?.market_cap_percentage?.btc) || 0;
+        ethPctNow = parseFloat(gData?.data?.market_cap_percentage?.eth) || 0;
+      } catch { /* ignore parse error */ }
+    }
+    const btcEthShare = (btcPctNow + ethPctNow) > 0 ? (btcPctNow + ethPctNow) / 100 : 0.6;
+
+    const n = Math.min(btcMcArr.length, ethMcArr.length);
+    const history: any[] = [];
+    for (let i = 0; i < n; i++) {
+      const [tsBtc, btcMc] = btcMcArr[i];
+      const [, ethMc] = ethMcArr[i];
+      // CoinGecko returns numbers, but defensively coerce via Number() in case a string slips through.
+      const btcNum = Number(btcMc) || 0;
+      const ethNum = Number(ethMc) || 0;
+      const btcEthSum = btcNum + ethNum;
+      if (btcEthSum <= 0) continue;
+      const totalEstimate = btcEthSum / btcEthShare;
+      history.push({
+        date: new Date(tsBtc).toISOString().slice(0, 10),
+        btcDominance: parseFloat((btcNum / totalEstimate * 100).toFixed(2)),
+        ethDominance: parseFloat((ethNum / totalEstimate * 100).toFixed(2)),
+        totalMarketCap: parseFloat(totalEstimate.toFixed(0))
+      });
+    }
+
+    if (!history.length) {
+      throw new Error("No dominance rows could be derived.");
+    }
+
+    const payload = {
+      success: true,
+      history,
+      lastUpdated: new Date().toISOString(),
+      source: "Derived from CoinGecko BTC/ETH market_chart + /global anchor"
+    };
+    dominanceHistoryCache.set(cacheKey, { data: payload, ts: now });
+    return res.json(payload);
+  } catch (err: any) {
+    return res.json({ success: false, error: err.message || String(err) });
+  }
+});
+
+// --- 7. GET /api/stocks/fundamentals/:symbol ------------------------------
+// Stock fundamentals (P/E, dividend yield, market cap, profit margins) via
+// Yahoo Finance quoteSummary. Yahoo often 401s for this endpoint, so we
+// return HTTP 200 with success:false to let the UI show "N/A" gracefully.
+app.get("/api/stocks/fundamentals/:symbol", async (req, res) => {
+  try {
+    const symbol = String(req.params.symbol || "").toUpperCase().trim();
+    if (!symbol) {
+      return res.json({ success: false, symbol: "", error: "Fundamentals unavailable" });
+    }
+
+    const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=summaryDetail,defaultKeyStatistics,financialData`;
+    const r = await fetchWithTimeout(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json"
+      }
+    }, 6000);
+
+    if (!r.ok) {
+      // Yahoo frequently returns 401/404 for this endpoint. Return 200 with
+      // success:false so the UI can render "N/A" instead of an error toast.
+      return res.json({
+        success: false,
+        symbol,
+        error: "Fundamentals unavailable"
+      });
+    }
+
+    const data = await r.json() as any;
+    const qs = data?.quoteSummary?.result?.[0] || {};
+
+    const trailingPE = qs?.summaryDetail?.trailingPE?.raw
+      ?? qs?.defaultKeyStatistics?.trailingPE?.raw
+      ?? null;
+    const dividendYield = qs?.summaryDetail?.dividendYield?.raw
+      ?? qs?.summaryDetail?.trailingAnnualDividendYield?.raw
+      ?? null;
+    const marketCap = qs?.summaryDetail?.marketCap?.raw
+      ?? qs?.defaultKeyStatistics?.marketCap?.raw
+      ?? null;
+    const profitMargins = qs?.financialData?.profitMargins?.raw
+      ?? qs?.defaultKeyStatistics?.profitMargins?.raw
+      ?? null;
+
+    return res.json({
+      success: true,
+      symbol,
+      peRatio: trailingPE !== null ? parseFloat(trailingPE) : null,
+      dividendYield: dividendYield !== null ? parseFloat(dividendYield) : null,
+      marketCap: marketCap !== null ? parseFloat(marketCap) : null,
+      profitMargins: profitMargins !== null ? parseFloat(profitMargins) : null,
+      source: "Yahoo Finance quoteSummary",
+      lastUpdated: new Date().toISOString()
+    });
+  } catch (err: any) {
+    return res.json({
+      success: false,
+      symbol: String(req.params.symbol || "").toUpperCase(),
+      error: "Fundamentals unavailable"
+    });
+  }
+});
+
+// --- 8. POST /api/trading-signals/generate-manual -------------------------
+// Manual signal entry. Validates required fields and pushes to signalHistory.
+app.post("/api/trading-signals/generate-manual", (req, res) => {
+  try {
+    const {
+      symbol,
+      direction,
+      entryPrice,
+      tpPrice,
+      slPrice,
+      timeframe,
+      notes
+    } = req.body || {};
+
+    if (!symbol || !direction || entryPrice == null || tpPrice == null || slPrice == null) {
+      return res.status(400).json({
+        success: false,
+        error: "Field wajib: symbol, direction, entryPrice, tpPrice, slPrice."
+      });
+    }
+
+    const upperSymbol = String(symbol).toUpperCase().trim();
+    const dir = String(direction).toUpperCase().trim() as
+      "STRONG BUY" | "BUY" | "HOLD" | "SELL" | "STRONG SELL";
+    const validDirs: ("STRONG BUY" | "BUY" | "HOLD" | "SELL" | "STRONG SELL")[] =
+      ["STRONG BUY", "BUY", "HOLD", "SELL", "STRONG SELL"];
+    if (!validDirs.includes(dir)) {
+      return res.status(400).json({
+        success: false,
+        error: `Direction tidak valid. Pilihan: ${validDirs.join(", ")}`
+      });
+    }
+
+    const entry = parseFloat(entryPrice);
+    const tp = parseFloat(tpPrice);
+    const sl = parseFloat(slPrice);
+    if (!isFinite(entry) || !isFinite(tp) || !isFinite(sl)) {
+      return res.status(400).json({
+        success: false,
+        error: "entryPrice, tpPrice, slPrice harus berupa angka yang valid."
+      });
+    }
+
+    const tf: "intraday" | "daily" | "weekly" =
+      timeframe === "weekly" ? "weekly" :
+      timeframe === "daily" ? "daily" : "intraday";
+
+    const asset = liveAssets.find(a => a.symbol === upperSymbol);
+    const category: "crypto" | "stock" = asset?.category === "stock" ? "stock" : "crypto";
+
+    const newSignal: SignalHistoryEntry = {
+      id: `sig_manual_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      symbol: upperSymbol,
+      category,
+      recommendation: dir,
+      confidence: 100, // user-submitted, treat as fully intentional
+      entryPrice: entry,
+      currentPrice: entry,
+      tpPrice: tp,
+      slPrice: sl,
+      status: "PENDING",
+      timestamp: new Date().toISOString(),
+      timeframe: tf
+    };
+
+    signalHistory.unshift(newSignal);
+    if (signalHistory.length > 200) {
+      signalHistory = signalHistory.slice(0, 200);
+    }
+
+    return res.json({
+      success: true,
+      signal: newSignal,
+      notes: notes || ""
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message || String(err) });
+  }
+});
+
+// --- 9. GET /api/onchain/correlations -------------------------------------
+// Pearson correlation of BTC daily returns vs S&P500, Gold, DXY, Nasdaq.
+// 1 hour cache. Partial failures return available correlations only.
+let correlationsCache: { data: any; ts: number } | null = null;
+const CORRELATIONS_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+
+function pearson(a: number[], b: number[]): number | null {
+  const n = Math.min(a.length, b.length);
+  if (n < 3) return null;
+  let sumA = 0, sumB = 0, sumAB = 0, sumA2 = 0, sumB2 = 0;
+  for (let i = 0; i < n; i++) {
+    sumA += a[i]; sumB += b[i];
+    sumAB += a[i] * b[i];
+    sumA2 += a[i] * a[i];
+    sumB2 += b[i] * b[i];
+  }
+  const num = n * sumAB - sumA * sumB;
+  const den = Math.sqrt((n * sumA2 - sumA * sumA) * (n * sumB2 - sumB * sumB));
+  if (!isFinite(den) || den === 0) return null;
+  return parseFloat((num / den).toFixed(4));
+}
+
+function dailyReturns(closes: number[]): number[] {
+  const out: number[] = [];
+  for (let i = 1; i < closes.length; i++) {
+    if (closes[i - 1] > 0 && isFinite(closes[i]) && isFinite(closes[i - 1])) {
+      out.push((closes[i] - closes[i - 1]) / closes[i - 1]);
+    }
+  }
+  return out;
+}
+
+app.get("/api/onchain/correlations", async (req, res) => {
+  try {
+    const now = Date.now();
+    if (correlationsCache && now - correlationsCache.ts < CORRELATIONS_CACHE_TTL) {
+      return res.json(correlationsCache.data);
+    }
+
+    const yahooHeaders = {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept": "application/json"
+    };
+
+    // BTC daily closes (30d) from CoinGecko.
+    const btcCloses: number[] = [];
+    try {
+      const r = await fetchWithTimeout(
+        "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=30&interval=daily",
+        { headers: { "Accept": "application/json" } },
+        8000
+      );
+      if (r.ok) {
+        const data = await r.json() as any;
+        const prices: [number, number][] = data?.prices || [];
+        for (const [, p] of prices) {
+          const v = Number(p);
+          if (isFinite(v) && v > 0) btcCloses.push(v);
+        }
+      }
+    } catch (err: any) {
+      console.log("[Correlations] CoinGecko BTC fetch handled:", err.message);
+    }
+
+    const btcReturns = dailyReturns(btcCloses);
+
+    const targets = [
+      { asset: "S&P 500", symbol: "^GSPC" },
+      { asset: "Gold", symbol: "GC=F" },
+      { asset: "DXY", symbol: "DX-Y.NYB" },
+      { asset: "Nasdaq", symbol: "^IXIC" }
+    ];
+
+    const correlations: { asset: string; correlation: number | null }[] = [];
+
+    const assetResults = await Promise.allSettled(targets.map(async (t) => {
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(t.symbol)}?range=1mo&interval=1d`;
+      const r = await fetchWithTimeout(url, { headers: yahooHeaders }, 6000);
+      if (!r.ok) throw new Error(`${t.symbol} HTTP ${r.status}`);
+      const data = await r.json() as any;
+      const closes: number[] = (data?.chart?.result?.[0]?.indicators?.quote?.[0]?.close || [])
+        .map((v: any) => parseFloat(v))
+        .filter((v: number) => isFinite(v) && v > 0);
+      return { asset: t.asset, returns: dailyReturns(closes) };
+    }));
+
+    for (const r of assetResults) {
+      if (r.status !== "fulfilled") continue;
+      const corr = pearson(btcReturns, r.value.returns);
+      correlations.push({ asset: r.value.asset, correlation: corr });
+    }
+
+    const payload = {
+      success: true,
+      correlations,
+      btcReturnDays: btcReturns.length,
+      lastUpdated: new Date().toISOString()
+    };
+    correlationsCache = { data: payload, ts: now };
+    return res.json(payload);
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message || String(err) });
+  }
+});
+
+// ===========================================================================
+// SEC-BACKEND: mount auth + API-key routers BEFORE the SPA catch-all.
+// The auth router is mounted with the strict auth rate limiter (5/min/IP).
+// The apiKeys router self-mounts requireAuth internally.
+// The liveDataRouter (from another agent) is mounted opportunistically — if
+// the file doesn't exist yet we log a one-liner and continue.
+// ===========================================================================
+app.use("/api/auth", authLimiter, authRouter);
+app.use("/api/user/api-keys", apiKeysRouter);
+
+// SEC2-DATA: mount portfolio + real trade execution routers.
+// Portfolio router self-mounts requireAuth. Trade execution router also self-mounts requireAuth.
+try {
+  const { portfolioRouter } = await import("./src/server/portfolio");
+  app.use("/api/portfolio", portfolioRouter);
+  console.log("[portfolio] router mounted successfully.");
+} catch (e: any) {
+  console.log("[portfolio] router not available:", e?.message || e);
+}
+
+try {
+  const { tradeExecutionRouter } = await import("./src/server/tradeExecution");
+  app.use("/api/trade", tradeExecutionRouter);
+  console.log("[trade] execution router mounted successfully (replaces simulation-only routes).");
+} catch (e: any) {
+  console.log("[trade] execution router not available:", e?.message || e);
+}
+
+try {
+  // Using a dynamic import guarded by a runtime feature check so a missing
+  // module doesn't break boot. The module is loaded lazily.
+  const liveDataModule: any = await import("./src/server/liveDataRoutes").catch(() => null);
+  if (liveDataModule?.liveDataRouter) {
+    app.use(liveDataModule.liveDataRouter);
+    console.log("[liveData] router mounted successfully.");
+  } else {
+    console.log("[liveData] router not yet available — skipping (this is OK).");
+  }
+} catch (e: any) {
+  console.log("[liveData] router not yet available:", e?.message || e);
+}
+
+// 404 for unmatched /api/* — must come BEFORE the SPA catch-all so unknown API
+// calls get JSON instead of the SPA HTML.
+// SEC3: Health check + metrics endpoint (for monitoring/uptime checks)
+import { startAlerting, getHealthMetrics, recordRequest } from "./src/server/alerting";
+startAlerting();
+app.get("/api/health", (req, res) => {
+  res.json({ success: true, status: "healthy", timestamp: new Date().toISOString(), metrics: getHealthMetrics() });
+});
+
+// SEC3: GDPR data export + deletion endpoints (requireAuth)
+app.get("/api/user/export", requireAuth, async (req: any, res) => {
+  try {
+    const { exportUserData } = await import("./src/server/dataRetention");
+    const data = await exportUserData(req.user.sub);
+    await logAudit(req.user.sub, "DATA_EXPORT", req, true);
+    res.json({ success: true, data });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: "Gagal mengekspor data." });
+  }
+});
+
+app.delete("/api/user/delete-all", requireAuth, async (req: any, res) => {
+  try {
+    const { deleteAllUserData } = await import("./src/server/dataRetention");
+    await deleteAllUserData(req.user.sub);
+    await logAudit(req.user.sub, "ACCOUNT_DELETED", req, true);
+    res.clearCookie("zaytrix_session");
+    res.json({ success: true, message: "Akun dan semua data telah dihapus permanen." });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: "Gagal menghapus akun." });
+  }
+});
+
+app.use("/api", apiNotFound);
+
 // Setup dev and production modes
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
@@ -4515,6 +5311,11 @@ async function startServer() {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
+
+  // SEC-BACKEND: FINAL error handler — must be registered AFTER every route
+  // and AFTER the SPA catch-all so it intercepts errors thrown anywhere in the
+  // pipeline. It never leaks err.message to the client in production.
+  app.use(sanitizeError);
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Financial Modelling Server running on port ${PORT}`);

@@ -30,11 +30,17 @@ export default function Ledger() {
   const [aiResponse, setAiResponse] = useState<string>("");
   const [isLoadingAi, setIsLoadingAi] = useState(false);
 
-  // Pre-seed some mock historical transactions if the user's ledger is currently empty
+  // DEMO DATA button — seeds 4 illustrative example transactions into the
+  // user's empty ledger so they can preview the FIFO / tax-recap UI before
+  // entering real trades. The prices and timestamps below are STATIC SAMPLE
+  // VALUES (not real market data) and only appear when the user explicitly
+  // clicks the "Pre-seed Contoh Transaksi (DEMO)" button. They never
+  // auto-populate. Real transactions come from the user's own entry via
+  // addLedgerTransaction (or the /api/portfolio/* server-side persistence).
   const handleSeedMockTransactions = () => {
     const mockTxs: LedgerTransaction[] = [
       {
-        id: "tx_mock_1",
+        id: "tx_demo_1",
         timestamp: "2026-01-15T09:30:00.000Z",
         type: "BUY",
         symbol: "BTC",
@@ -42,10 +48,10 @@ export default function Ledger() {
         price: 48000,
         totalAmount: 7200,
         feePaidUsd: 3.6,
-        notes: "Pembelian awal Bitcoin awal tahun"
+        notes: "[DEMO] Pembelian awal Bitcoin awal tahun"
       },
       {
-        id: "tx_mock_2",
+        id: "tx_demo_2",
         timestamp: "2026-02-10T14:45:00.000Z",
         type: "BUY",
         symbol: "ETH",
@@ -53,10 +59,10 @@ export default function Ledger() {
         price: 2400,
         totalAmount: 6000,
         feePaidUsd: 3.0,
-        notes: "Akumulasi Ethereum"
+        notes: "[DEMO] Akumulasi Ethereum"
       },
       {
-        id: "tx_mock_3",
+        id: "tx_demo_3",
         timestamp: "2026-03-22T11:15:00.000Z",
         type: "SELL",
         symbol: "BTC",
@@ -65,10 +71,10 @@ export default function Ledger() {
         totalAmount: 3200,
         realizedPnL: 800, // Sold 0.05 BTC bought at 48000 (cost basis: 2400, realized: 3200 - 2400 = 800)
         feePaidUsd: 1.6,
-        notes: "Ambil untung Bitcoin pasca reli kuartal I"
+        notes: "[DEMO] Ambil untung Bitcoin pasca reli kuartal I"
       },
       {
-        id: "tx_mock_4",
+        id: "tx_demo_4",
         timestamp: "2026-04-05T16:20:00.000Z",
         type: "SWAP",
         symbol: "ETH",
@@ -77,7 +83,7 @@ export default function Ledger() {
         totalAmount: 3200,
         realizedPnL: 800, // Swap 1.0 ETH bought at 2400 for stablecoin at 3200 (realized PnL: 800)
         feePaidUsd: 1.6,
-        notes: "Konversi ETH ke jaringan likuiditas stabil"
+        notes: "[DEMO] Konversi ETH ke jaringan likuiditas stabil"
       }
     ];
 
@@ -124,8 +130,10 @@ export default function Ledger() {
       }
     });
 
-    // Assume 0.1% (Final Tax for Crypto in Indonesia under PMK-68) or 10% Capital Gains
-    const estimatedCryptoTax = Math.max(0, accumulatedPnL * 0.1); 
+    // PPh Final 0.1% (PMK-68/2024) on gross transaction value (NOT on gains).
+    // Indonesian regulation charges 0.1% of transaction value for crypto sales
+    // through registered exchanges (Final PPh Pasal 22).
+    const estimatedCryptoTax = Math.max(0, (totalBoughtVal + totalSoldVal) * 0.001); 
 
     return {
       totalBoughtVal,
@@ -183,7 +191,7 @@ export default function Ledger() {
     csvRows.push(`Total Volume Pembelian (USD),${taxMetrics.totalBoughtVal.toFixed(2)}`);
     csvRows.push(`Total Realisasi Penjualan (USD),${taxMetrics.totalSoldVal.toFixed(2)}`);
     csvRows.push(`Akumulasi Laba Bersih (Realized Capital Gains),${taxMetrics.accumulatedPnL.toFixed(2)}`);
-    csvRows.push(`Pajak Estimasi PPh (PPh Final PMK-68 / 10%),${taxMetrics.estimatedCryptoTax.toFixed(2)}`);
+    csvRows.push(`Pajak Estimasi PPh Final PMK-68 (0.1% Nilai Transaksi),${taxMetrics.estimatedCryptoTax.toFixed(2)}`);
     csvRows.push(`Laporan Diekspor Pada,${new Date().toISOString()}`);
 
     const csvContent = "data:text/csv;charset=utf-8," + csvRows.join("\n");
@@ -238,8 +246,14 @@ export default function Ledger() {
               onClick={handleSeedMockTransactions}
               className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 text-xs px-4 py-2.5 rounded-lg border border-amber-500/25 font-bold transition-all cursor-pointer flex items-center gap-2"
             >
-              <RefreshCw className="w-4 h-4 animate-spin" /> Pre-seed Contoh Transaksi (FIFO)
+              <RefreshCw className="w-4 h-4 animate-spin" /> Pre-seed Contoh Transaksi (DEMO)
+              <span className="ml-1 text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1 py-0.5 rounded font-mono font-bold uppercase tracking-wider">Data Contoh</span>
             </button>
+          )}
+          {ledgerHistory.length === 0 && (
+            <span className="text-[9px] text-slate-500 font-mono leading-tight max-w-[160px] block">
+              * Tombol DEMO hanya mengisi 4 transaksi contoh dengan harga statis buatan (bukan data pasar riil). Hapus kapan saja melalui reset manual.
+            </span>
           )}
 
           <button
@@ -295,7 +309,7 @@ export default function Ledger() {
 
         {/* Card 4: Estimasi Potongan Pajak PPh (PMK-68) */}
         <div className="bg-[#0F172A] border border-slate-800 rounded-xl p-4 space-y-2">
-          <span className="text-[10px] text-slate-450 font-mono tracking-wider block font-bold uppercase">Estimasi Pajak PPh (PPh Final / 10%)</span>
+          <span className="text-[10px] text-slate-450 font-mono tracking-wider block font-bold uppercase">Estimasi Pajak PPh (PPh Final / 0.1%)</span>
           <div className="flex items-center justify-between">
             <span className="text-xl font-extrabold font-mono text-amber-400">
               ${taxMetrics.estimatedCryptoTax.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -449,6 +463,7 @@ export default function Ledger() {
           <div>
             <h3 className="text-md font-bold text-slate-200 flex items-center gap-1.5">
               <Sparkles className="w-5 h-5 text-amber-400" /> Mode Panduan Virtual AI
+              <span className="ml-auto text-[9px] uppercase font-mono font-bold px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30" title="Jawaban berbasis aturan kategoris (rule-based), bukan AI live. Untuk konsultasi pajak aktual, hubungi konsultan pajak resmi.">INFO: Panduan Aturan</span>
             </h3>
             <p className="text-xs text-slate-400 mt-0.5">
               Bertanyalah mengenai regulasi pajak capital gains, kriteria penarikan fee, dan metodologi FIFO kuantitatif.
@@ -461,7 +476,7 @@ export default function Ledger() {
             </div>
             <div>
               <p className="text-xs font-bold text-slate-300">Asisten Perpajakan Z-Capital</p>
-              <p className="text-[10.5px] text-slate-500 leading-tight mt-0.5">Pendamping kualitatif instan Anda di pasar investasi mandiri.</p>
+              <p className="text-[10.5px] text-slate-500 leading-tight mt-0.5">Panduan berbasis aturan (rule-based) — bukan AI live. Pendamping kualitatif instan Anda di pasar investasi mandiri.</p>
             </div>
           </div>
 

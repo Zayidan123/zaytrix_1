@@ -1,8 +1,12 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+// ZAYTRIX backend security models (SEC-BACKEND + SEC2-AUTH).
+// - User: registered dashboard user (email + bcrypt passwordHash + optional TOTP)
+// - ApiKey: per-exchange encrypted API credentials (AES-256-GCM ciphertexts)
+// - AuditLog: immutable trail of security-sensitive actions (login, key ops, trades)
+// - EmailVerificationToken: one-time tokens proving email ownership (SEC2-AUTH)
+// - Session: server-side session tracking for revocation / "logout others" (SEC2-AUTH)
 
 generator client {
   provider = "prisma-client-js"
@@ -14,19 +18,210 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                   String   @id @default(cuid())
+  email                String   @unique
+  passwordHash         String
+  displayName          String
+  twoFactorEnabled     Boolean  @default(false)
+  totpSecret           String? // legacy field (SEC-BACKEND) — kept for backward compat; SEC2-AUTH uses twoFactorSecret (encrypted)
+  // SEC2-AUTH additions:
+  emailVerified        DateTime? // set when user confirms email via token
+  twoFactorSecret      String? // AES-256-GCM encrypted TOTP secret (SEC2-AUTH)
+  failedLoginAttempts  Int      @default(0)
+  lockedUntil          DateTime? // if set, login refused until this timestamp
+  resetToken           String? // password-reset token (looked up by email)
+  resetTokenExpiry     DateTime?
+  oauthProvider        String? // "google" if user was created via OAuth
+  oauthId              String? // provider-specific user id (e.g. Google sub)
+  // SEC3-AUTH (AUTH10) additions: HaveIBeenPwned breach check results.
+  // breachChecked=when the password was last checked against the breach DB.
+  // breachCount=number of times the password appeared in known data dumps
+  // (0 if never breached or not yet checked). The check is advisory: it warns
+  // the user but does NOT block registration/login.
+  breachChecked        DateTime?
+  breachCount          Int      @default(0)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  apiKeys              ApiKey[]
+  auditLogs            AuditLog[]
+  emailVerificationTokens EmailVerificationToken[]
+  sessions             Session[]
+  webAuthnCredentials  WebAuthnCredential[]
+  portfolioHoldings   PortfolioHolding[]
+  ledgerTransactions  LedgerTransaction[]
+  backtestResults     BacktestResult[]
+  conversions         ConversionTransaction[]
+  alerts              AlertConfig[]
 }
 
-model Post {
-  id        String   @id @default(cuid())
-  title     String
-  content   String?
-  published Boolean  @default(false)
-  authorId  String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+model ApiKey {
+  id                   String   @id @default(cuid())
+  userId               String
+  exchange             String // Binance, KuCoin, Bybit, etc.
+  encryptedKey         String // AES-256-GCM encrypted API key
+  encryptedSecret      String // AES-256-GCM encrypted API secret
+  encryptedPassphrase  String? // for KuCoin
+  label                String   @default("default")
+  createdAt            DateTime @default(now())
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, exchange, label])
 }
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String // e.g. "LOGIN", "LOGOUT", "REGISTER", "API_KEY_SAVE", "TRADE_EXECUTE"
+  ip        String?
+  userAgent String?
+  metadata  String? // JSON string
+  success   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+}
+
+// SEC2-AUTH: one-time tokens used to verify ownership of an email address
+// before treating the User as emailVerified. Tokens are cuid-based 32-byte
+// strings, hashed before storage with sha256 (we store the hash, not the raw
+// token — same pattern as reset tokens would use, but Prisma doesn't have a
+// native hash type so we store the hex digest directly).
+model EmailVerificationToken {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// SEC2-AUTH: server-side session tracking. Every successful login inserts a
+// row here with the sha256 hash of the JWT (we never store the JWT itself).
+// This enables: "logout other sessions", session revocation, idle-timeout
+// enforcement, and a server-side kill-switch.
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique // sha256(jwt) — server-side session tracking
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  lastSeen  DateTime @updatedAt
+  expiresAt DateTime
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// SEC2-DATA: Portfolio / Ledger / Backtest / Conversion persistence.
+// Previously all client-side localStorage — now synced server-side per user.
+model PortfolioHolding {
+  id            String   @id @default(cuid())
+  userId        String
+  symbol        String
+  category      String   // crypto, stock, etc.
+  purchasePrice Float
+  quantity      Float
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model LedgerTransaction {
+  id            String   @id @default(cuid())
+  userId        String
+  timestamp     String   // ISO date string (preserves client format)
+  type          String   // BUY, SELL, CONVERT, FEE, etc.
+  symbol        String
+  quantity      Float
+  price         Float
+  totalAmount   Float
+  feePaidUsd    Float    @default(0)
+  notes         String?
+  createdAt     DateTime @default(now())
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, timestamp])
+}
+
+model BacktestResult {
+  id            String   @id @default(cuid())
+  userId        String
+  symbol        String
+  strategy      String
+  startDate     String
+  endDate       String
+  initialCapital Float
+  finalCapital  Float
+  totalReturn   Float
+  sharpeRatio   Float?
+  maxDrawdown   Float?
+  winRate       Float?
+  totalTrades   Int
+  equityCurve   String   // JSON string of equity curve data
+  createdAt     DateTime @default(now())
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model ConversionTransaction {
+  id            String   @id @default(cuid())
+  userId        String
+  fromSymbol    String
+  fromAmount    Float
+  toSymbol      String
+  toAmount      Float
+  rate          Float
+  timestamp     String
+  createdAt     DateTime @default(now())
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model AlertConfig {
+  id            String   @id @default(cuid())
+  userId        String
+  symbol        String
+  condition     String   // above, below
+  targetPrice   Float
+  createdAt     String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// SEC3-AUTH (AUTH10): WebAuthn / passkey credentials.
+// A user can register multiple passkeys (Touch ID, YubiKey, Windows Hello, etc).
+// The credentialId is the unique identifier returned by the authenticator (we
+// store it base64url-encoded). The publicKey is stored as base64url-encoded
+// SPKI DER (the browser exports it via crypto.subtle.exportKey("spki")). The
+// counter is incremented per-authentication to detect cloned authenticators.
+// `name` is a user-friendly label so the user can manage "MacBook Touch ID"
+// vs "YubiKey on keychain" in the security center UI.
+model WebAuthnCredential {
+  id              String   @id @default(cuid())
+  userId          String
+  credentialId    String   @unique // base64url encoded
+  publicKey       String   // base64url encoded SPKI DER (ECDSA P-256 / RSA)
+  counter         Int      @default(0)
+  deviceType      String? // e.g. "platform" (Touch ID / Windows Hello) or "cross-platform" (USB key)
+  transports      String? // JSON array string, e.g. ["internal","usb"]
+  name            String? // user-friendly label (e.g. "MacBook Touch ID")
+  createdAt       DateTime @default(now())
+  lastUsed        DateTime?
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// AUTH10: WebAuthn/Passkey credentials (passwordless biometric/hardware key)

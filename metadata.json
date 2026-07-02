@@ -1,5 +1,5 @@
 {
-  "name": "Z-CAPITAL",
+  "name": "ZAYTRIX",
   "description": "Multi-asset financial modeling tool for Indonesian stocks and cryptocurrencies, featuring portfolio analytics, professional PDF document audits, strategy backtesting, and AI analyst insights with downloadable reports.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
