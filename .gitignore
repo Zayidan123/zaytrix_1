@@ -17,3 +17,4 @@ notifications-config.json
 preview-*.png
 tool-results/
 .github/workflows/ci.yml
+postcss.config.mjs

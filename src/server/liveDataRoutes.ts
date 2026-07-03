@@ -98,7 +98,7 @@ export async function fetchHtmlViaCurl(
   }
   args.push("-w", "\n---HTTP_CODE:%{http_code}---", url);
   const { stdout } = await execFileP("curl", args, {
-    maxOutput: 10 * 1024 * 1024, // 10MB
+    maxBuffer: 10 * 1024 * 1024, // 10MB — FIX-ALL M6: was `maxOutput` (wrong option name; execFile uses `maxBuffer`)
   });
   const m = stdout.match(/---HTTP_CODE:(\d+)---\s*$/);
   const status = m ? parseInt(m[1], 10) : 0;
@@ -164,6 +164,25 @@ function dedupeToDaily<T extends { x: number; y: number }>(samples: T[]): T[] {
     byDay.set(day, s); // overwrite so we end up with the last sample of each day
   }
   return Array.from(byDay.values()).sort((a, b) => a.x - b.x);
+}
+
+/**
+ * FIX-ALL L2: dedupe a CoinGecko market_chart series (array of [epochMs, value]
+ * tuples) to one sample per UTC day, keeping the last sample of each day.
+ * CoinGecko's `interval=daily` returns N+1 points for `days=N` (an extra
+ * intraday "today" sample) — this collapses it to N points so joining the BTC
+ * + ETH series by timestamp produces aligned rows without spurious zero values.
+ */
+function dedupeCoingeckoMcapSeries(series: Array<[number, number]>): Array<[number, number]> {
+  const byDay = new Map<string, [number, number]>();
+  for (const point of series) {
+    const ts = Number(point[0]);
+    const val = Number(point[1]);
+    if (!Number.isFinite(ts) || !Number.isFinite(val)) continue;
+    const day = new Date(ts).toISOString().slice(0, 10);
+    byDay.set(day, [ts, val]); // overwrite → last sample of each day wins
+  }
+  return Array.from(byDay.values()).sort((a, b) => a[0] - b[0]);
 }
 
 /** Build a Map<dayString "yyyy-mm-dd", value> from blockchain.info samples. */
@@ -1568,16 +1587,25 @@ liveDataRouter.get("/api/live/dominance-history", async (req, res) => {
         ethRes.json(),
         globalRes.json(),
       ]);
-      const btcMcap: any[] = btcJson.market_caps || [];
-      const ethMcap: any[] = ethJson.market_caps || [];
+      const btcMcapRaw: any[] = btcJson.market_caps || [];
+      const ethMcapRaw: any[] = ethJson.market_caps || [];
       const totalMcap =
         globalJson?.data?.total_market_cap?.usd ??
-        (btcMcap.length
-          ? btcMcap[btcMcap.length - 1][1] / 0.5 // very rough fallback
+        (btcMcapRaw.length
+          ? btcMcapRaw[btcMcapRaw.length - 1][1] / 0.5 // very rough fallback
           : 0);
 
+      // FIX-ALL L2: CoinGecko `market_chart?interval=daily` returns an extra
+      // intraday sample for "today" (1 more point than `days`) on the BTC
+      // series; the ETH series doesn't always have that point, so the join
+      // produces a "3 Jul" row with ethDominance:0. Dedupe BOTH series to
+      // one sample per UTC day (keeping the last sample of each day, which
+      // is the closest-to-midnight value) before joining.
+      const btcMcap = dedupeCoingeckoMcapSeries(btcMcapRaw);
+      const ethMcap = dedupeCoingeckoMcapSeries(ethMcapRaw);
+
       const ethByTs = new Map<number, number>();
-      for (const e of ethMcap) ethByTs.set(e[0], e[1]);
+      for (const e of ethMcap) ethByTs.set(Number(e[0]), Number(e[1]));
 
       const history = btcMcap
         .slice(-days)
@@ -1591,6 +1619,7 @@ liveDataRouter.get("/api/live/dominance-history", async (req, res) => {
           const ethDom = totalMcap > 0 ? (ethM / totalMcap) * 100 : 0;
           return {
             date: fmtIdDate(ts),
+            isoDate: new Date(ts).toISOString().slice(0, 10),
             btcDominance: Number(btcDom.toFixed(2)),
             ethDominance: Number(ethDom.toFixed(2)),
             totalMarketCap: Number(totalMcap.toFixed(0)),

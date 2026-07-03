@@ -36,14 +36,25 @@ const BAD_USER_AGENTS = [
 
 // Suspicious request characteristics
 function isSuspiciousRequest(req: Request): { blocked: boolean; reason: string } {
-  const url = req.originalUrl || req.url || "";
+  // FIX-ALL H3: decode URL-encoded characters before pattern matching so that
+  // URL-encoded payloads (e.g. %27 OR 1=1, %3Cscript%3E) cannot bypass the WAF.
+  // We decode RECURSIVELY (up to 3 passes) so double-encoded payloads
+  // (%2527 → %27 → ') are also caught. Malformed URI sequences fall back to
+  // the raw URL — we still inspect it for literal patterns.
+  const rawUrl = req.originalUrl || req.url || "";
+  const url = safeDecodeRecursive(rawUrl, 3);
+  const rawReqUrl = req.url || "";
+  const url2 = safeDecodeRecursive(rawReqUrl, 3);
   const ua = req.headers["user-agent"] || "";
   const body = JSON.stringify(req.body || {});
 
-  // Check URL for malicious patterns
+  // Check URL for malicious patterns (both raw + decoded forms).
+  const urlCandidates = Array.from(new Set([rawUrl, url, rawReqUrl, url2]));
   for (const pattern of MALICIOUS_PATTERNS) {
-    if (pattern.test(url)) {
-      return { blocked: true, reason: `Malicious URL pattern: ${pattern.source.substring(0, 40)}` };
+    for (const candidate of urlCandidates) {
+      if (candidate && pattern.test(candidate)) {
+        return { blocked: true, reason: `Malicious URL pattern: ${pattern.source.substring(0, 40)}` };
+      }
     }
   }
 
@@ -85,6 +96,30 @@ function isSuspiciousRequest(req: Request): { blocked: boolean; reason: string }
   }
 
   return { blocked: false, reason: "" };
+}
+
+/**
+ * URL-decode `s` up to `maxPasses` times so double/triple-encoded payloads
+ * (e.g. %2527 → %27 → ') are normalised before regex matching. Any malformed
+ * URI sequence (throws URIError from decodeURIComponent) bails out and
+ * returns the best-effort decoded value from the previous pass — we still
+ * want to inspect the raw + partially-decoded form.
+ */
+function safeDecodeRecursive(s: string, maxPasses: number): string {
+  let current = s;
+  for (let i = 0; i < maxPasses; i++) {
+    let next: string;
+    try {
+      next = decodeURIComponent(current);
+    } catch {
+      // Malformed URI sequence — stop decoding, return what we have.
+      return current;
+    }
+    // If decoding made no progress, no point continuing.
+    if (next === current) return next;
+    current = next;
+  }
+  return current;
 }
 
 // WAF middleware — runs BEFORE route handlers

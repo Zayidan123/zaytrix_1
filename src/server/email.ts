@@ -180,3 +180,38 @@ export async function sendPasswordResetEmail(toEmail: string, token: string): Pr
   logDevEmail(toEmail, subject, html);
   void info;
 }
+
+// ---------------------------------------------------------------------------
+// FIX-ALL M1: sendAlertEmail — used by alerting.ts to deliver alert-rule
+// notifications (high error rate, brute-force detection, etc.) to the admin.
+//
+// In dev mode (EMAIL_DEV_MODE=true, the default), the rendered email is
+// logged to the console only — no SMTP connection is opened. In prod, the
+// configured SMTP transporter is used. The body is treated as plain text
+// (alert messages are pre-formatted strings, not HTML).
+// ---------------------------------------------------------------------------
+export async function sendAlertEmail(to: string, subject: string, body: string): Promise<void> {
+  // Escape body for safe HTML embedding (alerts contain bracketed tags like
+  // "[ALERT:CRITICAL]" — those are fine but be defensive against anything
+  // user-influenced).
+  const bodyHtml = emailShell(
+    subject,
+    `<p style="margin:0 0 12px;">Halo Admin,</p>
+     <p style="margin:0 0 12px;">Sistem pemantauan <strong style="color:#fbbf24;">ZAYTRIX</strong> telah memicu aturan alert berikut:</p>
+     <pre style="background:#0a0f1d;border:1px solid #1e293b;border-radius:8px;padding:14px;color:#fbbf24;font-family:monospace;font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word;margin:0 0 12px;">${body
+       .replace(/&/g, "&amp;")
+       .replace(/</g, "&lt;")
+       .replace(/>/g, "&gt;")}</pre>
+     <p style="margin:18px 0 0;font-size:12px;color:#94a3b8;">Email ini dikirim otomatis oleh sistem alerting ZAYTRIX. Tinjau dashboard operasional untuk detail lebih lanjut.</p>`
+  );
+  const transporter = getTransporter();
+  const info = await transporter.sendMail({
+    from: getFrom(),
+    to,
+    subject,
+    html: bodyHtml,
+    text: body,
+  });
+  logDevEmail(to, subject, bodyHtml);
+  void info;
+}

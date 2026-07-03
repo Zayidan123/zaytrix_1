@@ -36,10 +36,31 @@ export function captureError(error: Error | string, context?: Record<string, any
 }
 
 // Express error handler middleware (should be last, before the 404)
-export function sentryErrorHandler() {
+// FIX-ALL M3: accept the Express `app` instance so Sentry's Express error
+// handler can correctly instrument request isolation / tracing data. The
+// previous version called Sentry.setupExpressErrorHandler() with no args,
+// which (per the Sentry Node SDK docs) requires the app to be passed in.
+//
+// Sentry's setupExpressErrorHandler(app) REGISTERS its own error handler on
+// the app and returns void — it is NOT itself an Express middleware. So this
+// function returns a no-op pass-through middleware for callers that still
+// want to `app.use(sentryErrorHandler(app))`; the real Sentry capture is
+// performed as a side effect of the call.
+export function sentryErrorHandler(app?: any) {
   if (process.env.SENTRY_DSN && process.env.SENTRY_DSN.length > 10) {
-    return Sentry.setupExpressErrorHandler();
+    try {
+      // Sentry v10+ requires the Express `app` instance — without it we can't
+      // register the error handler. If no app is passed we log + skip.
+      if (app) {
+        Sentry.setupExpressErrorHandler(app);
+      } else {
+        console.warn("[monitoring] sentryErrorHandler called without app — Sentry Express error handler NOT registered.");
+      }
+    } catch (e: any) {
+      console.error("[monitoring] Sentry setupExpressErrorHandler failed:", e?.message || e);
+    }
   }
-  // No-op if Sentry not configured
+  // Always return a no-op pass-through so callers can mount this with
+  // app.use(sentryErrorHandler(app)) without Sentry being configured.
   return (_err: any, _req: any, _res: any, next: any) => next(_err);
 }

@@ -296,12 +296,15 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
   const [onChainExplainOpen, setOnChainExplainOpen] = useState(false);
 
   // Format Indonesian Rupiah
+  // FIX-ALL #9: guard against NaN / undefined / null so an empty portfolio or
+  // a missing live price never renders "RpNaN" in the UI.
   const formatIDR = (val: number) => {
+    const n = typeof val === "number" && Number.isFinite(val) ? val : 0;
     return new Intl.NumberFormat("id-ID", {
       style: "currency",
       currency: "IDR",
       maximumFractionDigits: 0
-    }).format(val);
+    }).format(n);
   };
 
   // Convert USD to IDR for portfolio tracking — uses live exchange rate from
@@ -567,12 +570,18 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
   const enrichedPortfolio = useMemo(() => {
     return portfolio.map(item => {
       const match = assets.find(a => a.symbol === item.symbol.toUpperCase());
-      const currentPrice = match ? match.price : item.purchasePrice;
+      // FIX-ALL #9: guard currentPrice + purchasePrice + quantity with
+      // (val || 0) so a missing live price or undefined holding field doesn't
+      // produce NaN that propagates into healthAssessment + formatIDR.
+      const currentPrice = match ? (match.price || 0) : (item.purchasePrice || 0);
+      const purchasePrice = item.purchasePrice || 0;
+      const quantity = item.quantity || 0;
+      const fx = item.category === 'crypto' ? USD_TO_IDR : 1;
       return {
         ...item,
         currentPrice,
-        totalCost: item.purchasePrice * item.quantity * (item.category === 'crypto' ? USD_TO_IDR : 1),
-        totalValue: currentPrice * item.quantity * (item.category === 'crypto' ? USD_TO_IDR : 1),
+        totalCost: purchasePrice * quantity * fx,
+        totalValue: currentPrice * quantity * fx,
       };
     });
   }, [portfolio, assets, USD_TO_IDR]);
@@ -777,10 +786,13 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
 
   // Daily performance history simulation
   const performanceHistory = useMemo(() => {
-    const pts = [];
+    // FIX-ALL #11: explicit `any[]` element type so strictNullChecks doesn't
+    // narrow to `never[]` after the first push (TS infers never[] when the
+    // array literal is empty + no contextual type).
+    const pts: Array<{ date: string; Portofolio: number }> = [];
     const seedPercent = [0.92, 0.94, 0.93, 0.96, 0.98, 0.97, 1.01, 1.02, 1.00, 1.04];
     const today = new Date();
-    
+
     for (let i = 9; i >= 0; i--) {
       const d = new Date(today);
       d.setDate(today.getDate() - i * 3);
@@ -1922,12 +1934,20 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
             {(() => {
               const freshCapital = Number(freshCapitalInput) || 0;
-              const newTotalVal = healthAssessment.totalVal + freshCapital;
-              const newIdealCrypto = newTotalVal * (healthAssessment.idealCryptoPct / 100);
-              const newIdealStock = newTotalVal * (healthAssessment.idealStockPct / 100);
+              // FIX-ALL #11: guard against possibly-undefined fields surfaced by
+              // strictNullChecks. The healthAssessment object always populates
+              // these in practice, but TS can't prove it from the inline type.
+              const totalVal = healthAssessment.totalVal ?? 0;
+              const cryptoValue = healthAssessment.cryptoValue ?? 0;
+              const stockValue = healthAssessment.stockValue ?? 0;
+              const idealCryptoPct = healthAssessment.idealCryptoPct ?? 0;
+              const idealStockPct = healthAssessment.idealStockPct ?? 0;
+              const newTotalVal = totalVal + freshCapital;
+              const newIdealCrypto = newTotalVal * (idealCryptoPct / 100);
+              const newIdealStock = newTotalVal * (idealStockPct / 100);
 
-              const cryptoDiff = newIdealCrypto - healthAssessment.cryptoValue;
-              const stockDiff = newIdealStock - healthAssessment.stockValue;
+              const cryptoDiff = newIdealCrypto - cryptoValue;
+              const stockDiff = newIdealStock - stockValue;
 
               return (
                 <>
@@ -1946,7 +1966,7 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
                     <div className="grid grid-cols-2 gap-4 text-xs border-b border-slate-900 pb-3">
                       <div>
                         <span className="text-slate-500 block font-bold">Riil Saat Ini:</span>
-                        <span className="font-mono text-slate-300 font-bold">{formatIDR(healthAssessment.stockValue)}</span>
+                        <span className="font-mono text-slate-300 font-bold">{formatIDR(stockValue)}</span>
                       </div>
                       <div>
                         <span className="text-slate-500 block font-bold">Target Komposisi:</span>
@@ -1987,7 +2007,7 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
                     <div className="grid grid-cols-2 gap-4 text-xs border-b border-slate-900 pb-3">
                       <div>
                         <span className="text-slate-500 block font-bold">Riil Saat Ini:</span>
-                        <span className="font-mono text-slate-300 font-bold">{formatIDR(healthAssessment.cryptoValue)}</span>
+                        <span className="font-mono text-slate-300 font-bold">{formatIDR(cryptoValue)}</span>
                       </div>
                       <div>
                         <span className="text-slate-500 block font-bold">Target Komposisi:</span>

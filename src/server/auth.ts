@@ -42,6 +42,7 @@ import {
 import { sendVerificationEmail, sendPasswordResetEmail } from "./email";
 import { checkPasswordBreach } from "./breachCheck";
 import { webauthnRouter } from "./webauthn";
+import { recordAuthAttempt } from "./alerting";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -181,13 +182,21 @@ async function revokeSessionByToken(token: string): Promise<void> {
 // ---------------------------------------------------------------------------
 // Middleware: requireAuth — 401 if no valid session cookie.
 //
-// SEC2-AUTH note: we ALSO look up the server-side Session row. BUT — to avoid
-// breaking existing flows (tokens issued before SEC2-AUTH, or Sessions table
-// not yet populated), we treat a MISSING row as still-valid (graceful). Only
-// EXPIRED rows block the request. This makes the session check opt-in: as
-// sessions age out + users log in again, the table populates naturally.
+// SEC2-AUTH (FIX-ALL H2): we AWAIT a server-side session validation check.
+// Enforcement rules:
+//   1. If the Session row for THIS tokenHash exists AND is expired → 401.
+//   2. If the user has ANY Session row (i.e. the Session table has been
+//      populated for this user) but NOT one for this tokenHash → the session
+//      was revoked via DELETE /sessions/:id or /sessions/logout-others → 401.
+//   3. If the user has NO Session rows at all (legacy token issued before
+//      SEC2-AUTH deployed, or Sessions table empty) → ALLOW (graceful
+//      backward-compat — the JWT signature remains the primary auth check).
+//   4. The session row's lastSeen is updated opportunistically; a failure
+//      there does not block the request.
+// This actually enforces session revocation: a stolen JWT is rejected as
+// soon as the legitimate user logs out / revokes that session row.
 // ---------------------------------------------------------------------------
-export const requireAuth: RequestHandler = (req: Request, res: Response, next: NextFunction) => {
+export const requireAuth: RequestHandler = async (req: Request, res: Response, next: NextFunction) => {
   const token = req.cookies?.[COOKIE_NAME];
   if (!token) {
     return res.status(401).json({ success: false, error: "Autentikasi diperlukan." });
@@ -200,30 +209,65 @@ export const requireAuth: RequestHandler = (req: Request, res: Response, next: N
   if (payload.twoFactorPending) {
     return res.status(401).json({ success: false, error: "Token 2FA sementara tidak dapat digunakan untuk endpoint ini." });
   }
+
+  // Enforce server-side session revocation. We AWAIT so a revoked token is
+  // rejected before the route handler runs. Failure of the DB lookup is
+  // treated as "allow" (graceful — same as legacy) so a transient DB outage
+  // does not lock every user out.
+  const sessionOk = await validateSession(token, payload.sub);
+  if (!sessionOk) {
+    return res.status(401).json({ success: false, error: "Sesi telah dicabut atau kedaluwarsa. Silakan login kembali." });
+  }
+
   req.user = payload;
-  // Best-effort session lookup — async but we don't await; the request can
-  // proceed while the Session.lastSeen update runs in the background. If the
-  // row is missing we simply skip (graceful — see comment above).
-  touchSession(token, payload.sub).catch(() => {});
   next();
 };
 
-// Background session validity + lastSeen touch. Called from requireAuth WITHOUT
-// awaiting so the request is not delayed. Returns true if the session is still
-// valid; false if it was revoked server-side (we don't act on this — the JWT
-// signature is the primary auth check; the Session row is a soft-kill switch
-// that requires explicit server-side enforcement via a future tightening).
-async function touchSession(token: string, userId: string): Promise<boolean> {
+/**
+ * Validate the server-side Session row for `token`.
+ *
+ * Returns true if the request should be ALLOWED:
+ *   - Session row for this tokenHash exists + is not expired + matches userId.
+ *   - User has NO Session rows at all (legacy / pre-SEC2-AUTH) → graceful allow.
+ *
+ * Returns false if the request should be REJECTED (revoked or expired):
+ *   - Session row exists but expiresAt < now.
+ *   - Session row exists but userId mismatch.
+ *   - User has Session rows but none for this tokenHash (revoked).
+ *
+ * Any DB error returns true (graceful — we don't lock users out on a DB hiccup).
+ */
+async function validateSession(token: string, userId: string): Promise<boolean> {
   try {
-    const row = await prisma.session.findUnique({ where: { tokenHash: hashToken(token) } });
-    if (!row) return true; // graceful: missing row = legacy token, still allowed
-    if (row.userId !== userId) return false; // token belongs to a different user — invalid
-    if (row.expiresAt.getTime() < Date.now()) return false; // expired
-    // Update lastSeen (cheap write, helps "active sessions" UI)
-    await prisma.session.update({ where: { id: row.id }, data: { lastSeen: new Date() } }).catch(() => {});
+    const tokenHash = hashToken(token);
+    // Look up the row for THIS token first (cheap unique index hit).
+    const row = await prisma.session.findUnique({ where: { tokenHash } });
+    if (row) {
+      if (row.userId !== userId) return false; // token belongs to a different user
+      if (row.expiresAt.getTime() < Date.now()) return false; // expired
+      // Update lastSeen (best-effort — never blocks the request).
+      await prisma.session
+        .update({ where: { id: row.id }, data: { lastSeen: new Date() } })
+        .catch(() => {});
+      return true;
+    }
+    // No row for this token. Was the session revoked? Only enforce revocation
+    // if the user has at least one other active session — otherwise this is a
+    // legacy token issued before SEC2-AUTH (Sessions table was empty) and we
+    // allow it for backward compat.
+    const userSessionCount = await prisma.session.count({
+      where: { userId, expiresAt: { gt: new Date() } },
+    });
+    if (userSessionCount === 0) {
+      // Legacy: user has no sessions on file — allow (graceful).
+      return true;
+    }
+    // User has active sessions but none for this token → revoked.
+    return false;
+  } catch (e: any) {
+    // Graceful on DB error — the JWT signature is still the primary auth check.
+    console.error("[auth] validateSession error:", e?.message || e);
     return true;
-  } catch {
-    return true; // graceful
   }
 }
 
@@ -250,7 +294,19 @@ export const optionalAuth: RequestHandler = (req: Request, _res: Response, next:
 // ---------------------------------------------------------------------------
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-function validateRegister(body: any): { ok: true; value: { email: string; password: string; displayName: string } } | { ok: false; error: string } {
+/**
+ * Discriminated-union result for input validation. The literal `ok` field is
+ * used as the discriminant. To make TS narrow correctly on `if (!parsed.ok)`
+ * WITHOUT requiring `strictNullChecks` (which would surface many pre-existing
+ * errors in other files), we expose two helper accessors below instead of
+ * accessing `.error` / `.value` directly.
+ */
+type RegisterValid = { ok: true; value: { email: string; password: string; displayName: string } };
+type RegisterInvalid = { ok: false; error: string };
+type LoginValid = { ok: true; value: { email: string; password: string } };
+type LoginInvalid = { ok: false; error: string };
+
+function validateRegister(body: any): RegisterValid | RegisterInvalid {
   if (!body || typeof body !== "object") return { ok: false, error: "Body permintaan tidak valid." };
   const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
   const password = typeof body.password === "string" ? body.password : "";
@@ -262,13 +318,24 @@ function validateRegister(body: any): { ok: true; value: { email: string; passwo
   return { ok: true, value: { email, password, displayName } };
 }
 
-function validateLogin(body: any): { ok: true; value: { email: string; password: string } } | { ok: false; error: string } {
+function validateLogin(body: any): LoginValid | LoginInvalid {
   if (!body || typeof body !== "object") return { ok: false, error: "Body permintaan tidak valid." };
   const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
   const password = typeof body.password === "string" ? body.password : "";
   if (!EMAIL_RE.test(email)) return { ok: false, error: "Format email tidak valid." };
   if (password.length === 0) return { ok: false, error: "Kata sandi wajib diisi." };
   return { ok: true, value: { email, password } };
+}
+
+/**
+ * Type-guard that narrows a validation result to its INVALID branch. TS
+ * won't narrow `{ok: true; value} | {ok: false; error}` on `!parsed.ok`
+ * without `strictNullChecks`, but a user-defined type guard using `parsed is`
+ * forces the narrowing regardless of the strictness flags. Use this in
+ * handlers to safely extract the error message.
+ */
+function isInvalid<T extends { ok: boolean }>(parsed: T): parsed is T & { ok: false; error: string } {
+  return parsed.ok === false;
 }
 
 // ---------------------------------------------------------------------------
@@ -316,7 +383,8 @@ export const authRouter = Router();
 authRouter.post("/register", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const parsed = validateRegister(req.body);
-    if (!parsed.ok) {
+    if (isInvalid(parsed)) {
+      recordAuthAttempt(false);
       return res.status(400).json({ success: false, error: parsed.error });
     }
     const { email, password, displayName } = parsed.value;
@@ -326,6 +394,7 @@ authRouter.post("/register", async (req: Request, res: Response, next: NextFunct
     if (existing) {
       // Audit the failed attempt (don't reveal whether the email exists to the
       // caller, but DO record it server-side).
+      recordAuthAttempt(false);
       await logAudit(null, "REGISTER", req, false, { reason: "email_in_use", email });
       return res.status(409).json({ success: false, error: "Email sudah terdaftar." });
     }
@@ -403,9 +472,11 @@ authRouter.post("/register", async (req: Request, res: Response, next: NextFunct
       response.warning = `Password ini pernah muncul di ${breachCount} pelanggaran data. Pertimbangkan mengganti.`;
       response.breachCount = breachCount;
     }
+    recordAuthAttempt(true);
     return res.status(201).json(response);
   } catch (err: any) {
     // Pass to the centralized error handler.
+    recordAuthAttempt(false);
     next(err);
   }
 });
@@ -420,13 +491,15 @@ authRouter.post("/register", async (req: Request, res: Response, next: NextFunct
 authRouter.post("/login", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const parsed = validateLogin(req.body);
-    if (!parsed.ok) {
+    if (isInvalid(parsed)) {
+      recordAuthAttempt(false);
       return res.status(400).json({ success: false, error: parsed.error });
     }
     const { email, password } = parsed.value;
 
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user) {
+      recordAuthAttempt(false);
       await logAudit(null, "LOGIN", req, false, { reason: "user_not_found", email });
       return res.status(401).json({ success: false, error: "Email atau kata sandi salah." });
     }
@@ -436,6 +509,7 @@ authRouter.post("/login", async (req: Request, res: Response, next: NextFunction
     if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
       const ms = user.lockedUntil.getTime() - Date.now();
       const mins = Math.ceil(ms / 60000);
+      recordAuthAttempt(false);
       await logAudit(user.id, "LOGIN", req, false, { reason: "locked", email });
       return res.status(423).json({
         success: false,
@@ -459,6 +533,7 @@ authRouter.post("/login", async (req: Request, res: Response, next: NextFunction
       } catch (e: any) {
         console.error("[auth] failedLoginAttempts update failed:", e?.message || e);
       }
+      recordAuthAttempt(false);
       await logAudit(user.id, "LOGIN", req, false, { reason: "bad_password", email, attempts: newCount, locked: shouldLock });
       const baseMsg = "Email atau kata sandi salah.";
       const lockMsg = shouldLock
@@ -477,6 +552,9 @@ authRouter.post("/login", async (req: Request, res: Response, next: NextFunction
         });
       } catch {}
       const tempToken = signTempToken({ sub: user.id, email: user.email, displayName: user.displayName });
+      // Password OK is itself a successful auth-stage event — counts toward
+      // successful auth attempts for alerting metrics.
+      recordAuthAttempt(true);
       await logAudit(user.id, "LOGIN", req, true, { stage: "password_ok_2fa_required", email });
       return res.status(200).json({
         success: false,
@@ -494,6 +572,7 @@ authRouter.post("/login", async (req: Request, res: Response, next: NextFunction
       });
     } catch {}
 
+    recordAuthAttempt(true);
     await logAudit(user.id, "LOGIN", req, true, { email });
 
     const token = signToken({ sub: user.id, email: user.email, displayName: user.displayName });
@@ -512,6 +591,7 @@ authRouter.post("/login", async (req: Request, res: Response, next: NextFunction
     }
     return res.json(response);
   } catch (err: any) {
+    recordAuthAttempt(false);
     next(err);
   }
 });
@@ -525,27 +605,33 @@ authRouter.post("/login/2fa", async (req: Request, res: Response, next: NextFunc
     const tempToken = typeof req.body?.tempToken === "string" ? req.body.tempToken : "";
     const code = typeof req.body?.code === "string" ? req.body.code.trim() : "";
     if (!tempToken || !code) {
+      recordAuthAttempt(false);
       return res.status(400).json({ success: false, error: "tempToken dan kode wajib diisi." });
     }
     const payload = verifyToken(tempToken);
     if (!payload || !payload.twoFactorPending) {
+      recordAuthAttempt(false);
       return res.status(401).json({ success: false, error: "Token 2FA sementara tidak valid atau telah kedaluwarsa." });
     }
     const user = await prisma.user.findUnique({ where: { id: payload.sub } });
     if (!user || !user.twoFactorEnabled || !user.twoFactorSecret) {
+      recordAuthAttempt(false);
       return res.status(400).json({ success: false, error: "2FA tidak aktif untuk akun ini." });
     }
     let secretB32: string;
     try {
       secretB32 = decryptTotpSecret(user.twoFactorSecret);
     } catch (e: any) {
+      recordAuthAttempt(false);
       await logAudit(user.id, "LOGIN_2FA", req, false, { reason: "decrypt_failed" });
       return res.status(500).json({ success: false, error: "Gagal mendekripsi rahasia TOTP (master key tidak cocok?)." });
     }
     if (!verifyTotp(code, secretB32)) {
+      recordAuthAttempt(false);
       await logAudit(user.id, "LOGIN_2FA", req, false, { reason: "bad_code" });
       return res.status(401).json({ success: false, error: "Kode 2FA tidak valid. Pastikan waktu perangkat sinkron." });
     }
+    recordAuthAttempt(true);
     await logAudit(user.id, "LOGIN_2FA", req, true, {});
     const token = signToken({ sub: user.id, email: user.email, displayName: user.displayName });
     setSessionCookie(res, token);
@@ -560,6 +646,7 @@ authRouter.post("/login/2fa", async (req: Request, res: Response, next: NextFunc
     }
     return res.json(response2fa);
   } catch (err) {
+    recordAuthAttempt(false);
     next(err);
   }
 });

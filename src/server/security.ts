@@ -31,6 +31,7 @@ import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import cors from "cors";
 import cookieParser from "cookie-parser";
+import { recordRateLimitHit } from "./alerting";
 
 // ---------------------------------------------------------------------------
 // 1. General rate limiter — 100 requests per 15 min per IP.
@@ -45,9 +46,16 @@ const generalLimiter = rateLimit({
   max: 500, // 500 req / 15 min per IP — generous (dashboard polls every 2-10s)
   standardHeaders: true,
   legacyHeaders: false,
-  // Skip rate-limiting for the SPA root + static assets so the page itself can
-  // always load. API requests are still subject to the limit.
+  // FIX-ALL H4: record a rate-limit-hit metric whenever a request is throttled
+  // (drives the `rate_limit_abuse` alert rule).
+  handler: (_req: Request, _res: Response, _next: NextFunction) => {
+    try { recordRateLimitHit(); } catch {}
+    _res.status(429).json({ success: false, error: "Terlalu banyak permintaan. Coba lagi dalam beberapa menit." });
+  },
+  // FIX-ALL M8: skip rate limiting entirely when running the vitest suite so
+  // integration tests against the running dev server are not throttled.
   skip: (req: Request) => {
+    if (process.env.NODE_ENV === "test") return true;
     const url = req.path || req.url || "";
     // Don't limit the SPA HTML / Vite HMR / static assets.
     if (url === "/" || url.startsWith("/@") || url.startsWith("/src/") || url.startsWith("/node_modules/")) {
@@ -67,6 +75,14 @@ export const authLimiter = rateLimit({
   max: 5, // 5 auth attempts per minute per IP
   standardHeaders: true,
   legacyHeaders: false,
+  // FIX-ALL H4: record a rate-limit-hit metric whenever an auth request is throttled.
+  handler: (_req: Request, _res: Response, _next: NextFunction) => {
+    try { recordRateLimitHit(); } catch {}
+    _res.status(429).json({ success: false, error: "Terlalu banyak percobaan autentikasi. Coba lagi dalam 1 menit." });
+  },
+  // FIX-ALL M8: skip rate limiting entirely in vitest runs so auth integration
+  // tests (which fire >5 requests to /api/auth/* within 60s) don't all 429.
+  skip: () => process.env.NODE_ENV === "test",
   message: { success: false, error: "Terlalu banyak percobaan autentikasi. Coba lagi dalam 1 menit." },
 });
 

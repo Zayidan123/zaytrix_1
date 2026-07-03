@@ -7,8 +7,20 @@ import { prisma } from "./db";
 import crypto from "crypto";
 
 // ─── Field Encryption (AES-256-GCM) ─────────────────────────────────
-// Derive a 32-byte key from ENCRYPTION_KEY using scryptSync (same pattern as apiKeys.ts)
-const ENCRYPTION_KEY_RAW = process.env.ENCRYPTION_KEY || "ZAYTRIX_DEV_ENCRYPTION_KEY_32BYTES_CHANGE_ME_2024_k9j2";
+// FIX-ALL M5: refuse to operate with a missing/weak ENCRYPTION_KEY — same
+// pattern as apiKeys.ts / totp.ts. Previously this module silently fell back
+// to a hardcoded public string, which meant PII field encryption was a no-op
+// for misconfigured deployments. Now we throw at module-load time so the
+// process fails to boot with a clear error instead of silently weakening PII
+// encryption.
+const ENCRYPTION_KEY_RAW = process.env.ENCRYPTION_KEY;
+if (!ENCRYPTION_KEY_RAW || ENCRYPTION_KEY_RAW.length < 16) {
+  throw new Error(
+    "[dataRetention] ENCRYPTION_KEY is missing or too short (<16 chars). " +
+      "Refusing to derive PII field-encryption key. Set a strong ENCRYPTION_KEY env var " +
+      "(same value used by apiKeys.ts / totp.ts)."
+  );
+}
 const FIELD_KEY = crypto.scryptSync(ENCRYPTION_KEY_RAW, "zaytrix-field-salt", 32);
 
 export function encryptField(plaintext: string): string {

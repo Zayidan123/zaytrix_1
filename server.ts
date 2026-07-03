@@ -15,7 +15,7 @@ import { authRouter, requireAuth, optionalAuth } from "./src/server/auth";
 import { logAudit } from "./src/server/audit";
 import { apiKeysRouter } from "./src/server/apiKeys";
 // SEC2-INFRA: monitoring (Sentry)
-import { initMonitoring, captureError } from "./src/server/monitoring";
+import { initMonitoring, captureError, sentryErrorHandler } from "./src/server/monitoring";
 // SEC3: WAF + data retention
 import { wafMiddleware, strictBotCheck } from "./src/server/waf";
 import { startDataRetentionJob, exportUserData, deleteAllUserData } from "./src/server/dataRetention";
@@ -41,10 +41,36 @@ applySecurityMiddleware(app);
 // Runs AFTER security middleware (helmet/cors/rate-limit) but BEFORE routes.
 app.use("/api", wafMiddleware);
 
+// FIX-ALL H4: record per-request metrics (count / errors / latency) for the
+// alerting subsystem. Mounted AFTER security + WAF so:
+//   - WAF-blocked (403) + rate-limited (429) responses still get recorded
+//     (their res "finish" event fires just like any other response).
+//   - Vite HMR / static asset requests that bypass /api/* are NOT measured
+//     (keeps the metrics focused on real API traffic).
+import { requestMetricsMiddleware } from "./src/server/alerting";
+app.use("/api", requestMetricsMiddleware);
+
 const PORT = 3000;
 
-// Centralised in-memory cache for Gemini prompt/documents output caching
+// Centralised in-memory cache for Gemini prompt/documents output caching.
+// FIX-ALL M7: cap at 500 entries with LRU-style eviction (delete oldest entry
+// when full). The Map preserves insertion order, so Map.keys().next().value
+// returns the oldest entry — deleting it approximates FIFO/LRU eviction
+// without an external dependency. Each Gemini call produces a unique SHA-256
+// cache key (varies with prompt content), so without this cap the Map would
+// grow unboundedly in long-running prod deployments and cause OOM.
+const GEMINI_CACHE_MAX_ENTRIES = 500;
 const geminiCache = new Map<string, string>();
+
+function geminiCacheSet(key: string, value: string): void {
+  // Evict the oldest entry if we're at capacity. We do this BEFORE inserting
+  // so the cache never transiently exceeds the cap.
+  if (geminiCache.size >= GEMINI_CACHE_MAX_ENTRIES) {
+    const oldestKey = geminiCache.keys().next().value;
+    if (oldestKey !== undefined) geminiCache.delete(oldestKey);
+  }
+  geminiCacheSet(key, value);
+}
 
 function getCacheKey(content: string): string {
   return crypto.createHash("sha256").update(content).digest("hex");
@@ -1685,7 +1711,7 @@ app.post("/api/gemini/analyze", async (req, res) => {
     });
 
     const outputText = response.text || "";
-    geminiCache.set(cacheKey, outputText);
+    geminiCacheSet(cacheKey, outputText);
     res.json({ analysis: outputText });
   } catch (err: any) {
     console.log("Gemini Error info (using local fallback report):", err.message || err);
@@ -1828,7 +1854,7 @@ app.post("/api/gemini/news-sentiment", async (req, res) => {
     });
 
     const outputText = response.text || "";
-    geminiCache.set(cacheKey, outputText);
+    geminiCacheSet(cacheKey, outputText);
     res.json(JSON.parse(outputText));
   } catch (err: any) {
     console.log("[News Sentiment Error] Using local offline fallback:", err.message || err);
@@ -2009,7 +2035,7 @@ Tuliskan opini Anda secara lugas, dingin, berwibawa, saksama, obyektif, dalam ba
     });
 
     const outputText = response.text || "";
-    geminiCache.set(cacheKey, outputText);
+    geminiCacheSet(cacheKey, outputText);
     res.json({ analysis: outputText });
   } catch (err: any) {
     console.log("Gemini Onchain Error info (using local fallback report):", err.message || err);
@@ -2103,7 +2129,7 @@ Sajikan secara dingin, logis, obyektif, bernilai tinggi.
     });
 
     const outputText = response.text || "";
-    geminiCache.set(cacheKey, outputText);
+    geminiCacheSet(cacheKey, outputText);
     res.json({ analysis: outputText });
   } catch (err: any) {
     console.log("Gemini PDF Error info (using local PDF report template):", err.message || err);
@@ -2410,12 +2436,21 @@ function recordGeneratedSignal(
   }
 
   // Decimals formatting
+  // FIX-ALL L5: use toFixed(8) for low-priced assets (price < 1.0, e.g.
+  // SHIB/PEPE) so tpPrice/slPrice are not rounded to 0. Previously toFixed(4)
+  // rounded 0.00001234 → 0.0000 → 0, which caused updatePendingSignals to
+  // immediately mark these as "TARGET HIT (TP)" because currentPrice >= 0 is
+  // always true. With 8 decimals, 0.00001234 → 0.00001234 (preserved).
   if (price > 100) {
     tpPrice = parseFloat(tpPrice.toFixed(2));
     slPrice = parseFloat(slPrice.toFixed(2));
-  } else {
+  } else if (price >= 1.0) {
     tpPrice = parseFloat(tpPrice.toFixed(4));
     slPrice = parseFloat(slPrice.toFixed(4));
+  } else {
+    // Low-priced asset (SHIB, PEPE, etc.) — preserve 8 decimals.
+    tpPrice = parseFloat(tpPrice.toFixed(8));
+    slPrice = parseFloat(slPrice.toFixed(8));
   }
 
   const newSignal: SignalHistoryEntry = {
@@ -4219,7 +4254,7 @@ app.post("/api/gemini/trading-signals/analyze", async (req, res) => {
       signalDetails: createdSignal
     };
 
-    geminiCache.set(cacheKey, JSON.stringify(resultPayload));
+    geminiCacheSet(cacheKey, JSON.stringify(resultPayload));
     return res.json(resultPayload);
 
   } catch (err: any) {
@@ -4294,7 +4329,7 @@ Scraper jaringan onchain kami yang menelusuri data ledger resmi (*${onchainMetri
       errorReason: err.message || String(err)
     };
 
-    geminiCache.set(cacheKey, JSON.stringify(resultPayload));
+    geminiCacheSet(cacheKey, JSON.stringify(resultPayload));
     return res.json(resultPayload);
   }
 });
@@ -5264,9 +5299,27 @@ try {
 // 404 for unmatched /api/* — must come BEFORE the SPA catch-all so unknown API
 // calls get JSON instead of the SPA HTML.
 // SEC3: Health check + metrics endpoint (for monitoring/uptime checks)
-import { startAlerting, getHealthMetrics, recordRequest } from "./src/server/alerting";
+// FIX-ALL L6: the public /api/health endpoint leaks sensitive operational
+// metrics (auth_failures, rate_limit_hits, latency profile, alert rule names).
+// We now expose only uptime + a coarse status from the unauthenticated
+// endpoint (enough for uptime checks / load balancer probes). Detailed
+// metrics require authentication via /api/health/detailed (requireAuth).
+import { startAlerting, getHealthMetrics } from "./src/server/alerting";
 startAlerting();
-app.get("/api/health", (req, res) => {
+app.get("/api/health", (_req, res) => {
+  const metrics = getHealthMetrics();
+  res.json({
+    success: true,
+    status: "healthy",
+    timestamp: new Date().toISOString(),
+    // Public subset — safe to expose to anyone (uptime monitors, LB probes).
+    uptime_ms: metrics.uptime_ms,
+  });
+});
+
+// Detailed metrics endpoint — requires authentication so an anonymous attacker
+// cannot probe auth_failures / rate_limit_hits / alert rule names for recon.
+app.get("/api/health/detailed", requireAuth, (_req, res) => {
   res.json({ success: true, status: "healthy", timestamp: new Date().toISOString(), metrics: getHealthMetrics() });
 });
 
@@ -5315,6 +5368,11 @@ async function startServer() {
   // SEC-BACKEND: FINAL error handler — must be registered AFTER every route
   // and AFTER the SPA catch-all so it intercepts errors thrown anywhere in the
   // pipeline. It never leaks err.message to the client in production.
+  // FIX-ALL M3: Sentry's Express error handler is mounted FIRST so it can
+  // capture the error (with request context) before sanitizeError sends the
+  // generic response. If SENTRY_DSN is unset, sentryErrorHandler() returns a
+  // no-op pass-through, so this is always safe.
+  app.use(sentryErrorHandler(app));
   app.use(sanitizeError);
 
   app.listen(PORT, "0.0.0.0", () => {

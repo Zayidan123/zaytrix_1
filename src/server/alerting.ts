@@ -10,6 +10,8 @@
 // - Server health check fails
 // - Database connection errors
 
+import type { Request, Response, NextFunction } from "express";
+
 interface AlertRule {
   name: string;
   description: string;
@@ -157,4 +159,28 @@ export function getHealthMetrics() {
     rate_limit_hits: metrics.rateLimits.hits,
     alert_rules: ALERT_RULES.map(r => ({ name: r.name, severity: r.severity, description: r.description })),
   };
+}
+
+/**
+ * FIX-ALL H4: Per-request metrics middleware.
+ *
+ * Mount AFTER security middleware + WAF, BEFORE the route handlers you want to
+ * measure. Records:
+ *   - request count (+1 per finished response)
+ *   - error count (+1 if status >= 500)
+ *   - latency (response time in ms, pushed into a 1000-sample ring buffer)
+ *
+ * The `res.on("finish")` listener fires after the response is sent to the
+ * client, so the recorded status + latency reflect what the client actually
+ * saw. 4xx responses (client errors, WAF blocks, rate-limit 429s) do NOT
+ * count as server errors — only 5xx does.
+ */
+export function requestMetricsMiddleware(req: Request, res: Response, next: NextFunction): void {
+  const start = Date.now();
+  res.on("finish", () => {
+    const latencyMs = Date.now() - start;
+    const success = res.statusCode < 500;
+    recordRequest(success, latencyMs);
+  });
+  next();
 }
