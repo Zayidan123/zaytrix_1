@@ -5296,6 +5296,42 @@ try {
   console.log("[liveData] router not yet available:", e?.message || e);
 }
 
+// ─── AI Router (9router primary + Gemini fallback) ────────────────────
+try {
+  const { callAI, getAIProviderHealth, test9RouterConnection } = await import("./src/server/aiRouter");
+
+  // GET /api/ai/health — AI provider health status (public, for monitoring)
+  app.get("/api/ai/health", (req, res) => {
+    res.json({ success: true, health: getAIProviderHealth() });
+  });
+
+  // POST /api/ai/test — test 9router connectivity (requireAuth)
+  app.post("/api/ai/test", requireAuth, async (req: any, res) => {
+    const result = await test9RouterConnection();
+    res.json({ success: result.success, latencyMs: result.latencyMs, error: result.error });
+  });
+
+  // POST /api/ai/chat — generic AI chat with automatic fallback
+  app.post("/api/ai/chat", requireAuth, async (req: any, res) => {
+    const { prompt, systemPrompt, maxTokens, temperature } = req.body;
+    if (!prompt) return res.status(400).json({ success: false, error: "Prompt wajib diisi." });
+
+    const result = await callAI({
+      prompt,
+      systemPrompt,
+      maxTokens,
+      temperature,
+      userId: req.user?.sub,
+    });
+
+    res.json(result);
+  });
+
+  console.log("[aiRouter] 9router + Gemini fallback endpoints mounted.");
+} catch (e: any) {
+  console.log("[aiRouter] not available:", e?.message || e);
+}
+
 // 404 for unmatched /api/* — must come BEFORE the SPA catch-all so unknown API
 // calls get JSON instead of the SPA HTML.
 // SEC3: Health check + metrics endpoint (for monitoring/uptime checks)
