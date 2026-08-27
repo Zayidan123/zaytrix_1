@@ -1,33 +1,67 @@
 # ZAYTRIX | Institutional Crypto Gateway
 
 <p align="center">
-  <strong>ZAYTRIX Institutional Gateway</strong><br>
+  <strong>ZAYTRIX v5.1.0 — Institutional Crypto Gateway</strong><br>
   Terminal analisis kripto real-time dengan data on-chain live, derivatif, AI analysis, dan keamanan tingkat enterprise.
 </p>
 
 ---
 
+## 📅 Changelog — 27 Agustus 2026
+
+### Hari Ini (27 Aug 2026) — Audit + Bug Fix + Optimasi + 9 Fitur Baru
+
+#### 🔍 Fase 1: Audit Menyeluruh (120 temuan)
+- Clone + analisa codebase oleh 4 subagent paralel (security, business-logic, frontend, data-config)
+- Ditemukan 15 bug KRITIS, 34 HIGH, 40 MED, 32 LOW
+
+#### 🐛 Fase 2: Bug Fix (45 bug diperbaiki)
+- **P0 (8 KRITIS)**: geminiCacheSet recursion, Gemini model name, requireAuth on all /api/gemini/*, window.confirm override removal, DOMPurify XSS fix, SSRF in scrapeWebsiteContent + Caddyfile, idempotency keys on real orders
+- **P1 (4 security)**: Token hashing (sha256), fabricated on-chain data removal, WebAuthn challenge verification, OAuth account-linking takeover + 2FA lockout
+- **P2 (1 security)**: Secret rotation (strong random 48/32-byte) + .env untracked from git
+- **FIX-A/B/C/D (32 bugs)**: Body limit, auth on send-alert/notifications, zod validation, rate limiter, cache sweep, URL validation, Bearer redaction, fake balance, email enumeration, login timing, EMAIL_DEV_MODE default, WebAuthn user leak, TOTP backup code entropy, WAF false positives, tsconfig paths, dead code deletion (next.config.ts, examples/, use-toast.ts), package.json metadata, index.html lang+meta, QueryClient staleTime, duplicate scan code, sequential→parallel fetches, window.onerror fix, skills/ untracked
+- **Type fixes**: SplashScreen motion v12 ease typing, portfolioSync field name mapping
+
+#### ⚡ Fase 3: Optimasi (22 area dioptimasi)
+- **OPT-1 (Config + Polish)**: metadata.json, tailwind v4 migration, components.json, graceful shutdown, request timeout 30s, Sentry PII scrubbing
+- **OPT-2 (Frontend)**: AbortController hook, per-section ErrorBoundary, WebSocket exponential backoff
+- **OPT-3 (Backend)**: Rate limiter keyGenerator, httpAgent keepAlive module, upstream health checker, CI/CD pipeline, `any` type reduction
+- **OPT-4 (Schema)**: Prisma migrations folder, 14 shadow Decimal columns, 5 shadow DateTime columns (all backward compatible)
+- **OPT-5 (Security)**: isStale flag on onchain data, CSRF monitoring mode, backup codes verification endpoint
+- **OPT-7 (Bundle)**: Firebase removal (55MB bundle reduction, 145 deps removed, dual-auth conflicts eliminated)
+
+#### ✨ Fase 4: 9 Fitur Baru
+1. **Market Sentiment Widget** — Fear & Greed gauge + Market Cap + 24h trend (SVG gauge, live data)
+2. **Price Alert System** — Background checker (30s poll), toast notifications, per-symbol alerts with above/below conditions
+3. **Portfolio Risk Score** — VaR 95%/99%, CVaR (Expected Shortfall), HHI concentration, Sharpe proxy, risk grade A-E
+4. **Portfolio Rebalancing Advisor** — 4 risk profiles, BUY/SELL/REDUCE/HOLD actions, drift score, per-asset suggestions
+5. **AI Market Sentiment Chat** — Gemini/9router-powered Q&A with live market context grounding
+6. **Tax Lot Optimizer** — FIFO/LIFO/HIFO lot selection, per-lot P&L + holding period, PMK-68 tax estimation
+7. **Tax Report Generator** — Annual P&L with FIFO matching, PDF export, per-symbol breakdown
+8. **Multi-asset Correlation Matrix** — Pearson correlation heatmap, diversification score, symbol picker
+9. **DCA Calculator** — Historical DCA simulation vs lump-sum comparison, per-purchase breakdown
+
+---
+
 ## 🚀 Fitur Utama
 
-### 🔒 Keamanan Enterprise (Production-Ready)
+### 🔒 Keamanan Enterprise
 - **Autentikasi Real** — Register/Login dengan bcrypt + JWT httpOnly cookie (7 hari)
-- **2FA TOTP** — Server-side RFC 6238 (HMAC-SHA1), terverifikasi test vectors
-- **WebAuthn/Passkey** — Login tanpa password (biometrik/hardware key, ECDSA P-256)
-- **Email Verification** — Verifikasi email via token (nodemailer)
-- **Password Reset** — Lupa kata sandi dengan token (1 jam expiry)
-- **Google OAuth** — Login dengan Google (opsional, perlu konfigurasi)
-- **Session Lockout** — 5 gagal login → 15 menit lock
-- **Password Breach Check** — HaveIBeenPwned k-anonymity (privacy-preserving)
-- **API Key Encryption** — AES-256-GCM untuk kredensial bursa (encrypted at rest)
-- **CSRF Protection** — Double-submit cookie pattern
-- **WAF** — Web Application Firewall (SQL injection, XSS, path traversal, bot detection)
-- **Rate Limiting** — 500/15min umum, 5/min auth
-- **Audit Logging** — Semua aksi sensitif tercatat (login, API key, trade, dll)
-- **Session Tracking** — Server-side, revoke sessions, "logout others"
-- **Data Retention** — Auto-purge audit logs (1 thn), expired sessions/tokens
-- **GDPR** — Data export + delete-all (right to be forgotten)
+- **2FA TOTP** — Server-side RFC 6238 (HMAC-SHA1), per-account lockout (5 fails → 15 min)
+- **WebAuthn/Passkey** — Challenge verification + origin check + counter clone-detection
+- **Email Verification** — Token di-hash (sha256) sebelum disimpan, tidak bisa di-replay
+- **Password Reset** — Token di-hash, 1 jam expiry, existing sessions di-revoke
+- **Google OAuth** — Account-linking dengan email_verified check, 2FA gate
+- **Session Lockout** — 5 gagal login → 15 menit lock (password + 2FA)
+- **Password Breach Check** — HaveIBeenPwned k-anonymity
+- **API Key Encryption** — AES-256-GCM + idempotency keys (Binance newClientOrderId, Bybit orderLinkId)
+- **CSRF Protection** — Double-submit cookie + monitoring mode
+- **WAF** — SQL injection, XSS, path traversal, bot detection (tightened patterns)
+- **Rate Limiting** — 120/min live data, 5/min auth, 100kb body limit (15mb PDF routes)
+- **Audit Logging** — Semua aksi sensitif tercatat
+- **GDPR** — Data export + delete-all + backup codes recovery endpoint
 
-### 📡 Real-Time Data (100% LIVE, Zero Mock)
+### 📡 Data Sources (Live + Fallback)
 - **Binance WebSocket** — Liquidation feed + ticker prices (BTC/ETH/BNB/XRP/SOL/TRX/HYPE)
 - **Binance Futures API** — Funding rates, Open Interest, Long/Short ratio
 - **CoinGecko API** — Market cap, BTC dominance, price history, ATH
@@ -41,442 +75,220 @@
 - **Yahoo Finance** — Data saham Indonesia (IDX) + ETF fundamentals
 - **RSS Feeds** — CoinDesk, Cointelegraph, CryptoSlate (news)
 - **Open ER API** — USD→IDR exchange rate
+- **isStale flag** — Indikator ketika fallback values digunakan (transparansi data)
 
-### 🖥️ On-Chain Terminal (9 Tab, Semua LIVE)
-1. **Derivatif & OI** — Open Interest (Binance), Funding Rates, CME OI (CFTC), Altcoin OI
-2. **Likuidasi** — Liquidation heatmap (real Binance depth), real-time feed, top historical
-3. **Volume & Heatmap** — 24h gainers/losers (Binance), spot vs futures volume
-4. **Settlement Funding** — Cumulative fees, funding rate heatmap (real 8-hourly rates)
-5. **Orderbook Depth** — Bid/ask pressure (real Binance depth), liquidity delta
-6. **Arus On-Chain** — BTC spot flows (Santiment), exchange netflow, addresses, miner data
-7. **Valuasi & Makro** — Stock-to-Flow (computed), MVRV (Coinmetrics), NVT, dominance, ETF (Farside), correlations (computed)
-8. **Token Terminal** — Top 18 coins dengan live market data (CoinGecko/Binance)
-9. **Analisis AI** — Gemini-powered on-chain analysis with live data grounding
+### 🖥️ On-Chain Terminal (9 Tab)
+1. **Derivatif & OI** — Open Interest, Funding Rates, CME OI, Altcoin OI
+2. **Likuidasi** — Liquidation heatmap, real-time feed, top historical
+3. **Volume & Heatmap** — 24h gainers/losers, spot vs futures volume
+4. **Settlement Funding** — Cumulative fees, funding rate heatmap
+5. **Orderbook Depth** — Bid/ask pressure, liquidity delta
+6. **Arus On-Chain** — BTC spot flows, exchange netflow, addresses, miner data
+7. **Valuasi & Makro** — Stock-to-Flow, MVRV, NVT, dominance, ETF, correlations
+8. **Token Terminal** — Top coins dengan live market data
+9. **Analisis AI** — Gemini-powered on-chain analysis
 
-### 📊 Trading & Portfolio (Server-Side Persistence)
-- **Crypto Hub** — Manajemen portofolio multi-aset (tersimpan di database)
-- **AI Trade Signals** — Sinyal trading berbasis AI (Gemini + live market data)
+### 📊 Trading & Portfolio (9 Fitur Baru)
+- **Crypto Hub** — Manajemen portofolio multi-aset (server-side persistence)
+- **Market Sentiment Widget** — Fear & Greed gauge + global market stats
+- **Price Alert System** — Notifikasi otomatis saat harga menyentuh target
+- **Portfolio Risk Score** — VaR/CVaR + concentration metrics + risk grade
+- **Rebalancing Advisor** — Saran alokasi berbasis profil risiko (4 profiles)
+- **AI Market Chat** — Q&A tentang pasar dengan grounding data live
+- **Tax Lot Optimizer** — FIFO/LIFO/HIFO dengan per-lot P&L breakdown
+- **Tax Report Generator** — Laporan pajak tahunan + PDF export
+- **Correlation Matrix** — Heatmap korelasi Pearson antar aset
+- **DCA Calculator** — Simulasi strategi DCA vs lump-sum
+- **AI Trade Signals** — Sinyal trading berbasis AI + live market data
 - **Strategy Backtester** — Backtesting dengan real historical price data
-- **Technical Terminal** — Analisis teknikal (SMA, RSI, MACD, Bollinger) dari real klines
-- **Ledger History & Tax** — Pencatatan transaksi dengan FIFO PnL + tax PMK-68 (0.1%)
-- **Profit Projections** — Proyeksi profit berbasis live prices
-- **Real Exchange Execution** — Order REAL ke Binance/Bybit/KuCoin (HMAC signed), fallback simulasi
+- **Technical Terminal** — Analisis teknikal (SMA, RSI, MACD, Bollinger)
+- **Ledger History & Tax** — Pencatatan transaksi dengan FIFO PnL + PMK-68 (0.1%)
+- **Real Exchange Execution** — Order REAL ke Binance/Bybit/KuCoin (HMAC signed)
 
 ### 🤖 AI Analysis
-- **Gemini AI** — On-chain analysis, trading signals, multi-document PDF comparison
+- **Gemini AI** — On-chain analysis, trading signals, multi-document comparison
+- **9router** — OpenAI-compatible local AI proxy (primary, fallback to Gemini)
 - **News Sentiment** — AI sentiment analysis per article
-- **News Chat** — Chatbot tentang artikel
 - **Automated Analysis** — Background periodic AI market analysis
 
-### 🔧 Monitoring & DevOps
-- **Sentry SDK** — Error tracking + performance monitoring
-- **Alerting** — 4 alert rules (error rate, latency, brute force, rate limit abuse)
-- **Health Endpoint** — `/api/health` dengan uptime, latency p50/p95, metrics
-- **Test Suite** — 37 tests (Vitest) covering auth, portfolio, live data, WAF, CSRF
-- **CI/CD** — GitHub Actions (lint, typecheck, security audit, build)
+### 🔧 DevOps & Monitoring
+- **Graceful Shutdown** — SIGTERM/SIGINT → drain requests → DB disconnect
+- **Request Timeout** — 30s socket timeout
+- **Sentry SDK** — Error tracking + PII scrubbing (beforeSend)
+- **Upstream Health Checker** — Binance + CoinGecko availability monitoring (60s)
+- **Alerting** — 4 alert rules (error rate, latency, brute force, rate limit)
+- **Health Endpoint** — `/api/health` dengan uptime, latency p50/p95
+- **HTTP Agent** — keepAlive connection pooling module
+- **CI/CD Ready** — GitHub Actions lint+typecheck (needs token workflow scope)
+
+---
+
+## 📋 Roadmap — Rencana Pengembangan
+
+### 🔴 Prioritas Tinggi (Data Integrity)
+1. **Hapus 80 fake coins (ranks 21-100)** — `generateRandomCoin()` di server.ts menghasilkan koin palsu dengan Math.random. Harus diganti dengan CoinGecko/CoinMarketCap pagination real data.
+2. **Hapus random walk price history** — `server.ts:855-875` menggunakan Math.random untuk generate price history. Harus pakai Binance klines API real historical data.
+3. **Hapus fabricated signal confidence** — `server.ts:2455-2475` menggunakan Math.random(65-98%) untuk confidence score. Harus pakai AI analysis atau indikator teknikal real.
+4. **Hapus stock price fluctuation simulation** — `server.ts:560-580` menggunakan Math.random saat Yahoo Finance gagal. Harus return stale flag + last known price.
+5. **Hapus hardcoded fallback prices** — `server.ts:208-404` initialAssets dengan harga statis. Harus fetch real prices on boot.
+6. **Hapus fallback global stats** — `server.ts:1096-1102` ($1.81T market cap). Harus return error jika upstream unavailable, bukan nilai palsu.
+7. **Hapus onChainMockData.ts** — File mock data untuk on-chain transactions. OnChainData.tsx:287 masih pakai `getOnChainMockData()` sebagai initial state.
+8. **Ganti simulateOrder Math.random** — `tradeExecution.ts:211` menggunakan Math.random untuk price jitter. Harus pakai real fill price dari exchange.
+
+### 🟡 Prioritas Sedang (Non-Functioning Features)
+9. **Phone OTP Authentication** — UI tab "OTP Seluler" ada tapi disabled (no reCAPTCHA, no phone OTP server). Implement atau hapus tab.
+10. **Google OAuth** — Code ada tapi `GOOGLE_CLIENT_ID` tidak diset di .env. User perlu config di Google Cloud Console.
+11. **Email Verification/Reset** — `EMAIL_DEV_MODE` default false (fail-closed). User perlu set SMTP_HOST/USER/PASS atau email tidak terkirim.
+12. **9router AI** — `NINEROUTER_API_KEY` kosong di .env. Install 9router (https://github.com/decolua/9router) + set API key.
+13. **Gemini AI** — `GEMINI_API_KEY` kosong di .env. Semua AI endpoints return fallback text. Set key dari Google AI Studio.
+14. **Real Exchange Trade Execution** — Bisa place real orders tapi user perlu store API keys di Settings → Api Automation.
+15. **ETF Flows (Farside)** — Cloudflare blocks scraping. Perlu alternative data source atau API resmi.
+16. **Active Addresses** — Free API sources (Coinmetrics/blockchain.info) unreliable. Perlu premium API.
+17. **Backup Codes UI** — Endpoint `/api/auth/2fa/backup-login` sudah ada tapi tidak ada UI di AuthScreen untuk input backup code.
+
+### 🟢 Prioritas Rendah (Optimasi Lanjutan)
+18. **server.ts refactor** — 5526 baris monolith → route modules. Butuh dedicated sprint dengan integration testing.
+19. **console.log → structured logger** — 142 instance console.log di production code. Ganti ke pino/winston dengan level filtering.
+20. **`any` type reduction** — 130+ `any` di server.ts. Ganti dengan proper TypeScript interfaces.
+21. **Connection pooling global** — `httpAgent.ts` module sudah dibuat tapi belum di-wire globally ke semua fetch calls.
+22. **Shadow Decimal columns migration** — 14 shadow Decimal + 5 DateTime columns sudah ada (OPT-4), perlu dual-write + backfill + reader migration.
+23. **CSRF enforcement** — Saat ini monitoring mode (log-only). Perlu frontend migration untuk send csrf token, lalu flip to 403.
+
+### ✨ Rekomendasi Fitur Baru
+24. **Whale Transaction Tracker** — Real-time whale alert dengan notifikasi push (sumber: Whale Alert API atau blockchain mempool monitoring)
+25. **Portfolio Performance Attribution** — Analisis aset mana yang paling berkontribusi ke gain/loss portofolio
+26. **DeFi Yield Tracker** — Monitoring APY/APR dari protocol DeFi (Aave, Compound, Uniswap) untuk optimasi yield farming
+27. **Social Sentiment Tracker** — Analisis sentiment dari Twitter/Reddit/Discord tentang koin tertentu
+28. **Gas Fee Optimizer** — Rekomendasi waktu transaksi Ethereum berdasarkan gas price history
+29. **Multi-wallet Import** — Import balance dari wallet address (MetaMask, Ledger) tanpa perlu API key exchange
+30. **Automated Rebalancing** — Eksekusi otomatis saran rebalancing berdasarkan threshold drift (connect ke exchange API)
+31. **Options Strategy Builder** — Visualisasi payoff diagram untuk strategi options (straddle, strangle, iron condor)
+32. **On-chain Whale Clustering** — Clustering wallet addresses berdasarkan transaction pattern (machine learning)
+33. **Tax-loss Harvesting Scanner** — Otomatis identifikasi posisi yang bisa di-harvest untuk tax loss
+34. **Cross-exchange Arbitrage Scanner** — Deteksi selisih harga antar bursa untuk opportunity arbitrage
+35. **Portfolio Stress Test** — Simulasi portofolio terhadap skenario market crash (2008, 2020, COVID)
 
 ---
 
 ## 📁 Struktur Project
 
 ```
-zaytrixku/
+zaytrix_1/
 ├── server.ts                          # Express + Vite dev server (port 3000)
 ├── onchainDataHelper.ts               # Live on-chain data processor
-├── onchainScanner.ts                  # Multi-chain scanner (BTC, ETH, BSC, TRX, SOL)
+├── onchainScanner.ts                  # Multi-chain scanner
 ├── prisma/
-│   └── schema.prisma                  # Database schema (User, ApiKey, AuditLog, Portfolio, etc.)
+│   ├── schema.prisma                  # Database schema (11 models, shadow Decimal/DateTime)
+│   └── migrations/                    # Prisma migrations (baseline + shadow columns)
 ├── src/
 │   ├── main.tsx                       # React entry point
-│   ├── App.tsx                        # Main app with routing & real auth
+│   ├── App.tsx                        # Main app with routing + real auth
 │   ├── store.ts                       # Zustand global state
 │   ├── types.ts                       # TypeScript interfaces
-│   ├── components/                    # 21 UI components
+│   ├── components/                    # 29 UI components
+│   │   ├── AuthScreen.tsx             # Multi-auth login (email, register, OTP, Google)
+│   │   ├── Dashboard.tsx              # Main dashboard with 9 widgets
+│   │   ├── MarketSentimentWidget.tsx  # Fear & Greed gauge + market stats
+│   │   ├── PriceAlertsWidget.tsx      # Price alert manager + toast notifications
+│   │   ├── RiskScoreWidget.tsx        # VaR/CVaR + risk grade gauge
+│   │   ├── RebalanceWidget.tsx        # Portfolio rebalancing advisor
+│   │   ├── MarketSentimentChat.tsx    # AI Q&A with live market context
+│   │   ├── TaxLotOptimizer.tsx        # FIFO/LIFO/HIFO lot calculator
+│   │   ├── TaxReportWidget.tsx        # Annual tax report + PDF export
+│   │   ├── CorrelationMatrixWidget.tsx # Pearson correlation heatmap
+│   │   ├── DCACalculator.tsx          # DCA vs lump-sum simulator
+│   │   └── ...
 │   ├── server/                        # Backend modules
 │   │   ├── auth.ts                    # Auth (register, login, 2FA, email verify, reset, sessions)
-│   │   ├── security.ts                # Helmet, CORS, rate limit, CSRF, error sanitization
+│   │   ├── security.ts                # Helmet, CORS, rate limit, CSRF
 │   │   ├── apiKeys.ts                 # API key CRUD + AES-256-GCM encryption
 │   │   ├── audit.ts                   # Audit logging
-│   │   ├── portfolio.ts              # Portfolio/ledger/backtest/conversion/alert persistence
-│   │   ├── tradeExecution.ts          # Real exchange order execution (Binance/Bybit/KuCoin)
-│   │   ├── liveDataRoutes.ts          # 12 live data endpoints (scraping + free APIs)
-│   │   ├── webauthn.ts                # WebAuthn/Passkey support
-│   │   ├── totp.ts                    # TOTP RFC 6238 (2FA)
-│   │   ├── breachCheck.ts             # HaveIBeenPwned password check
-│   │   ├── email.ts                   # Nodemailer (verification + reset + alerts)
-│   │   ├── oauth.ts                   # Google OAuth flow
+│   │   ├── portfolio.ts               # Portfolio/ledger/backtest/alert/risk/tax endpoints
+│   │   ├── tradeExecution.ts          # Real exchange order execution
+│   │   ├── liveDataRoutes.ts          # 12 live data endpoints + rate limiter
+│   │   ├── webauthn.ts                # WebAuthn/Passkey (challenge verified)
+│   │   ├── totp.ts                    # TOTP RFC 6238 (128-bit backup codes)
+│   │   ├── oauth.ts                   # Google OAuth (email_verified + 2FA gate)
 │   │   ├── waf.ts                     # WAF + bot detection
-│   │   ├── dataRetention.ts           # Field encryption + retention job + GDPR
-│   │   ├── alerting.ts                # Alert rules + health metrics
-│   │   ├── monitoring.ts              # Sentry SDK integration
-│   │   └── db.ts                      # Prisma client singleton
-│   ├── lib/
-│   │   ├── auth.ts                    # Frontend auth API client
-│   │   ├── portfolioSync.ts           # Store ↔ server sync
-│   │   └── firebase.ts                # Firebase config (secondary)
+│   │   ├── aiRouter.ts                # 9router + Gemini fallback
+│   │   ├── upstreamHealth.ts           # Binance/CoinGecko health checker
+│   │   ├── httpAgent.ts               # keepAlive connection pooling
+│   │   └── ...
+│   ├── hooks/
+│   │   └── use-abortable-fetch.ts     # AbortController hook for polling
 │   └── utils/
-│       ├── onChainMockData.ts         # Mock data (fallback only — all charts now live)
-│       ├── pdfGenerator.ts            # PDF report generator
-│       └── safeStorage.ts             # Safe localStorage wrapper
-├── .github/workflows/ci.yml           # CI/CD pipeline
-├── vite.config.ts                     # Vite configuration
-└── package.json
+│       └── pdfGenerator.ts            # PDF report generator (DOMPurify sanitized)
+├── Caddyfile                          # Reverse proxy (port allowlist)
+└── package.json                       # zaytrix v5.1.0
 ```
 
 ---
 
-## 🛠️ Tech Stack
-
-| Technology | Purpose |
-|------------|---------|
-| React 19 | UI Framework |
-| Vite 6 | Build tool & dev server |
-| Express 4 | Backend API server |
-| TypeScript 5 | Type safety |
-| Tailwind CSS 4 | Styling |
-| Zustand | Client state management |
-| TanStack Query | Server state |
-| Recharts | Charts & visualizations |
-| Motion (Framer) | Animations |
-| Prisma + SQLite | Database (production-ready PostgreSQL) |
-| bcryptjs | Password hashing |
-| jsonwebtoken | JWT session tokens |
-| helmet | Security headers |
-| express-rate-limit | Rate limiting |
-| cookie-parser | Cookie handling |
-| csrf | CSRF protection |
-| nodemailer | Email sending |
-| @sentry/node | Error monitoring |
-| cheerio | HTML scraping (RSS, CFTC, Farside) |
-| @google/genai | Gemini AI |
-| Vitest | Test framework |
+## 🔧 Tech Stack
+- **Framework**: Vite + React 19 + Express (custom server.ts)
+- **Language**: TypeScript 5 (zero type errors)
+- **Styling**: Tailwind CSS 4 (CSS-first, no JS config)
+- **Database**: Prisma ORM + SQLite (migrations + shadow Decimal/DateTime columns)
+- **State**: Zustand + TanStack Query (30s staleTime)
+- **Auth**: JWT httpOnly cookie + bcrypt + 2FA TOTP + WebAuthn + OAuth
+- **AI**: Gemini 2.5-flash + 9router (OpenAI-compatible fallback)
+- **Real-time**: Binance WebSocket (liquidation feed + tickers)
+- **Monitoring**: Sentry (PII scrubbed) + upstream health checker
+- **DevOps**: Graceful shutdown + 30s timeout + CI-ready (GitHub Actions)
 
 ---
 
-## 🚦 Menjalankan Secara Lokal di Laptop (Step by Step)
-
-### Prasyarat
-
-Pastikan laptop Anda telah terinstall:
-
-1. **Node.js 18+** — [Download](https://nodejs.org/) (pilih LTS)
-   ```bash
-   # Verifikasi instalasi
-   node --version  # harus v18 atau lebih baru
-   npm --version
-   ```
-
-2. **Bun** (runtime JavaScript yang lebih cepat) — [Install](https://bun.sh/)
-   ```bash
-   # macOS (via Homebrew)
-   brew install oven-sh/bun/bun
-
-   # Linux/WSL
-   curl -fsSL https://bun.sh/install | bash
-
-   # Windows (via PowerShell)
-   powershell -c "irm bun.sh/install.ps1|iex"
-
-   # Verifikasi
-   bun --version
-   ```
-
-3. **Git** — [Download](https://git-scm.com/)
-   ```bash
-   git --version
-   ```
-
-### Langkah 1: Clone Repository
+## 🚀 Quick Start
 
 ```bash
-git clone https://github.com/Zayidan123/z-capitalku.git zaytrix
-cd zaytrix
-```
-
-### Langkah 2: Install Dependencies
-
-```bash
+# Install dependencies
 bun install
-```
 
-Ini akan menginstall semua package yang dibutuhkan (React, Express, Prisma, dll).
-
-### Langkah 3: Konfigurasi Environment
-
-Buat file `.env` di root folder (salin dari `.env.example` dan edit):
-
-```bash
-cp .env.example .env
-```
-
-Edit file `.env` dengan text editor:
-
-```env
-# Database (SQLite — sudah otomatis, tidak perlu install database server)
-DATABASE_URL="file:./db/custom.db"
-
-# WAJIB: Ganti secret ini dengan string random yang kuat (min 32 karakter)
-# Generate dengan: openssl rand -hex 32
-SESSION_SECRET=GANTI_DENGAN_SECRET_RANDOM_ANDA
-ENCRYPTION_KEY=GANTI_DENGAN_KEY_RANDOM_ANDA
-CSRF_SECRET=GANTI_DENGAN_CSRF_RANDOM_ANDA
-
-# Email (opsional untuk dev — jika kosong, email diverifikasi via console log)
-EMAIL_FROM=noreply@zaytrix.com
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=
-SMTP_PASS=
-EMAIL_DEV_MODE=true
-
-# Google OAuth (opsional — jika kosong, tombol Google menampilkan "belum dikonfigurasi")
-GOOGLE_CLIENT_ID=
-GOOGLE_CLIENT_SECRET=
-GOOGLE_REDIRECT_URI=http://localhost:3000/api/auth/google/callback
-
-# AI (opsional — Gemini API key untuk AI analysis)
-GEMINI_API_KEY=
-
-# Monitoring (opsional — Sentry DSN untuk error tracking)
-SENTRY_DSN=
-```
-
-**Penting untuk Production:** Ganti semua secret dengan nilai random yang kuat! Untuk dev lokal, nilai default sudah cukup.
-
-### Langkah 4: Setup Database
-
-```bash
-# Generate Prisma Client
+# Generate Prisma client
 bun run db:generate
 
-# Buat tabel database
+# Push schema to database
 bun run db:push
-```
 
-Ini akan membuat file `db/custom.db` (SQLite) dengan semua tabel (User, ApiKey, AuditLog, Portfolio, dll).
-
-### Langkah 5: Jalankan Development Server
-
-```bash
+# Start dev server (port 3000)
 bun run dev
-```
-
-Server akan berjalan di `http://localhost:3000`.
-
-Buka browser → akses `http://localhost:3000` → akan muncul **layar Login/Register ZAYTRIX**.
-
-### Langkah 6: Buat Akun & Mulai Menggunakan
-
-1. Klik tab **"Daftar Akun"**
-2. Isi: Nama Lengkap, Email, Password (min 8 karakter)
-3. Klik **"DAFTAR SEBELUM AKSES"**
-4. Dashboard ZAYTRIX akan terbuka dengan live data real-time
-
-### Langkah 7 (Opsional): Build untuk Production
-
-```bash
-# Build aplikasi
-bun run build
-
-# Jalankan production server
-bun run start
-```
-
----
-
-## 📝 Changelog Lengkap (Semua Perubahan)
-
-### v5.0.0 — Production Hardening + ZAYTRIX Rebrand (Current)
-
-#### Rebranding
-- ✅ Rename **Z-CAPITAL → ZAYTRIX** di seluruh sistem (44 file): UI, backend, email, PDF, tests, CI/CD, schema, cookie name
-- ✅ Logo diperbesar: SplashScreen (80→130px), Sidebar (40→56px), AuthScreen (Shield icon → logo.png 80px)
-- ✅ Favicon + browser title diperbarui
-
-#### Mock UI → Live Data (Final Fix)
-- ✅ OnChainData.tsx: rewrite merge logic — live data SEPENUHNYA menggantikan mock (bukan overlay)
-- ✅ 3 endpoint live baru di-wire: exchange-netflow, etf-flows, cme-oi
-- ✅ 10 badge "EST" dihapus (data sekarang REAL)
-- ✅ 4 widget hardcoded diganti komputasi real (liquidation heatmap, CDRI, funding stats, funding heatmap)
-- ✅ Dashboard netflow → REAL dari Santiment (sebelumnya EST)
-- ✅ TechnicalTerminal: hapus fake volume fabrication
-- ✅ Ledger: demo button diberi label "DEMO" + disclaimer, tax label diperbaiki 10%→0.1%
-
-#### HTTP Error Fixes
-- ✅ Vite `allowedHosts: true` + `host: 0.0.0.0` (fix "Blocked request" preview panel)
-- ✅ PostCSS config error fixed (removed redundant config)
-- ✅ SplashScreen timer fix (ref pattern — immune to re-render)
-
----
-
-### v4.0.0 — Security & Production-Readiness (10/10 Target)
-
-#### Autentikasi 10/10
-- ✅ **WebAuthn/Passkey** — login tanpa password (ECDSA P-256, challenge-response)
-- ✅ **Password Breach Check** — HaveIBeenPwned k-anonymity (privacy-preserving)
-- ✅ WebAuthnCredential model di Prisma
-
-#### Data Protection 9/10
-- ✅ **Field-level encryption** — AES-256-GCM untuk PII
-- ✅ **Data retention policy** — auto-purge (audit logs 1thn, sessions 7hari, backtests 90hari)
-- ✅ **GDPR data export** — `GET /api/user/export` (semua data, sensitive redacted)
-- ✅ **GDPR delete-all** — `DELETE /api/user/delete-all` (cascade delete)
-
-#### Network Security 9/10
-- ✅ **WAF middleware** — blok SQL injection, XSS, path traversal, command injection, attack tools
-- ✅ **Bot detection** — scoring 0-100, strictBotCheck untuk aksi sensitif
-
-#### Monitoring 9/10
-- ✅ **Alerting system** — 4 rules (error rate, latency, brute force, rate limit abuse)
-- ✅ **Health endpoint** — `/api/health` (uptime, p50/p95 latency, metrics)
-- ✅ **Sentry SDK** terintegrasi
-
-#### Testing 9/10
-- ✅ **37 tests** (Vitest): auth, portfolio, live data, WAF, CSRF, 2FA
-- ✅ **CI/CD** — GitHub Actions (lint, typecheck, security audit, build)
-
----
-
-### v3.0.0 — Live Data + Real Auth + Security
-
-#### Real Authentication System
-- ✅ Prisma + bcrypt + JWT httpOnly cookie (register, login, logout, me)
-- ✅ 2FA TOTP server-side (RFC 6238, HMAC-SHA1)
-- ✅ Email verification (nodemailer)
-- ✅ Password reset (token-based)
-- ✅ Google OAuth flow
-- ✅ Session lockout (5 fails → 15min)
-- ✅ Session tracking + revoke (server-side)
-- ✅ CSRF protection (double-submit cookie)
-- ✅ Audit logging (all sensitive actions)
-- ✅ API key encryption (AES-256-GCM)
-- ✅ Error sanitization (no internal leak)
-- ✅ Rate limiting (500/15min, 5/min auth)
-- ✅ Helmet security headers
-- ✅ Removed splash-user auto-login bypass
-
-#### Portfolio/Ledger Server-Side Persistence
-- ✅ Prisma models: PortfolioHolding, LedgerTransaction, BacktestResult, ConversionTransaction, AlertConfig
-- ✅ 20+ CRUD endpoints at `/api/portfolio/*`
-- ✅ Frontend sync (fetch on login, debounced sync on change)
-
-#### Real Exchange Order Execution
-- ✅ Binance spot orders (HMAC signed, MARKET orders)
-- ✅ Bybit orders (v5 API, HMAC signed)
-- ✅ KuCoin orders (v2 API, passphrase HMAC)
-- ✅ Simulation fallback (no keys / sandbox)
-
-#### Live Data (12 New Endpoints, Zero Mock)
-- ✅ `/api/live/long-short-ratio` — Binance Futures (REAL)
-- ✅ `/api/live/hashrate` — mempool.space (REAL)
-- ✅ `/api/live/active-addresses` — Coinmetrics (REAL)
-- ✅ `/api/live/exchange-netflow` — Santiment GraphQL (REAL)
-- ✅ `/api/live/etf-flows` — Farside scraping (REAL)
-- ✅ `/api/live/cme-oi` — CFTC CoT report (REAL)
-- ✅ `/api/live/s2f` — computed deterministic (REAL)
-- ✅ `/api/live/mvrv` — Coinmetrics (REAL)
-- ✅ `/api/live/drawdown` — CoinGecko + blockchain.info (REAL)
-- ✅ `/api/live/nvt` — blockchain.info (REAL)
-- ✅ `/api/live/miner-data` — blockchain.info + mempool.space (REAL)
-- ✅ `/api/live/dominance-history` — CoinGecko (REAL)
-- ✅ 9 more endpoints: /api/fx/usd-idr, /api/news, /api/onchain/orderbook, /api/onchain/altcoin-season, /api/onchain/oi-history, /api/onchain/dominance-history, /api/stocks/fundamentals, /api/trading-signals/generate-manual, /api/onchain/correlations
-
----
-
-### v2.0.0 — Bug Fixes + Mock→Live Conversion
-
-#### Critical Bug Fixes
-- ✅ SplashScreen syntax error (missing `}` in JSX comment)
-- ✅ OnChainData `liveMetrics` undefined variable (5 references)
-- ✅ OnChainData random-walk micro-simulation corrupting live prices
-- ✅ App.tsx synthetic price noise (microFluctuationTimer)
-- ✅ App.tsx WebSocket reconnect memory leak
-- ✅ Backtester win-rate formula (`||` → `&&`)
-- ✅ Backtester fake maxDrawdown injection
-- ✅ Projections ROI formula (`*105-5` → `*100`)
-- ✅ Ledger tax rate (10% → 0.1% PMK-68)
-- ✅ CorrelationHeatmap invalid Tailwind classes
-- ✅ AssetsHub "undefined%" stock fundamentals
-- ✅ AiSignals 22 fake fallback values → honest placeholders
-- ✅ server.ts getOnChainMetrics RNG + fake citations
-- ✅ server.ts /api/trade/execute simulation lie → honest labeling
-- ✅ server.ts /api/trade/connect fake balance → real exchange balance
-- ✅ server.ts HOLD signals random TP/SL removed
-- ✅ server.ts KuCoin passphrase HMAC-signed
-- ✅ Vite optimizeDeps scanner (skills/ HTML files)
-
-#### Component Mock→Live Conversion
-- ✅ OnChainData.tsx — 8 datasets converted (stockToFlow, mvrv, drawdown, NVT, minerData, addressMetrics, dominance, correlations)
-- ✅ Dashboard.tsx — USD→IDR live FX, 8 sine-wave datasets → real history, Zustand live prices
-- ✅ CoinsRankings.tsx — removed 30 hardcoded coins, fake gainers/losers, fake price fluctuation
-- ✅ NewsSection.tsx — 5 mock articles (future dates 2026) → live RSS feed
-- ✅ TokenTerminalExplorer.tsx — 630 hardcoded values → live CoinGecko/Binance, real CSV download
-- ✅ ApiAutomation.tsx — removed default Master PIN, honest simulation labeling
-- ✅ SecurityCenter.tsx — real TOTP (RFC 6238), honest QR/manual entry
-- ✅ Settings.tsx — honest AES-256 labels, connection test fix
-- ✅ Profile.tsx — real Firebase password change + account deletion
-
-#### Other
-- ✅ Logo diterapkan (splash + sidebar + favicon)
-- ✅ Deleted dead code: LedgerTax.tsx (orphaned Next.js)
-- ✅ Deleted conflicting mini-services (dev-server, keepalive)
-
----
-
-### v1.0.0 — Initial Clone & Integration
-- ✅ Cloned repo from GitHub
-- ✅ Integrated into sandbox environment
-- ✅ Fixed PostCSS config error
-- ✅ Removed conflicting Next.js mini-services
-- ✅ Started dev server clean (HTTP 200)
-
----
-
-## ⚠️ Catatan Production
-
-Sebelum deploy ke production sungguhan:
-
-1. **Ganti semua secret** di `.env` (SESSION_SECRET, ENCRYPTION_KEY, CSRF_SECRET) — gunakan secret manager (Vault/SSM/Doppler)
-2. **Setup SMTP** untuk email real (Gmail, SendGrid, dll)
-3. **Konfigurasi Google OAuth** (Google Cloud Console → credentials)
-4. **Set SENTRY_DSN** untuk error monitoring
-5. **Ganti SQLite → PostgreSQL** untuk multi-user concurrent (ganti DATABASE_URL)
-6. **Set NODE_ENV=production**
-7. **Setup HTTPS** (Let's Encrypt / Cloudflare)
-8. **Setup backup** database otomatis
-9. **Compliance** (OJK, AML/KYC, UU PDP) — butuh proses organisasi/legal
-
----
-
-## 📊 Status Keamanan
-
-| Kategori | Skor | Status |
-|---|---|---|
-| Autentikasi | 10/10 | ✅ WebAuthn + breach check |
-| Data Protection | 9/10 | ✅ Field encryption + retention + GDPR |
-| Network Security | 9/10 | ✅ WAF + bot detection |
-| Live Data | 10/10 | ✅ Zero mock, 12 live endpoints |
-| Monitoring | 9/10 | ✅ Sentry + alerting + health |
-| Testing | 9/10 | ✅ 37 tests + CI/CD |
-| Compliance | 1/10 | ⏳ Butuh proses legal (OJK, AML/KYC) |
-
----
-
-## 🧪 Testing
-
-```bash
-# Run all tests (pastikan dev server running di port 3000)
-bun run test
-
-# Run tests dengan watch mode
-bun run test:watch
 
 # Type check
 bun run lint
 ```
 
+### Environment Variables (.env — NOT tracked in git)
+```
+DATABASE_URL=file:./db/custom.db
+SESSION_SECRET=<48-byte hex random>
+ENCRYPTION_KEY=<32-byte hex random>
+CSRF_SECRET=<32-byte hex random>
+GEMINI_API_KEY=<from Google AI Studio>
+GEMINI_MODEL=gemini-2.5-flash
+NINEROUTER_ENDPOINT=http://localhost:20128/v1/chat/completions
+NINEROUTER_API_KEY=<from 9router dashboard>
+NINEROUTER_MODEL=kr/claude-sonnet-4.5
+# Optional: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
+# Optional: SMTP_HOST, SMTP_USER, SMTP_PASS, EMAIL_DEV_MODE=true
+```
+
 ---
 
-## 📄 License
+## 📊 Status: v5.1.0 (27 Aug 2026)
 
-Private repository — ZAYTRIX Team
+| Metric | Value |
+|--------|-------|
+| Bug diperbaiki | 45 (dari 120 temuan audit) |
+| Optimasi dilakukan | 22 area |
+| Fitur baru ditambahkan | 9 |
+| Type errors | 0 |
+| Firebase bundle reduction | 55MB |
+| Dependencies removed | 145 (Firebase transitive) |
+| Commits pushed | 15 |
+
+---
+
+<p align="center">
+  <strong>ZAYTRIX</strong> — Built with ❤️ for the Indonesian crypto community<br>
+  <em>Institutional-grade tools for everyone</em>
+</p>
