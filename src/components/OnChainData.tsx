@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
+import { motion } from "motion/react";
 import { useGlobalStore } from "../store";
 import Markdown from "react-markdown";
 import {
@@ -1096,16 +1097,40 @@ export default function OnChainData() {
   }, [btcPriceStore, livePriceBtc]);
 
   return (
-    <div id="onchain-data-terminal" className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-6 lg:p-8 font-sans transition-all selection:bg-emerald-500/30 selection:text-emerald-300">
+    <div id="onchain-data-terminal" className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-6 lg:p-8 font-sans transition-all selection:bg-emerald-500/30 selection:text-emerald-300 relative overflow-hidden">
       
-      {/* Dynamic Header Stats */}
-      <div id="onchain-header" className="flex flex-col lg:flex-row lg:items-center lg:justify-between border-b border-slate-800 pb-6 mb-6 gap-4">
+      {/* STYLING UPGRADE: decorative animated background orbs */}
+      <motion.div
+        aria-hidden
+        className="absolute top-0 right-0 w-96 h-96 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none"
+        animate={{ x: [0, -30, 0], y: [0, 20, 0], opacity: [0.3, 0.5, 0.3] }}
+        transition={{ duration: 15, repeat: Infinity, ease: "easeInOut" }}
+      />
+      <motion.div
+        aria-hidden
+        className="absolute bottom-0 left-0 w-80 h-80 bg-cyan-500/5 rounded-full blur-3xl pointer-events-none"
+        animate={{ x: [0, 25, 0], y: [0, -15, 0], opacity: [0.3, 0.5, 0.3] }}
+        transition={{ duration: 18, repeat: Infinity, ease: "easeInOut", delay: 3 }}
+      />
+
+      {/* Dynamic Header Stats — STYLING UPGRADE */}
+      <motion.div
+        initial={{ opacity: 0, y: -10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5 }}
+        id="onchain-header"
+        className="relative z-10 flex flex-col lg:flex-row lg:items-center lg:justify-between border-b border-slate-800 pb-6 mb-6 gap-4"
+      >
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse" />
+            <motion.span
+              className="flex h-2.5 w-2.5 rounded-full bg-emerald-500"
+              animate={{ scale: [1, 1.4, 1], opacity: [1, 0.6, 1] }}
+              transition={{ duration: 1.5, repeat: Infinity, ease: "easeInOut" }}
+            />
             <h1 className="text-xl md:text-2xl font-bold tracking-tight text-white font-sans flex items-center gap-2">
-              On-Chain Terminal & Derivatif
-              <span className="text-xs bg-slate-800 text-slate-400 px-2 py-0.5 rounded font-mono border border-slate-700">LIVE COINGLASS v2</span>
+              On-Chain Terminal &amp; Derivatif
+              <span className="text-xs bg-gradient-to-r from-emerald-950 to-cyan-950 text-emerald-400 px-2 py-0.5 rounded font-mono border border-emerald-800/60">LIVE COINGLASS v2</span>
             </h1>
           </div>
           <p className="text-xs md:text-sm text-slate-400">
@@ -1113,20 +1138,28 @@ export default function OnChainData() {
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-4 text-xs md:text-sm">
-          <div className="bg-slate-900 border border-slate-800 px-3 py-2 rounded-lg">
+        <div className="flex flex-wrap items-center gap-3 text-xs md:text-sm">
+          <motion.div
+            whileHover={{ y: -2, scale: 1.02 }}
+            className="relative bg-slate-900 border border-slate-800 hover:border-emerald-700/40 px-3 py-2 rounded-lg overflow-hidden cursor-default"
+          >
+            <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-emerald-500/50 to-transparent" />
             <span className="text-slate-500 font-medium mr-1.5 block lg:inline text-[10px] uppercase tracking-wider">BTC Spot (Live)</span>
             <span className="font-mono font-bold text-white text-base text-emerald-400">
               {formatUsd(btcPriceStore || livePriceBtc)}
             </span>
-          </div>
+          </motion.div>
 
-          <div className="bg-slate-900 border border-slate-800 px-3 py-2 rounded-lg">
+          <motion.div
+            whileHover={{ y: -2, scale: 1.02 }}
+            className="relative bg-slate-900 border border-slate-800 hover:border-cyan-700/40 px-3 py-2 rounded-lg overflow-hidden cursor-default"
+          >
+            <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-cyan-500/50 to-transparent" />
             <span className="text-slate-500 font-medium mr-1.5 block lg:inline text-[10px] uppercase tracking-wider">ETH Spot (Live)</span>
             <span className="font-mono font-bold text-white text-base text-cyan-400">
               {formatUsd(livePriceEth)}
             </span>
-          </div>
+          </motion.div>
 
           <div className="bg-slate-900 border border-slate-800 px-3 py-2 rounded-lg flex items-center gap-2">
             <div>
@@ -1140,7 +1173,7 @@ export default function OnChainData() {
             </span>
           </div>
         </div>
-      </div>
+      </motion.div>
 
       {/* Tabs Navigation */}
       <div id="onchain-tabs" className="flex flex-wrap gap-1.5 border-b border-slate-800/80 pb-3 mb-6 overflow-x-auto scrollbar-hide">

@@ -414,6 +414,185 @@ portfolioRouter.get("/tax-lots", async (req: Request, res: Response) => {
   }
 });
 
+// ============================================================================
+// NEW FEATURE: Multi-asset Correlation Matrix
+// ----------------------------------------------------------------------------
+// GET /api/portfolio/correlation-matrix?symbols=BTC,ETH,SOL,BNB,XRP&days=30
+//
+// Fetches daily closing prices for the given symbols from Binance klines API,
+// computes Pearson correlation coefficients between every pair, and returns
+// an N×N matrix suitable for a heatmap visualization.
+//
+// Use cases:
+//   - Identify diversification opportunities (low/negative correlation)
+//   - Detect hidden concentration risk (high correlation among "diversified" holdings)
+//   - Hedge analysis (find negatively-correlated assets)
+// ============================================================================
+
+const CORRELATION_DEFAULT_SYMBOLS = ["BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE"];
+const CORRELATION_CACHE_TTL_MS = 5 * 60 * 1000; // 5 min
+const correlationCache = new Map<string, { data: any; ts: number }>();
+
+interface KlineRow {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+async function fetchKlines(symbol: string, days: number): Promise<KlineRow[]> {
+  try {
+    const binanceSymbol = symbol.toUpperCase().endsWith("USDT")
+      ? symbol.toUpperCase()
+      : symbol.toUpperCase() + "USDT";
+    const interval = "1d";
+    const limit = Math.min(days, 365);
+    const url = `https://api.binance.com/api/v3/klines?symbol=${binanceSymbol}&interval=${interval}&limit=${limit}`;
+    const res = await fetch(url);
+    if (!res.ok) return [];
+    const raw = (await res.json()) as any[];
+    if (!Array.isArray(raw)) return [];
+    return raw.map((k) => ({
+      time: k[0],
+      open: parseFloat(k[1]),
+      high: parseFloat(k[2]),
+      low: parseFloat(k[3]),
+      close: parseFloat(k[4]),
+      volume: parseFloat(k[5]),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function computePearsonCorrelation(x: number[], y: number[]): number {
+  const n = Math.min(x.length, y.length);
+  if (n < 2) return 0;
+  // Align arrays by taking the last n values
+  const xs = x.slice(-n);
+  const ys = y.slice(-n);
+  // Compute returns (percent change) for proper correlation
+  const xr: number[] = [];
+  const yr: number[] = [];
+  for (let i = 1; i < n; i++) {
+    if (xs[i - 1] !== 0 && ys[i - 1] !== 0) {
+      xr.push((xs[i] - xs[i - 1]) / xs[i - 1]);
+      yr.push((ys[i] - ys[i - 1]) / ys[i - 1]);
+    }
+  }
+  const m = xr.length;
+  if (m < 2) return 0;
+  const meanX = xr.reduce((s, v) => s + v, 0) / m;
+  const meanY = yr.reduce((s, v) => s + v, 0) / m;
+  let num = 0;
+  let denX = 0;
+  let denY = 0;
+  for (let i = 0; i < m; i++) {
+    const dx = xr[i] - meanX;
+    const dy = yr[i] - meanY;
+    num += dx * dy;
+    denX += dx * dx;
+    denY += dy * dy;
+  }
+  const den = Math.sqrt(denX * denY);
+  return den === 0 ? 0 : num / den;
+}
+
+portfolioRouter.get("/correlation-matrix", async (req: Request, res: Response) => {
+  try {
+    const symbolsRaw = typeof req.query.symbols === "string"
+      ? req.query.symbols.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean)
+      : CORRELATION_DEFAULT_SYMBOLS;
+    const days = typeof req.query.days === "string"
+      ? Math.min(Math.max(parseInt(req.query.days) || 30, 7), 365)
+      : 30;
+
+    // Limit to 12 symbols max for performance
+    const symbols = symbolsRaw.slice(0, 12);
+    if (symbols.length < 2) {
+      return res.status(400).json({
+        success: false,
+        error: "Minimal 2 simbol diperlukan untuk komputasi korelasi.",
+      });
+    }
+
+    const cacheKey = `${symbols.join(",")}|${days}`;
+    const cached = correlationCache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < CORRELATION_CACHE_TTL_MS) {
+      return res.json({ success: true, ...cached.data });
+    }
+
+    // Fetch klines for all symbols in parallel
+    const klinesBySymbol = await Promise.all(
+      symbols.map(async (s) => ({ symbol: s, klines: await fetchKlines(s, days) }))
+    );
+
+    // Filter to symbols that returned data
+    const valid = klinesBySymbol.filter((k) => k.klines.length >= 2);
+    if (valid.length < 2) {
+      return res.json({
+        success: true,
+        matrix: [],
+        symbols: [],
+        days,
+        error: "Data tidak cukup untuk menghitung korelasi. Coba simbol lain.",
+      });
+    }
+
+    const validSymbols = valid.map((v) => v.symbol);
+    const closesBySymbol = new Map<string, number[]>();
+    for (const v of valid) {
+      closesBySymbol.set(v.symbol, v.klines.map((k) => k.close));
+    }
+
+    // Build N×N correlation matrix
+    const matrix: Array<{ a: string; b: string; correlation: number; absCorrelation: number }> = [];
+    for (let i = 0; i < validSymbols.length; i++) {
+      for (let j = 0; j < validSymbols.length; j++) {
+        const a = validSymbols[i];
+        const b = validSymbols[j];
+        const corr = i === j ? 1 : computePearsonCorrelation(closesBySymbol.get(a)!, closesBySymbol.get(b)!);
+        matrix.push({
+          a,
+          b,
+          correlation: Math.round(corr * 1000) / 1000,
+          absCorrelation: Math.abs(Math.round(corr * 1000) / 1000),
+        });
+      }
+    }
+
+    // Find highest non-self correlation (concentration risk)
+    const offDiagonal = matrix.filter((m) => m.a !== m.b);
+    const sorted = [...offDiagonal].sort((a, b) => b.absCorrelation - a.absCorrelation);
+    const highestCorr = sorted[0] || null;
+    const lowestCorr = sorted[sorted.length - 1] || null;
+
+    // Diversification score: average off-diagonal abs correlation (lower = more diversified)
+    const avgAbsCorr = offDiagonal.length > 0
+      ? offDiagonal.reduce((s, m) => s + m.absCorrelation, 0) / offDiagonal.length
+      : 0;
+    const diversificationScore = Math.round((1 - avgAbsCorr) * 100);
+
+    const data = {
+      matrix,
+      symbols: validSymbols,
+      days,
+      highestCorrelation: highestCorr,
+      lowestCorrelation: lowestCorr,
+      diversificationScore,
+      lastUpdated: new Date().toISOString(),
+    };
+
+    correlationCache.set(cacheKey, { data, ts: Date.now() });
+    res.json({ success: true, ...data });
+  } catch (e: any) {
+    console.error("[correlation-matrix] error:", e?.message || e);
+    res.status(500).json({ success: false, error: "Gagal menghitung matriks korelasi." });
+  }
+});
+
 // ─── BACKTEST RESULTS ────────────────────────────────────────────────
 
 portfolioRouter.get("/backtests", async (req: Request, res: Response) => {
