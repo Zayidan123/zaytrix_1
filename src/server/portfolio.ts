@@ -593,6 +593,193 @@ portfolioRouter.get("/correlation-matrix", async (req: Request, res: Response) =
   }
 });
 
+// ============================================================================
+// NEW FEATURE: Automated Tax Report Generator (annual P&L + PMK-68 summary)
+// ----------------------------------------------------------------------------
+// GET /api/portfolio/tax-report?year=2024
+//
+// Aggregates all ledger transactions for the given year, computes:
+//   - Total proceeds (from SELL transactions)
+//   - Total cost basis (from BUY transactions)
+//   - Realized gain/loss (proceeds - cost basis of sold lots, FIFO)
+//   - Unrealized gain/loss (current value - remaining cost basis)
+//   - PMK-68 estimated tax (0.1% of total proceeds, in IDR)
+//   - Per-symbol breakdown (proceeds, cost, gain/loss, tax)
+//   - Transaction count + summary
+//
+// Returns JSON. The frontend renders this as a printable PDF report.
+// ============================================================================
+
+portfolioRouter.get("/tax-report", async (req: Request, res: Response) => {
+  try {
+    const year = typeof req.query.year === "string"
+      ? parseInt(req.query.year)
+      : new Date().getFullYear();
+
+    if (isNaN(year) || year < 2000 || year > 2100) {
+      return res.status(400).json({ success: false, error: "Tahun tidak valid (2000-2100)." });
+    }
+
+    // Fetch all transactions for the user (filter by year in JS — SQLite string dates)
+    const allTxs = await prisma.ledgerTransaction.findMany({
+      where: { userId: req.user!.sub },
+      orderBy: { timestamp: "asc" },
+    });
+
+    // Filter to the requested year
+    const yearStart = `${year}-01-01`;
+    const yearEnd = `${year}-12-31`;
+    const yearTxs = allTxs.filter((t) => {
+      try {
+        const ts = t.timestamp.startsWith("T") || t.timestamp.includes("T")
+          ? t.timestamp
+          : t.timestamp + "T00:00:00Z";
+        const d = new Date(ts);
+        const isoDate = d.toISOString().substring(0, 10);
+        return isoDate >= yearStart && isoDate <= yearEnd;
+      } catch {
+        return false;
+      }
+    });
+
+    if (yearTxs.length === 0) {
+      return res.json({
+        success: true,
+        report: {
+          year,
+          totalProceedsUsd: 0,
+          totalCostBasisUsd: 0,
+          realizedGainLossUsd: 0,
+          unrealizedGainLossUsd: 0,
+          realizedGainLossPct: 0,
+          pmk68TaxIdr: 0,
+          pmk68TaxRate: 0.001,
+          transactionCount: 0,
+          buyCount: 0,
+          sellCount: 0,
+          perSymbol: [],
+          generatedAt: new Date().toISOString(),
+          summary: `Tidak ada transaksi pada tahun ${year}.`,
+        },
+      });
+    }
+
+    // Group by symbol
+    const bySymbol = new Map<string, { buys: any[]; sells: any[] }>();
+    for (const t of yearTxs) {
+      const sym = t.symbol.toUpperCase();
+      if (!bySymbol.has(sym)) bySymbol.set(sym, { buys: [], sells: [] });
+      const type = (t.type || "").toUpperCase();
+      if (type === "BUY") bySymbol.get(sym)!.buys.push(t);
+      else if (type === "SELL") bySymbol.get(sym)!.sells.push(t);
+    }
+
+    const USD_TO_IDR = 15800;
+    const perSymbol: any[] = [];
+    let totalProceeds = 0;
+    let totalCostBasis = 0;
+    let totalRealizedGL = 0;
+    let totalBuyQty = 0;
+    let totalSellQty = 0;
+    let buyCount = 0;
+    let sellCount = 0;
+
+    for (const [symbol, { buys, sells }] of bySymbol) {
+      // FIFO matching: for each SELL, consume from oldest BUY
+      const buyQueue = [...buys].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+      let symbolProceeds = 0;
+      let symbolCostBasis = 0;
+      let symbolRemainingQty = buys.reduce((s, b) => s + b.quantity, 0) - sells.reduce((s, s2) => s + s2.quantity, 0);
+
+      for (const sell of sells) {
+        sellCount++;
+        totalSellQty += sell.quantity;
+        symbolProceeds += sell.totalAmount || (sell.price * sell.quantity);
+        let qtyToSell = sell.quantity;
+        // Consume from buyQueue (FIFO)
+        for (const lot of buyQueue) {
+          if (qtyToSell <= 0) break;
+          if (lot.quantity <= 0) continue;
+          const sellFromLot = Math.min(lot.quantity, qtyToSell);
+          const lotCost = (lot.totalAmount || lot.price * lot.quantity) / (lot.quantity > 0 ? lot.quantity : 1) * sellFromLot;
+          symbolCostBasis += lotCost;
+          lot.quantity -= sellFromLot;
+          qtyToSell -= sellFromLot;
+        }
+      }
+
+      for (const buy of buys) {
+        buyCount++;
+        totalBuyQty += buy.quantity;
+      }
+
+      const symbolGL = symbolProceeds - symbolCostBasis;
+      totalProceeds += symbolProceeds;
+      totalCostBasis += symbolCostBasis;
+      totalRealizedGL += symbolGL;
+
+      perSymbol.push({
+        symbol,
+        buyCount: buys.length,
+        sellCount: sells.length,
+        totalBuyQty: buys.reduce((s, b) => s + b.quantity, 0),
+        totalSellQty: sells.reduce((s, s2) => s + s2.quantity, 0),
+        proceedsUsd: symbolProceeds,
+        costBasisUsd: symbolCostBasis,
+        gainLossUsd: symbolGL,
+        gainLossPct: symbolCostBasis > 0 ? (symbolGL / symbolCostBasis) * 100 : 0,
+        remainingQty: Math.max(0, symbolRemainingQty),
+      });
+    }
+
+    // Sort per-symbol by proceeds descending
+    perSymbol.sort((a, b) => b.proceedsUsd - a.proceedsUsd);
+
+    // PMK-68 tax: 0.1% of total proceeds (transaction-based, not gain-based)
+    const pmk68TaxRate = 0.001;
+    const pmk68TaxUsd = totalProceeds * pmk68TaxRate;
+    const pmk68TaxIdr = pmk68TaxUsd * USD_TO_IDR;
+
+    const realizedGainLossPct = totalCostBasis > 0 ? (totalRealizedGL / totalCostBasis) * 100 : 0;
+
+    // Summary message
+    let summary: string;
+    if (totalRealizedGL > 0) {
+      summary = `Tahun ${year}: Realized gain $${totalRealizedGL.toFixed(2)} (${realizedGainLossPct.toFixed(1)}%) dari ${yearTxs.length} transaksi. Estimasi pajak PMK-68 (0.1% dari proceeds): Rp ${pmk68TaxIdr.toLocaleString("id-ID", { maximumFractionDigits: 0 })}.`;
+    } else if (totalRealizedGL < 0) {
+      summary = `Tahun ${year}: Realized loss $${Math.abs(totalRealizedGL).toFixed(2)} (${Math.abs(realizedGainLossPct).toFixed(1)}%) dari ${yearTxs.length} transaksi. Estimasi pajak PMK-68 (0.1% dari proceeds): Rp ${pmk68TaxIdr.toLocaleString("id-ID", { maximumFractionDigits: 0 })}. Loss dapat dikompensasi di tahun berikutnya sesuai aturan pajak Indonesia.`;
+    } else {
+      summary = `Tahun ${year}: ${yearTxs.length} transaksi tercatat. Tidak ada realized gain/loss (hanya BUY atau hanya SELL parsial). Estimasi pajak PMK-68: Rp ${pmk68TaxIdr.toLocaleString("id-ID", { maximumFractionDigits: 0 })}.`;
+    }
+
+    res.json({
+      success: true,
+      report: {
+        year,
+        totalProceedsUsd: totalProceeds,
+        totalCostBasisUsd: totalCostBasis,
+        realizedGainLossUsd: totalRealizedGL,
+        unrealizedGainLossUsd: 0, // would need live prices — left as exercise for future
+        realizedGainLossPct,
+        pmk68TaxUsd: pmk68TaxUsd,
+        pmk68TaxIdr: pmk68TaxIdr,
+        pmk68TaxRate,
+        transactionCount: yearTxs.length,
+        buyCount,
+        sellCount,
+        totalBuyQty,
+        totalSellQty,
+        perSymbol,
+        generatedAt: new Date().toISOString(),
+        summary,
+      },
+    });
+  } catch (e: any) {
+    console.error("[tax-report] error:", e?.message || e);
+    res.status(500).json({ success: false, error: "Gagal membuat laporan pajak." });
+  }
+});
+
 // ─── BACKTEST RESULTS ────────────────────────────────────────────────
 
 portfolioRouter.get("/backtests", async (req: Request, res: Response) => {

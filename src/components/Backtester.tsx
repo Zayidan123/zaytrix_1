@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { motion } from "motion/react";
 import { 
   BarChart3, 
   Play, 
@@ -414,15 +415,44 @@ export default function Backtester({ assets }: BacktesterProps) {
 
   return (
     <div className="space-y-6" id="backtester-tab">
-      {/* Top Welcome Title */}
-      <div className="bg-[#0F172A] p-4 sm:p-6 rounded-2xl border border-slate-800">
-        <h2 className="text-lg sm:text-xl font-bold text-slate-100 flex items-center gap-2">
-          <BarChart3 className="w-5 h-5 text-blue-500" /> Penguji Strategi Historis (Backtester)
-        </h2>
-        <p className="text-xs sm:text-sm text-slate-400 mt-1">
-          Lakukan backtest strategi bertransaksi kuantitatif berbasis data historis asli di rentang 100 hari perdagangan bursa terakhir.
-        </p>
-      </div>
+      {/* Top Welcome Title — STYLING UPGRADE */}
+      <motion.div
+        initial={{ opacity: 0, y: -10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4 }}
+        className="bg-gradient-to-br from-[#0F172A] via-[#0F172A] to-[#1E2A5F]/30 p-4 sm:p-6 rounded-2xl border border-slate-800 relative overflow-hidden"
+      >
+        {/* Decorative animated orb */}
+        <motion.div
+          aria-hidden
+          className="absolute top-0 right-0 w-64 h-64 bg-blue-500/8 rounded-full blur-3xl pointer-events-none"
+          animate={{ x: [0, -20, 0], y: [0, 15, 0], opacity: [0.3, 0.5, 0.3] }}
+          transition={{ duration: 12, repeat: Infinity, ease: "easeInOut" }}
+        />
+        {/* Top accent line */}
+        <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-blue-500/0 via-blue-500/60 to-cyan-500/0" />
+        
+        <div className="relative z-10 flex items-center gap-3">
+          <motion.div
+            animate={{ scale: [1, 1.1, 1] }}
+            transition={{ duration: 2.5, repeat: Infinity, ease: "easeInOut" }}
+            className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500/15 to-cyan-500/10 border border-blue-500/30 flex items-center justify-center"
+          >
+            <BarChart3 className="w-5 h-5 text-blue-500" />
+          </motion.div>
+          <div>
+            <h2 className="text-lg sm:text-xl font-bold text-slate-100 flex items-center gap-2">
+              Strategy Backtester
+              <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-blue-950 text-blue-400 border border-blue-800/60">
+                HISTORIS
+              </span>
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-400 mt-1">
+              Lakukan backtest strategi bertransaksi kuantitatif berbasis data historis asli di rentang 100 hari perdagangan bursa terakhir.
+            </p>
+          </div>
+        </div>
+      </motion.div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
