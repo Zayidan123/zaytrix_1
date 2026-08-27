@@ -110,6 +110,14 @@ export default function Sidebar({
           {menuItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
+            // STYLING UPGRADE: per-item status color variety
+            const statusColor = item.id === "security"
+              ? (twoFactorEnabled ? "emerald" : "amber")
+              : item.id === "ai-signals" ? "violet"
+              : item.id === "whale-tracker" ? "cyan"
+              : item.id === "news" ? "rose"
+              : item.id === "coins" ? "blue"
+              : "slate";
             return (
               <motion.button
                 key={item.id}
@@ -133,9 +141,13 @@ export default function Sidebar({
                 {isActive && (
                   <motion.div
                     layoutId="activeTabIndicator"
-                    className="absolute inset-0 bg-amber-500/10 border-l-2 border-amber-500 rounded-lg"
+                    className="absolute inset-0 bg-gradient-to-r from-amber-500/15 via-amber-500/5 to-transparent border-l-2 border-amber-500 rounded-lg"
                     transition={{ type: "spring", stiffness: 380, damping: 28 }}
                   />
+                )}
+                {/* STYLING UPGRADE: hover gradient sheen on non-active items */}
+                {!isActive && (
+                  <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none bg-gradient-to-r from-slate-700/20 to-transparent" />
                 )}
 
                 <div className={`flex items-center font-semibold z-10 ${isCollapsed ? "" : "space-x-3"}`}>
@@ -144,9 +156,13 @@ export default function Sidebar({
                 </div>
                 {!isCollapsed && item.status && (
                   <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono shrink-0 ml-1.5 z-10 ${
-                    item.id === "security"
-                      ? (twoFactorEnabled ? "bg-emerald-500/25 text-emerald-400" : "bg-amber-500/20 text-amber-400 animate-pulse")
-                      : "bg-blue-500/25 text-blue-400 font-bold"
+                    statusColor === "emerald" ? "bg-emerald-500/20 text-emerald-400" :
+                    statusColor === "amber" ? "bg-amber-500/20 text-amber-400 animate-pulse" :
+                    statusColor === "violet" ? "bg-violet-500/20 text-violet-400" :
+                    statusColor === "cyan" ? "bg-cyan-500/20 text-cyan-400" :
+                    statusColor === "rose" ? "bg-rose-500/20 text-rose-400" :
+                    statusColor === "blue" ? "bg-blue-500/20 text-blue-400" :
+                    "bg-slate-500/20 text-slate-400"
                   }`}>
                     {item.status}
                   </span>

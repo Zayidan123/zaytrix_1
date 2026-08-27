@@ -330,6 +330,208 @@ portfolioRouter.delete("/alerts/:id", async (req: Request, res: Response) => {
 });
 
 // ============================================================================
+// NEW FEATURE: Portfolio Risk Score (VaR + CVaR + concentration metrics)
+// ----------------------------------------------------------------------------
+// GET /api/portfolio/risk-score
+// Computes:
+//   - 95% / 99% Value at Risk (1-day horizon, parametric, assumes normal returns)
+//   - 95% / 99% Conditional VaR (Expected Shortfall)
+//   - Concentration: Herfindahl-Hirschman Index (HHI) on USD weights
+//   - Sharpe-like ratio (uses asset 24h change as a return proxy)
+//   - Max drawdown proxy (largest single-asset 24h loss)
+//   - Diversification ratio (1 - HHI normalized)
+//
+// Fetches live 24h change per symbol from Binance ticker. Stocks use a fixed
+// 1.2% daily vol proxy (Indonesian bluechip empirical). All math is done
+// server-side so the client just renders the numbers.
+// ============================================================================
+
+interface RiskHolding {
+  symbol: string;
+  category: string;
+  quantity: number;
+  purchasePrice: number;
+  currentPrice: number;
+  change24hPct: number; // % return over 24h (decimal, e.g. 0.012 for 1.2%)
+  dailyVol: number; // daily volatility (decimal, e.g. 0.04 for 4%)
+}
+
+async function fetchAssetVolatility(symbol: string, category: string): Promise<{ price: number; change24hPct: number; dailyVol: number }> {
+  // Stock fallback (Indonesian bluechip empirical daily vol)
+  if (category !== "crypto") {
+    return { price: 0, change24hPct: 0, dailyVol: 0.012 };
+  }
+  try {
+    const binanceSymbol = symbol.toUpperCase().endsWith("USDT")
+      ? symbol.toUpperCase()
+      : symbol.toUpperCase() + "USDT";
+    const res = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${binanceSymbol}`);
+    if (!res.ok) return { price: 0, change24hPct: 0, dailyVol: 0.04 };
+    const data = (await res.json()) as any;
+    const price = parseFloat(data.lastPrice);
+    const change24hPct = parseFloat(data.priceChangePercent) / 100;
+    // Daily volatility proxy: |24h change| scaled. Crypto typically 3-8% daily vol.
+    // We use max(|change|, 3%) as a floor, capped at 15%.
+    const dailyVol = Math.min(0.15, Math.max(0.03, Math.abs(change24hPct) * 1.5));
+    return { price, change24hPct, dailyVol };
+  } catch {
+    return { price: 0, change24hPct: 0, dailyVol: 0.04 };
+  }
+}
+
+portfolioRouter.get("/risk-score", async (req: Request, res: Response) => {
+  try {
+    const holdings = await prisma.portfolioHolding.findMany({
+      where: { userId: req.user!.sub },
+    });
+    if (holdings.length === 0) {
+      return res.json({
+        success: true,
+        risk: {
+          totalValue: 0,
+          var95: 0,
+          var99: 0,
+          cvar95: 0,
+          cvar99: 0,
+          hhi: 0,
+          diversificationRatio: 0,
+          sharpeProxy: 0,
+          maxDrawdownProxy: 0,
+          largestPositionPct: 0,
+          largestPositionSymbol: null,
+          riskGrade: "N/A",
+          riskScore: 0,
+        },
+      });
+    }
+
+    // Fetch live prices + volatility per holding
+    const enriched: RiskHolding[] = [];
+    for (const h of holdings) {
+      const { price, change24hPct, dailyVol } = await fetchAssetVolatility(h.symbol, h.category);
+      const currentPrice = price > 0 ? price : h.purchasePrice; // fallback to purchase price
+      enriched.push({
+        symbol: h.symbol,
+        category: h.category,
+        quantity: h.quantity,
+        purchasePrice: h.purchasePrice,
+        currentPrice,
+        change24hPct,
+        dailyVol,
+      });
+    }
+
+    const totalValue = enriched.reduce((s, h) => s + h.currentPrice * h.quantity, 0);
+    if (totalValue <= 0) {
+      return res.json({
+        success: true,
+        risk: {
+          totalValue: 0,
+          var95: 0,
+          var99: 0,
+          cvar95: 0,
+          cvar99: 0,
+          hhi: 0,
+          diversificationRatio: 0,
+          sharpeProxy: 0,
+          maxDrawdownProxy: 0,
+          largestPositionPct: 0,
+          largestPositionSymbol: null,
+          riskGrade: "N/A",
+          riskScore: 0,
+        },
+      });
+    }
+
+    // Portfolio weights
+    const weights = enriched.map((h) => (h.currentPrice * h.quantity) / totalValue);
+
+    // Herfindahl-Hirschman Index (0=perfectly diversified, 1=concentrated)
+    const hhi = weights.reduce((s, w) => s + w * w, 0);
+
+    // Diversification ratio: 0 (concentrated) → 1 (fully diversified)
+    const diversificationRatio = enriched.length > 1 ? 1 - hhi : 0;
+
+    // Weighted portfolio daily volatility
+    const portfolioVol = Math.sqrt(
+      enriched.reduce((s, h, i) => s + Math.pow(weights[i] * h.dailyVol, 2), 0)
+    );
+
+    // Weighted portfolio 24h return
+    const portfolioReturn = enriched.reduce((s, h, i) => s + weights[i] * h.change24hPct, 0);
+
+    // Parametric VaR (assumes normal returns): VaR_alpha = -Z_alpha * vol * value
+    // Z_0.95 = 1.645, Z_0.99 = 2.326
+    const var95 = 1.645 * portfolioVol * totalValue;
+    const var99 = 2.326 * portfolioVol * totalValue;
+
+    // Conditional VaR (Expected Shortfall): E[Loss | Loss > VaR]
+    // For normal: CVaR_alpha = vol * phi(Z_alpha) / (1 - alpha) * value
+    // phi(1.645) ≈ 0.103, phi(2.326) ≈ 0.0267
+    const cvar95 = (0.103 / 0.05) * portfolioVol * totalValue;
+    const cvar99 = (0.0267 / 0.01) * portfolioVol * totalValue;
+
+    // Sharpe-like proxy: portfolioReturn / portfolioVol (risk-free rate = 0 for daily)
+    const sharpeProxy = portfolioVol > 0 ? portfolioReturn / portfolioVol : 0;
+
+    // Max drawdown proxy: largest single-asset 24h loss (if negative)
+    const maxDrawdownProxy = Math.max(
+      0,
+      ...enriched.map((h) => Math.max(0, -h.change24hPct) * (h.currentPrice * h.quantity))
+    );
+
+    // Largest position %
+    const largestIdx = weights.indexOf(Math.max(...weights));
+    const largestPositionPct = weights[largestIdx] * 100;
+    const largestPositionSymbol = enriched[largestIdx]?.symbol ?? null;
+
+    // Risk score: 0-100 (higher = riskier). Composed of:
+    //   - volatility (40%): portfolioVol scaled (0-15% daily vol maps to 0-40)
+    //   - concentration (30%): HHI scaled (0-1 maps to 0-30)
+    //   - largest position (20%): max weight % scaled (0-100% maps to 0-20)
+    //   - drawdown proxy (10%): maxDrawdownProxy as % of portfolio, scaled (0-10% maps to 0-10)
+    const volScore = Math.min(40, (portfolioVol / 0.15) * 40);
+    const concScore = hhi * 30;
+    const largestScore = Math.min(20, (largestPositionPct / 100) * 20);
+    const ddPctOfPortfolio = totalValue > 0 ? (maxDrawdownProxy / totalValue) * 100 : 0;
+    const ddScore = Math.min(10, (ddPctOfPortfolio / 10) * 10);
+    const riskScore = Math.round(volScore + concScore + largestScore + ddScore);
+
+    // Risk grade: A (low) → E (extreme)
+    let riskGrade: string;
+    if (riskScore < 20) riskGrade = "A";
+    else if (riskScore < 40) riskGrade = "B";
+    else if (riskScore < 60) riskGrade = "C";
+    else if (riskScore < 80) riskGrade = "D";
+    else riskGrade = "E";
+
+    res.json({
+      success: true,
+      risk: {
+        totalValue,
+        var95,
+        var99,
+        cvar95,
+        cvar99,
+        hhi,
+        diversificationRatio,
+        sharpeProxy,
+        maxDrawdownProxy,
+        largestPositionPct,
+        largestPositionSymbol,
+        riskGrade,
+        riskScore,
+        portfolioVol,
+        portfolioReturn,
+        holdingsCount: enriched.length,
+      },
+    });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: "Gagal menghitung skor risiko." });
+  }
+});
+
+// ============================================================================
 // NEW FEATURE: Price Alert Checker
 // ----------------------------------------------------------------------------
 // Periodically fetches live prices for all unique symbols that have un-triggered

@@ -53,6 +53,11 @@ function signToken(payload: { sub: string; email: string; displayName: string })
   return jwt.sign(payload, getSessionSecret(), { expiresIn: TOKEN_TTL_SECONDS });
 }
 
+// FIX-P1-D: temp token for OAuth→2FA handoff (5 min TTL, same as auth.ts).
+function signTempToken(payload: { sub: string; email: string; displayName: string }): string {
+  return jwt.sign(payload, getSessionSecret(), { expiresIn: 5 * 60 });
+}
+
 function hashToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
@@ -216,15 +221,34 @@ oauthRouter.get("/google/callback", async (req: Request, res: Response, next: Ne
     }
 
     // 3. Find-or-create the User. We look up by oauthId first, then by email.
-    //    If a user with the same email exists but was created via email/password,
-    //    we LINK the OAuth identity to it (set oauthProvider + oauthId) rather
-    //    than creating a duplicate — this matches user expectations.
+    //    FIX-P1-D: Previously, if a user with the same email existed but was
+    //    created via email/password, we LINKED the OAuth identity to it
+    //    WITHOUT verifying profile.email_verified. An attacker who can make
+    //    Google issue an OAuth callback for the victim's email (e.g. via a
+    //    Google account with a verified-but-unconfirmed email) would take
+    //    over the victim's account. Now we REQUIRE profile.email_verified
+    //    before any linking, AND we require the victim's account to NOT have
+    //    a stronger auth method (2FA) configured — if it does, we refuse
+    //    silent linking and redirect to the login page with an error so the
+    //    legitimate owner must authenticate first.
     let user = await prisma.user.findFirst({ where: { oauthProvider: "google", oauthId: googleSub } });
     if (!user) {
       user = await prisma.user.findUnique({ where: { email } });
       if (user) {
-        // Link the existing email account to this Google identity. We don't
-        // overwrite the password — the user can still log in either way.
+        // FIX-P1-D: refuse silent linking unless Google says the email is verified.
+        if (!profile.email_verified) {
+          await logAudit(user.id, "OAUTH_LINK_REFUSED", req, false, { reason: "email_not_verified_by_google", googleSub });
+          return res.redirect(302, `${frontendBaseUrl()}/?oauth_error=email_not_verified`);
+        }
+        // FIX-P1-D: refuse silent linking if the existing account has 2FA enabled —
+        // the legitimate owner must prove they have the password + TOTP before we
+        // attach a new Google identity. Otherwise an attacker who compromises a
+        // Google account sharing the victim's email could bypass 2FA via OAuth.
+        if (user.twoFactorEnabled) {
+          await logAudit(user.id, "OAUTH_LINK_REFUSED", req, false, { reason: "two_factor_enabled", googleSub });
+          return res.redirect(302, `${frontendBaseUrl()}/?oauth_error=two_factor_protected`);
+        }
+        // Safe to link — the email is verified by Google AND the account has no 2FA.
         user = await prisma.user.update({
           where: { id: user.id },
           data: { oauthProvider: "google", oauthId: googleSub, emailVerified: user.emailVerified || new Date() },
@@ -249,6 +273,18 @@ oauthRouter.get("/google/callback", async (req: Request, res: Response, next: Ne
     }
 
     // 4. Issue the JWT + cookie — same envelope as the email/password login.
+    //    FIX-P1-D: if the user has 2FA enabled, OAuth MUST NOT bypass it.
+    //    Previously we issued the session cookie immediately, letting an
+    //    attacker who compromised a victim's Google account skip TOTP.
+    //    Now we redirect to the 2FA challenge screen with a tempToken
+    //    (same flow as password login with 2FA). The AuthScreen picks up
+    //    ?oauth_2fa_required=email and switches to the 2FA flow.
+    if (user.twoFactorEnabled) {
+      const tempToken = signTempToken({ sub: user.id, email: user.email, displayName: user.displayName });
+      await logAudit(user.id, "OAUTH_GOOGLE_2FA_REQUIRED", req, true, { googleSub, email });
+      return res.redirect(302, `${frontendBaseUrl()}/?oauth_2fa_required=${encodeURIComponent(email)}&temp_token=${encodeURIComponent(tempToken)}`);
+    }
+
     await logAudit(user.id, "OAUTH_GOOGLE_LOGIN", req, true, { googleSub, email });
     const token = signToken({ sub: user.id, email: user.email, displayName: user.displayName });
     setSessionCookie(res, token);

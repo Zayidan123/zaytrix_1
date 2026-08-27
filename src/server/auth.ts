@@ -621,6 +621,23 @@ authRouter.post("/login/2fa", async (req: Request, res: Response, next: NextFunc
       recordAuthAttempt(false);
       return res.status(400).json({ success: false, error: "2FA tidak aktif untuk akun ini." });
     }
+
+    // FIX-P1-D: per-account lockout for 2FA brute-force. Previously the 2FA
+    // endpoint had NO lockout — an attacker with the victim's password (→
+    // tempToken) could brute-force the 6-digit TOTP code across IPs in ~1h
+    // (1,000,000 / 30s window). Now we reuse the same failedLoginAttempts +
+    // lockedUntil fields as password login: 5 fails → 15min lockout.
+    if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
+      const ms = user.lockedUntil.getTime() - Date.now();
+      const mins = Math.ceil(ms / 60000);
+      recordAuthAttempt(false);
+      await logAudit(user.id, "LOGIN_2FA", req, false, { reason: "locked", lockedUntil: user.lockedUntil });
+      return res.status(429).json({
+        success: false,
+        error: `Akun terkunci akibat percobaan 2FA gagal berulang. Coba lagi dalam ${mins} menit.`,
+      });
+    }
+
     let secretB32: string;
     try {
       secretB32 = decryptTotpSecret(user.twoFactorSecret);
@@ -631,10 +648,42 @@ authRouter.post("/login/2fa", async (req: Request, res: Response, next: NextFunc
     }
     if (!verifyTotp(code, secretB32)) {
       recordAuthAttempt(false);
-      await logAudit(user.id, "LOGIN_2FA", req, false, { reason: "bad_code" });
-      return res.status(401).json({ success: false, error: "Kode 2FA tidak valid. Pastikan waktu perangkat sinkron." });
+      // FIX-P1-D: increment failedLoginAttempts + lock when threshold reached.
+      try {
+        const newCount = (user.failedLoginAttempts || 0) + 1;
+        const shouldLock = newCount >= MAX_FAILED_ATTEMPTS;
+        await prisma.user.update({
+          where: { id: user.id },
+          data: {
+            failedLoginAttempts: newCount,
+            lockedUntil: shouldLock ? new Date(Date.now() + LOCKOUT_DURATION_MS) : user.lockedUntil,
+          },
+        });
+        await logAudit(user.id, "LOGIN_2FA", req, false, { reason: "bad_code", attempts: newCount, locked: shouldLock });
+        if (shouldLock) {
+          return res.status(429).json({
+            success: false,
+            error: "Terlalu banyak percobaan 2FA gagal. Akun dikunci selama 15 menit.",
+          });
+        }
+        const remaining = MAX_FAILED_ATTEMPTS - newCount;
+        return res.status(401).json({
+          success: false,
+          error: `Kode 2FA tidak valid. Sisa percobaan: ${remaining} sebelum akun terkunci.`,
+        });
+      } catch (e: any) {
+        console.error("[auth] 2FA failedLoginAttempts update failed:", e?.message || e);
+        return res.status(401).json({ success: false, error: "Kode 2FA tidak valid. Pastikan waktu perangkat sinkron." });
+      }
     }
     recordAuthAttempt(true);
+    // FIX-P1-D: reset failedLoginAttempts + lockedUntil on success.
+    try {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { failedLoginAttempts: 0, lockedUntil: null },
+      });
+    } catch {}
     await logAudit(user.id, "LOGIN_2FA", req, true, {});
     const token = signToken({ sub: user.id, email: user.email, displayName: user.displayName });
     setSessionCookie(res, token);
