@@ -18,6 +18,7 @@ import {
   LogOut,
   User as UserIcon,
   Newspaper,
+  MessageCircle,
   Layers
 } from "lucide-react";
 import { auth, signOut } from "../lib/firebase";
@@ -48,6 +49,7 @@ export default function Sidebar({
     { id: "assets", name: "Crypto Hub", icon: Coins },
     { id: "whale-tracker", name: "On-Chain Data", icon: Radar, status: "MEMPOOL LIVE" },
     { id: "ai-signals", name: "AI Trade Signals", icon: LineChart, status: "LIVE ON-CHAIN" },
+    { id: "market-chat", name: "AI Market Chat", icon: MessageCircle, status: "LIVE" },
     { id: "multi-doc", name: "AI Multi-Doc Compare", icon: Files, status: "VIP" },
     { id: "projections", name: "Profit Projections", icon: TrendingUp },
     { id: "backtester", name: "Strategy Backtester", icon: BarChart3 },
@@ -114,6 +116,7 @@ export default function Sidebar({
             const statusColor = item.id === "security"
               ? (twoFactorEnabled ? "emerald" : "amber")
               : item.id === "ai-signals" ? "violet"
+              : item.id === "market-chat" ? "violet"
               : item.id === "whale-tracker" ? "cyan"
               : item.id === "news" ? "rose"
               : item.id === "coins" ? "blue"

@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { motion } from "motion/react";
 import { 
   User,
   Sliders, 
@@ -439,15 +440,60 @@ export default function Settings() {
   return (
     <div className="space-y-6" id="settings-hub-workbench">
       
-      {/* Settings Hub Header Banner */}
-      <div className="bg-[#0F172A] p-6 rounded-2xl border border-slate-800">
-        <h2 className="text-xl font-bold text-slate-100 flex items-center gap-2">
-          <Sliders className="w-5 h-5 text-amber-500 animate-spin-slow" /> Settings Hub (Pusat Pengaturan Utama)
-        </h2>
-        <p className="text-sm text-slate-400 mt-1">
-          Kelola profil pengguna, penampilan visual, keamanan siber, integrasi webhook real-time, dan legalitas privasi Anda dalam satu konsol modular.
-        </p>
-      </div>
+      {/* Settings Hub Header Banner — STYLING UPGRADE */}
+      <motion.div
+        initial={{ opacity: 0, y: -10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4 }}
+        className="bg-gradient-to-br from-[#0F172A] via-[#0F172A] to-[#1E1B4B]/30 p-6 rounded-2xl border border-slate-800 relative overflow-hidden"
+      >
+        {/* Decorative animated orbs */}
+        <motion.div
+          aria-hidden
+          className="absolute top-0 right-0 w-64 h-64 bg-amber-500/8 rounded-full blur-3xl pointer-events-none"
+          animate={{ x: [0, -20, 0], y: [0, 15, 0] }}
+          transition={{ duration: 10, repeat: Infinity, ease: "easeInOut" }}
+        />
+        <motion.div
+          aria-hidden
+          className="absolute -bottom-12 -left-12 w-48 h-48 bg-violet-500/8 rounded-full blur-3xl pointer-events-none"
+          animate={{ x: [0, 20, 0], y: [0, -10, 0] }}
+          transition={{ duration: 12, repeat: Infinity, ease: "easeInOut", delay: 2 }}
+        />
+        {/* Top accent line */}
+        <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-amber-500/0 via-amber-500/60 to-amber-500/0" />
+        
+        <div className="relative z-10">
+          <div className="flex items-center gap-3 mb-2">
+            <motion.div
+              animate={{ rotate: [0, 360] }}
+              transition={{ duration: 8, repeat: Infinity, ease: "linear" }}
+              className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500/15 to-orange-500/10 border border-amber-500/30 flex items-center justify-center"
+            >
+              <Sliders className="w-5 h-5 text-amber-500" />
+            </motion.div>
+            <div>
+              <h2 className="text-xl font-bold text-slate-100 flex items-center gap-2">
+                Settings Hub
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-amber-950 text-amber-400 border border-amber-800/60">
+                  PUSAT PENGATURAN
+                </span>
+              </h2>
+            </div>
+          </div>
+          <p className="text-sm text-slate-400 mt-1 max-w-2xl">
+            Kelola profil pengguna, penampilan visual, keamanan siber, integrasi webhook real-time, dan legalitas privasi Anda dalam satu konsol modular.
+          </p>
+        </div>
+      </motion.div>
+
+      {/* STYLING UPGRADE: shimmer keyframe for category cards */}
+      <style>{`
+        @keyframes shimmer {
+          0% { transform: translateX(-100%) skewX(12deg); }
+          100% { transform: translateX(100%) skewX(12deg); }
+        }
+      `}</style>
 
       {viewMode === "menu" ? (
         <div className="space-y-6 animate-fade-in">
@@ -456,24 +502,36 @@ export default function Settings() {
             <span className="text-[10px] text-slate-500 font-mono">Pilih salah satu modul untuk kustomisasi</span>
           </div>
 
-          {/* Grid of Settings Categories */}
+          {/* Grid of Settings Categories — STYLING UPGRADE */}
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {tabs.map((tab) => {
+            {tabs.map((tab, idx) => {
               const Icon = tab.icon;
               return (
-                <button
+                <motion.button
                   key={tab.id}
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3, delay: idx * 0.05 }}
+                  whileHover={{ y: -4, scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
                   onClick={() => {
                     setActiveSubTab(tab.id);
                     setViewMode("detail");
                   }}
-                  className="group relative bg-[#0A0F1D]/80 border border-slate-850 hover:border-amber-500/50 rounded-xl p-5 text-left transition-all duration-300 hover:shadow-lg hover:shadow-amber-500/5 hover:-translate-y-0.5 flex flex-col justify-between h-44 cursor-pointer animate-fade-in"
+                  className="group relative bg-[#0A0F1D]/80 border border-slate-850 hover:border-amber-500/50 rounded-xl p-5 text-left transition-all duration-300 hover:shadow-lg hover:shadow-amber-500/10 flex flex-col justify-between h-44 cursor-pointer overflow-hidden"
                 >
+                  {/* Top accent bar */}
+                  <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-amber-500/0 via-amber-500/50 to-amber-500/0 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                  {/* Hover shimmer */}
+                  <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none">
+                    <div className="absolute -inset-x-full h-full bg-gradient-to-r from-transparent via-amber-500/8 to-transparent skew-x-12 group-hover:animate-[shimmer_1.5s_ease-in-out]" />
+                  </div>
                   <div className="absolute top-0 right-0 w-24 h-24 bg-amber-500/5 rounded-bl-full group-hover:bg-amber-500/10 transition-colors pointer-events-none" />
                   
-                  <div className="space-y-3">
-                    <div className="w-10 h-10 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 group-hover:scale-110 transition-transform">
-                      <Icon className="w-5 h-5" />
+                  <div className="space-y-3 relative z-10">
+                    <div className="relative w-10 h-10 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 group-hover:scale-110 transition-transform">
+                      <div className="absolute inset-0 rounded-lg bg-gradient-to-br from-amber-400/15 to-transparent pointer-events-none" />
+                      <Icon className="w-5 h-5 relative z-10" />
                     </div>
                     <div>
                       <h3 className="text-sm font-bold text-slate-200 group-hover:text-amber-400 transition-colors">{tab.name}</h3>
@@ -481,11 +539,11 @@ export default function Settings() {
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-1.5 text-[10px] font-mono text-amber-400 font-bold uppercase mt-2 group-hover:gap-2.5 transition-all">
+                  <div className="flex items-center gap-1.5 text-[10px] font-mono text-amber-400 font-bold uppercase mt-2 group-hover:gap-2.5 transition-all relative z-10">
                     <span>Kelola Pengaturan</span>
                     <ArrowLeft className="w-3 h-3 rotate-180" />
                   </div>
-                </button>
+                </motion.button>
               );
             })}
           </div>

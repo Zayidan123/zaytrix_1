@@ -29,6 +29,7 @@ import ApiAutomation from "./components/ApiAutomation";
 import SecurityCenter from "./components/SecurityCenter";
 import MultiDocAnalysis from "./components/MultiDocAnalysis";
 import AiSignals from "./components/AiSignals";
+import MarketSentimentChat from "./components/MarketSentimentChat";
 import OnChainData from "./components/OnChainData";
 import Settings from "./components/Settings";
 import Ledger from "./components/Ledger";
@@ -1196,6 +1197,10 @@ export default function App() {
 
               {activeTab === "ai-signals" && (
                 <AiSignals assets={liveAssets} />
+              )}
+
+              {activeTab === "market-chat" && (
+                <MarketSentimentChat />
               )}
 
               {activeTab === "security" && (
