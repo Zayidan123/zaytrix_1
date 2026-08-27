@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
+import { motion } from "motion/react";
 import { 
   Bell, 
   Settings, 
@@ -497,19 +498,48 @@ export default function TechnicalTerminal({
   return (
     <div className="space-y-6" id="technical-terminal-tab">
       
-      {/* Title Area */}
-      <div className="bg-[#0F172A] p-4 sm:p-6 rounded-2xl border border-slate-800 flex flex-col xl:flex-row xl:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-lg sm:text-xl font-bold text-slate-100 flex items-center gap-2">
-            <Bell className="w-5 h-5 text-blue-500" /> Pengawasan Teknis & Notifikasi Peringatan
-          </h2>
-          <p className="text-xs sm:text-sm text-slate-400 mt-1">
-            Konfigurasi parameter osilator teknikal dan setel target alarm harga yang disesuaikan secara instan.
-          </p>
+      {/* Title Area — STYLING UPGRADE */}
+      <motion.div
+        initial={{ opacity: 0, y: -10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4 }}
+        className="bg-gradient-to-br from-[#0F172A] via-[#0F172A] to-[#3B1F5F]/20 p-4 sm:p-6 rounded-2xl border border-slate-800 flex flex-col xl:flex-row xl:items-center justify-between gap-4 relative overflow-hidden"
+      >
+        {/* Decorative animated orb */}
+        <motion.div
+          aria-hidden
+          className="absolute top-0 right-0 w-64 h-64 bg-violet-500/8 rounded-full blur-3xl pointer-events-none"
+          animate={{ x: [0, -20, 0], y: [0, 15, 0], opacity: [0.3, 0.5, 0.3] }}
+          transition={{ duration: 12, repeat: Infinity, ease: "easeInOut" }}
+        />
+        {/* Top accent line */}
+        <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-violet-500/0 via-violet-500/60 to-blue-500/0" />
+        
+        <div className="relative z-10">
+          <div className="flex items-center gap-3 mb-1">
+            <motion.div
+              animate={{ rotate: [0, 15, -15, 0] }}
+              transition={{ duration: 2, repeat: Infinity, repeatDelay: 2 }}
+              className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500/15 to-blue-500/10 border border-violet-500/30 flex items-center justify-center"
+            >
+              <Bell className="w-5 h-5 text-violet-400" />
+            </motion.div>
+            <div>
+              <h2 className="text-lg sm:text-xl font-bold text-slate-100 flex items-center gap-2">
+                Technical Terminal
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-violet-950 text-violet-400 border border-violet-800/60">
+                  INDIKATOR
+                </span>
+              </h2>
+              <p className="text-xs sm:text-sm text-slate-400 mt-1">
+                Konfigurasi parameter osilator teknikal dan setel target alarm harga yang disesuaikan secara instan.
+              </p>
+            </div>
+          </div>
         </div>
         
         {/* Fluctuation triggers for manual verification of disappearing banners */}
-        <div className="flex flex-col sm:flex-row gap-2 shrink-0">
+        <div className="relative z-10 flex flex-col sm:flex-row gap-2 shrink-0">
           <button
             onClick={() => handleTriggerDrasticSim('altcoin')}
             id="sim-drastic-altcoin"
@@ -525,7 +555,7 @@ export default function TechnicalTerminal({
             Simulasi Lonjakan Kripto
           </button>
         </div>
-      </div>
+      </motion.div>
 
       {/* 📈 WORKSPACE ANALISIS TEKNIKAL: TRADINGVIEW LIGHTWEIGHT CHARTS INTEGRATION */}
       <div className="bg-[#0F172A] border border-slate-800 rounded-2xl p-4 sm:p-6 space-y-6">

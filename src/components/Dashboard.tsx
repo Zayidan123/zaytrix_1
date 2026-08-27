@@ -51,6 +51,7 @@ import PriceAlertsWidget from "./PriceAlertsWidget";
 import RiskScoreWidget from "./RiskScoreWidget";
 import RebalanceWidget from "./RebalanceWidget";
 import CorrelationMatrixWidget from "./CorrelationMatrixWidget";
+import DCACalculator from "./DCACalculator";
 import { db, auth } from "../lib/firebase";
 import { doc, getDoc } from "firebase/firestore";
 
@@ -1131,6 +1132,9 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
 
       {/* NEW FEATURE: Multi-asset Correlation Matrix */}
       <CorrelationMatrixWidget />
+
+      {/* NEW FEATURE: DCA Calculator with historical performance */}
+      <DCACalculator />
 
       {/* Charts section: Line chart of Daily Portfolio Growth & Pie Chart of Allocation */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

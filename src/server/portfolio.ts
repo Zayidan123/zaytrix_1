@@ -780,6 +780,200 @@ portfolioRouter.get("/tax-report", async (req: Request, res: Response) => {
   }
 });
 
+// ============================================================================
+// NEW FEATURE: DCA (Dollar-Cost Averaging) Calculator with historical performance
+// ----------------------------------------------------------------------------
+// GET /api/portfolio/dca?symbol=BTC&amount=100&frequency=weekly&startDate=2024-01-01
+//
+// Simulates a DCA strategy: investing a fixed USD amount at regular intervals
+// (daily/weekly/monthly) from startDate to today. Uses Binance daily klines
+// to compute the actual purchase price at each interval.
+//
+// Returns:
+//   - Total invested (USD)
+//   - Total units accumulated
+//   - Average cost per unit
+//   - Current portfolio value (at latest close)
+//   - Total return (USD + %)
+//   - Per-purchase breakdown (date, price, units bought)
+//   - Comparison vs lump-sum (investing everything on day 1)
+// ============================================================================
+
+const DCA_CACHE_TTL_MS = 5 * 60 * 1000; // 5 min
+const dcaCache = new Map<string, { data: any; ts: number }>();
+
+portfolioRouter.get("/dca", async (req: Request, res: Response) => {
+  try {
+    const symbol = typeof req.query.symbol === "string" ? req.query.symbol.toUpperCase() : "BTC";
+    const amount = typeof req.query.amount === "string" ? parseFloat(req.query.amount) : 100;
+    const frequency = typeof req.query.frequency === "string" && ["daily", "weekly", "monthly"].includes(req.query.frequency)
+      ? req.query.frequency
+      : "weekly";
+    const startDate = typeof req.query.startDate === "string" ? req.query.startDate : "";
+
+    if (amount <= 0 || amount > 1e6) {
+      return res.status(400).json({ success: false, error: "Amount harus antara 0 dan 1,000,000 USD." });
+    }
+
+    // Parse start date (default: 1 year ago)
+    let start: Date;
+    if (startDate) {
+      start = new Date(startDate);
+      if (isNaN(start.getTime())) {
+        return res.status(400).json({ success: false, error: "Format startDate tidak valid (gunakan YYYY-MM-DD)." });
+      }
+    } else {
+      start = new Date();
+      start.setFullYear(start.getFullYear() - 1);
+    }
+
+    const end = new Date();
+    if (start >= end) {
+      return res.status(400).json({ success: false, error: "startDate harus sebelum hari ini." });
+    }
+
+    // Cap to 3 years max for performance
+    const maxStart = new Date();
+    maxStart.setFullYear(maxStart.getFullYear() - 3);
+    if (start < maxStart) start = maxStart;
+
+    const cacheKey = `${symbol}|${amount}|${frequency}|${start.toISOString().split("T")[0]}`;
+    const cached = dcaCache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < DCA_CACHE_TTL_MS) {
+      return res.json({ success: true, ...cached.data });
+    }
+
+    // Fetch daily klines from Binance (limit = days between start and now, capped at 1000)
+    const days = Math.min(Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 10, 1000);
+    const binanceSymbol = symbol.endsWith("USDT") ? symbol : symbol + "USDT";
+    const klinesRes = await fetch(
+      `https://api.binance.com/api/v3/klines?symbol=${binanceSymbol}&interval=1d&limit=${days}&startTime=${start.getTime()}`
+    );
+    if (!klinesRes.ok) {
+      return res.status(502).json({ success: false, error: `Gagal mengambil data klines untuk ${symbol}.` });
+    }
+    const klines = (await klinesRes.json()) as any[];
+    if (!Array.isArray(klines) || klines.length === 0) {
+      return res.status(404).json({ success: false, error: `Tidak ada data harga untuk ${symbol}.` });
+    }
+
+    // Build a map of date (YYYY-MM-DD) → close price
+    const priceByDate = new Map<string, number>();
+    for (const k of klines) {
+      const d = new Date(k[0]);
+      const dateStr = d.toISOString().split("T")[0];
+      priceByDate.set(dateStr, parseFloat(k[4])); // k[4] = close price
+    }
+
+    // Generate DCA purchase dates
+    const purchases: Array<{ date: string; price: number; units: number; amount: number }> = [];
+    const intervalMs = frequency === "daily" ? 24 * 60 * 60 * 1000 : frequency === "weekly" ? 7 * 24 * 60 * 60 * 1000 : 30 * 24 * 60 * 60 * 1000;
+    let current = new Date(start);
+    while (current <= end) {
+      const dateStr = current.toISOString().split("T")[0];
+      // Find the closest available price (exact date, or next available)
+      let price = priceByDate.get(dateStr);
+      if (price === undefined) {
+        // Find nearest date
+        const sortedDates = Array.from(priceByDate.keys()).sort();
+        for (const d of sortedDates) {
+          if (d >= dateStr) {
+            price = priceByDate.get(d);
+            break;
+          }
+        }
+        if (price === undefined) price = priceByDate.get(sortedDates[sortedDates.length - 1]) || 0;
+      }
+      if (price > 0) {
+        purchases.push({
+          date: dateStr,
+          price,
+          units: amount / price,
+          amount,
+        });
+      }
+      current = new Date(current.getTime() + intervalMs);
+    }
+
+    if (purchases.length === 0) {
+      return res.json({
+        success: true,
+        dca: {
+          symbol,
+          amount,
+          frequency,
+          startDate: start.toISOString().split("T")[0],
+          endDate: end.toISOString().split("T")[0],
+          purchaseCount: 0,
+          totalInvested: 0,
+          totalUnits: 0,
+          averageCost: 0,
+          currentValue: 0,
+          currentPrice: klines[klines.length - 1] ? parseFloat(klines[klines.length - 1][4]) : 0,
+          totalReturn: 0,
+          totalReturnPct: 0,
+          lumpSumReturn: 0,
+          lumpSumReturnPct: 0,
+          dcaAdvantage: 0,
+          purchases: [],
+          summary: "Tidak ada periode pembelian dalam rentang tanggal yang dipilih.",
+        },
+      });
+    }
+
+    const totalInvested = purchases.reduce((s, p) => s + p.amount, 0);
+    const totalUnits = purchases.reduce((s, p) => s + p.units, 0);
+    const averageCost = totalUnits > 0 ? totalInvested / totalUnits : 0;
+    const currentPrice = klines[klines.length - 1] ? parseFloat(klines[klines.length - 1][4]) : purchases[purchases.length - 1].price;
+    const currentValue = totalUnits * currentPrice;
+    const totalReturn = currentValue - totalInvested;
+    const totalReturnPct = totalInvested > 0 ? (totalReturn / totalInvested) * 100 : 0;
+
+    // Lump-sum comparison: invest everything on the first purchase date
+    const firstPrice = purchases[0].price;
+    const lumpSumUnits = totalInvested / firstPrice;
+    const lumpSumValue = lumpSumUnits * currentPrice;
+    const lumpSumReturn = lumpSumValue - totalInvested;
+    const lumpSumReturnPct = (lumpSumReturn / totalInvested) * 100;
+    const dcaAdvantage = totalReturn - lumpSumReturn; // positive = DCA better
+
+    // Summary
+    let summary: string;
+    if (dcaAdvantage > 0) {
+      summary = `Strategi DCA (${frequency}, $${amount}/periode) menghasilkan return +$${totalReturn.toFixed(2)} (${totalReturnPct.toFixed(1)}%), lebih baik $${dcaAdvantage.toFixed(2)} dibanding lump-sum. DCA menguntungkan di pasar volatil/menurun karena meratakan biaya rata-rata.`;
+    } else {
+      summary = `Strategi DCA (${frequency}, $${amount}/periode) menghasilkan return +$${totalReturn.toFixed(2)} (${totalReturnPct.toFixed(1)}%), lebih buruk $${Math.abs(dcaAdvantage).toFixed(2)} dibanding lump-sum. Lump-sum menguntungkan di pasar yang terus naik. DCA tetap membantu mengurangi risiko timing pasar.`;
+    }
+
+    const data = {
+      symbol,
+      amount,
+      frequency,
+      startDate: start.toISOString().split("T")[0],
+      endDate: end.toISOString().split("T")[0],
+      purchaseCount: purchases.length,
+      totalInvested,
+      totalUnits,
+      averageCost,
+      currentValue,
+      currentPrice,
+      totalReturn,
+      totalReturnPct,
+      lumpSumReturn,
+      lumpSumReturnPct,
+      dcaAdvantage,
+      purchases: purchases.slice(-100), // last 100 purchases for UI (cap payload)
+      summary,
+    };
+
+    dcaCache.set(cacheKey, { data, ts: Date.now() });
+    res.json({ success: true, ...data });
+  } catch (e: any) {
+    console.error("[dca] error:", e?.message || e);
+    res.status(500).json({ success: false, error: "Gagal menghitung simulasi DCA." });
+  }
+});
+
 // ─── BACKTEST RESULTS ────────────────────────────────────────────────
 
 portfolioRouter.get("/backtests", async (req: Request, res: Response) => {
