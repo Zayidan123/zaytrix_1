@@ -168,6 +168,252 @@ portfolioRouter.post("/ledger/sync", async (req: Request, res: Response) => {
   }
 });
 
+// ============================================================================
+// NEW FEATURE: Tax Lot Optimizer (FIFO / LIFO / HIFO)
+// ----------------------------------------------------------------------------
+// GET /api/portfolio/tax-lots?method=FIFO&symbol=BTC&sellQuantity=0.2&sellPrice=95000
+//
+// Computes the realized P&L + remaining tax lots for a hypothetical sale of
+// `sellQuantity` units of `symbol` at `sellPrice`, using one of three lot-
+// identification methods:
+//   - FIFO (First In First Out): oldest lots sold first → highest short-term
+//     gains in rising markets (conservative for tax)
+//   - LIFO (Last In First Out): newest lots sold first → tends to realize
+//     smaller gains (or larger losses) — useful in down markets
+//   - HIFO (Highest In First Out): highest-cost lots sold first → minimizes
+//     realized gains (most tax-efficient in rising markets)
+//
+// Indonesian context: PMK-68 applies 0.1% final income tax on crypto
+// transactions (transaction-based, not lot-based), but lot tracking is still
+// essential for capital-gains accounting in jurisdictions that tax gains.
+// ============================================================================
+
+interface TaxLot {
+  lotId: string;
+  acquiredAt: string;
+  quantity: number;
+  costBasisUsd: number; // total cost for this lot (price × qty)
+  costPerUnitUsd: number;
+}
+
+interface SaleLot {
+  lotId: string;
+  acquiredAt: string;
+  quantitySold: number;
+  costBasisUsd: number;
+  proceedsUsd: number;
+  gainLossUsd: number;
+  holdingPeriodDays: number;
+  isShortTerm: boolean; // < 365 days = short-term
+}
+
+interface TaxLotResult {
+  method: string;
+  symbol: string;
+  sellQuantity: number;
+  sellPrice: number;
+  totalProceedsUsd: number;
+  totalCostBasisUsd: number;
+  totalGainLossUsd: number;
+  totalGainLossPct: number;
+  shortTermGainLossUsd: number;
+  longTermGainLossUsd: number;
+  saleLots: SaleLot[];
+  remainingLots: TaxLot[];
+  totalRemainingQuantity: number;
+  totalRemainingCostBasis: number;
+  estimatedTaxIdr: number; // PMK-68 0.1% on proceeds
+  notes: string[];
+}
+
+const PMK_68_TAX_RATE = 0.001; // 0.1% Indonesian crypto transaction tax
+const USD_TO_IDR_FALLBACK = 15800;
+
+portfolioRouter.get("/tax-lots", async (req: Request, res: Response) => {
+  try {
+    const method = typeof req.query.method === "string" && ["FIFO", "LIFO", "HIFO"].includes(req.query.method)
+      ? req.query.method
+      : "FIFO";
+    const symbol = typeof req.query.symbol === "string" ? req.query.symbol.toUpperCase() : "";
+    const sellQuantity = typeof req.query.sellQuantity === "string" ? parseFloat(req.query.sellQuantity) : 0;
+    const sellPrice = typeof req.query.sellPrice === "string" ? parseFloat(req.query.sellPrice) : 0;
+
+    if (!symbol || sellQuantity <= 0 || sellPrice <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: "Parameter wajib: method (FIFO/LIFO/HIFO), symbol, sellQuantity (>0), sellPrice (>0)",
+      });
+    }
+
+    // Fetch all BUY transactions for this symbol (these create tax lots)
+    const allTxs = await prisma.ledgerTransaction.findMany({
+      where: { userId: req.user!.sub, symbol },
+      orderBy: { timestamp: "asc" },
+    });
+
+    const buyTxs = allTxs.filter((t) => t.type && t.type.toUpperCase() === "BUY");
+    if (buyTxs.length === 0) {
+      return res.json({
+        success: true,
+        result: {
+          method,
+          symbol,
+          sellQuantity,
+          sellPrice,
+          totalProceedsUsd: 0,
+          totalCostBasisUsd: 0,
+          totalGainLossUsd: 0,
+          totalGainLossPct: 0,
+          shortTermGainLossUsd: 0,
+          longTermGainLossUsd: 0,
+          saleLots: [],
+          remainingLots: [],
+          totalRemainingQuantity: 0,
+          totalRemainingCostBasis: 0,
+          estimatedTaxIdr: 0,
+          notes: [`Tidak ada transaksi BUY untuk ${symbol}. Tidak dapat menghitung tax lots.`],
+        } as TaxLotResult,
+      });
+    }
+
+    // Build initial tax lots from BUY transactions
+    const initialLots: TaxLot[] = buyTxs.map((t, idx) => ({
+      lotId: t.id || `lot-${idx}`,
+      acquiredAt: t.timestamp,
+      quantity: t.quantity,
+      costBasisUsd: t.totalAmount || t.price * t.quantity,
+      costPerUnitUsd: t.quantity > 0 ? (t.totalAmount || t.price * t.quantity) / t.quantity : t.price,
+    }));
+
+    // Apply prior SELL transactions to reduce lot quantities (using the same method)
+    // so the remaining lots reflect the current open position.
+    const sellTxs = allTxs.filter((t) => t.type && t.type.toUpperCase() === "SELL");
+    let workingLots = [...initialLots];
+
+    // For prior sells, we use FIFO (default) to deplete lots — this matches the
+    // most common accounting treatment. The hypothetical sale below uses the
+    // user's chosen method.
+    for (const sell of sellTxs) {
+      let qtyToSell = sell.quantity;
+      // Sort working lots by acquisition time (FIFO) for prior-sell depletion
+      workingLots.sort((a, b) => new Date(a.acquiredAt).getTime() - new Date(b.acquiredAt).getTime());
+      for (const lot of workingLots) {
+        if (qtyToSell <= 0) break;
+        const sellFromLot = Math.min(lot.quantity, qtyToSell);
+        lot.quantity -= sellFromLot;
+        lot.costBasisUsd -= sellFromLot * lot.costPerUnitUsd;
+        qtyToSell -= sellFromLot;
+      }
+    }
+    // Filter out fully-depleted lots
+    workingLots = workingLots.filter((l) => l.quantity > 0.00000001);
+
+    // Now apply the user's chosen method to order lots for the hypothetical sale
+    const methodLots = [...workingLots];
+    if (method === "FIFO") {
+      methodLots.sort((a, b) => new Date(a.acquiredAt).getTime() - new Date(b.acquiredAt).getTime());
+    } else if (method === "LIFO") {
+      methodLots.sort((a, b) => new Date(b.acquiredAt).getTime() - new Date(a.acquiredAt).getTime());
+    } else if (method === "HIFO") {
+      methodLots.sort((a, b) => b.costPerUnitUsd - a.costPerUnitUsd);
+    }
+
+    // Walk through sorted lots, consuming sellQuantity
+    const saleLots: SaleLot[] = [];
+    let remainingToSell = sellQuantity;
+    let totalProceeds = 0;
+    let totalCostBasis = 0;
+    let shortTermGL = 0;
+    let longTermGL = 0;
+    const now = Date.now();
+
+    for (const lot of methodLots) {
+      if (remainingToSell <= 0) break;
+      const qtyFromLot = Math.min(lot.quantity, remainingToSell);
+      const costBasis = qtyFromLot * lot.costPerUnitUsd;
+      const proceeds = qtyFromLot * sellPrice;
+      const gainLoss = proceeds - costBasis;
+      const holdingPeriodDays = Math.floor((now - new Date(lot.acquiredAt).getTime()) / (1000 * 60 * 60 * 24));
+      const isShortTerm = holdingPeriodDays < 365;
+
+      if (isShortTerm) shortTermGL += gainLoss;
+      else longTermGL += gainLoss;
+
+      saleLots.push({
+        lotId: lot.lotId,
+        acquiredAt: lot.acquiredAt,
+        quantitySold: qtyFromLot,
+        costBasisUsd: costBasis,
+        proceedsUsd: proceeds,
+        gainLossUsd: gainLoss,
+        holdingPeriodDays,
+        isShortTerm,
+      });
+
+      // Reduce the lot in workingLots (so remainingLots reflects post-sale state)
+      const workingLot = workingLots.find((l) => l.lotId === lot.lotId);
+      if (workingLot) {
+        workingLot.quantity -= qtyFromLot;
+        workingLot.costBasisUsd -= costBasis;
+      }
+
+      totalProceeds += proceeds;
+      totalCostBasis += costBasis;
+      remainingToSell -= qtyFromLot;
+    }
+
+    // Remove fully-depleted lots from remaining
+    const remainingLots = workingLots.filter((l) => l.quantity > 0.00000001);
+    const totalRemainingQuantity = remainingLots.reduce((s, l) => s + l.quantity, 0);
+    const totalRemainingCostBasis = remainingLots.reduce((s, l) => s + l.costBasisUsd, 0);
+
+    const totalGainLoss = totalProceeds - totalCostBasis;
+    const totalGainLossPct = totalCostBasis > 0 ? (totalGainLoss / totalCostBasis) * 100 : 0;
+
+    // PMK-68 estimated tax (0.1% of proceeds, in IDR)
+    const estimatedTaxIdr = totalProceeds * PMK_68_TAX_RATE * USD_TO_IDR_FALLBACK;
+
+    const notes: string[] = [];
+    if (remainingToSell > 0.00000001) {
+      notes.push(`Peringatan: jumlah jual (${sellQuantity}) melebihi posisi tersedia. Hanya ${sellQuantity - remainingToSell} unit yang terjual.`);
+    }
+    if (method === "HIFO") {
+      notes.push("HIFO meminimalkan gain terealisasi dengan menjual lot termahal lebih dulu — paling efisien untuk pajak di pasar naik.");
+    } else if (method === "LIFO") {
+      notes.push("LIFO cenderung menghasilkan gain lebih kecil (atau loss lebih besar) di pasar turun karena lot terbaru dijual dulu.");
+    } else {
+      notes.push("FIFO adalah metode paling konservatif — lot tertua dijual dulu, biasanya menghasilkan gain terbesar di pasar naik.");
+    }
+    if (shortTermGL > 0) {
+      notes.push(`Gain jangka pendek (short-term): $${shortTermGL.toFixed(2)} — biasanya dikenai tarif pajak lebih tinggi.`);
+    }
+
+    const result: TaxLotResult = {
+      method,
+      symbol,
+      sellQuantity,
+      sellPrice,
+      totalProceedsUsd: totalProceeds,
+      totalCostBasisUsd: totalCostBasis,
+      totalGainLossUsd: totalGainLoss,
+      totalGainLossPct,
+      shortTermGainLossUsd: shortTermGL,
+      longTermGainLossUsd: longTermGL,
+      saleLots,
+      remainingLots,
+      totalRemainingQuantity,
+      totalRemainingCostBasis,
+      estimatedTaxIdr,
+      notes,
+    };
+
+    res.json({ success: true, result });
+  } catch (e: any) {
+    console.error("[tax-lots] error:", e?.message || e);
+    res.status(500).json({ success: false, error: "Gagal menghitung tax lots." });
+  }
+});
+
 // ─── BACKTEST RESULTS ────────────────────────────────────────────────
 
 portfolioRouter.get("/backtests", async (req: Request, res: Response) => {

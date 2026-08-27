@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { useGlobalStore } from "../store";
 import { LedgerTransaction } from "../types";
+import TaxLotOptimizer from "./TaxLotOptimizer";
 import { 
   FileSpreadsheet, 
   Search, 
@@ -229,6 +230,9 @@ export default function Ledger() {
   return (
     <div className="space-y-6" id="ledger-history-tab">
       
+      {/* NEW FEATURE: Tax Lot Optimizer */}
+      <TaxLotOptimizer />
+
       {/* Overview Dashboard Area */}
       <div className="bg-[#0F172A] p-4 sm:p-6 rounded-2xl border border-slate-800 flex flex-col xl:flex-row xl:items-center justify-between gap-4">
         <div>

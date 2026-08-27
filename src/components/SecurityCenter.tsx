@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { motion } from "motion/react";
 import {
   ShieldCheck,
   Lock,
@@ -447,14 +448,52 @@ export default function SecurityCenter({ twoFactorEnabled, setTwoFactorEnabled }
   return (
     <div className="space-y-6" id="security-center-tab">
       
-      {/* Title */}
-      <div className="bg-[#0F172A] p-6 rounded-2xl border border-slate-800">
-        <h2 className="text-xl font-bold text-slate-100 flex items-center gap-2">
-          <ShieldCheck className="w-5 h-5 text-blue-500" /> Pusat Keamanan Akun & Enkripsi Data
-        </h2>
-        <p className="text-sm text-slate-400 mt-1">
-          Lindungi portofolio finansial Anda dengan Otentikasi Dua Faktor (2FA) tingkat perbankan dan enkripsi pertukaran data end-to-end (E2EE).
-        </p>
+      {/* Title — STYLING UPGRADE */}
+      <motion.div
+        initial={{ opacity: 0, y: -10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4 }}
+        className="bg-gradient-to-br from-[#0F172A] via-[#0F172A] to-[#1E3A5F]/30 p-6 rounded-2xl border border-slate-800 relative overflow-hidden"
+      >
+        {/* Decorative animated orbs */}
+        <motion.div
+          aria-hidden
+          className="absolute top-0 right-0 w-64 h-64 bg-blue-500/8 rounded-full blur-3xl pointer-events-none"
+          animate={{ x: [0, -20, 0], y: [0, 15, 0] }}
+          transition={{ duration: 10, repeat: Infinity, ease: "easeInOut" }}
+        />
+        <motion.div
+          aria-hidden
+          className="absolute -bottom-12 -left-12 w-48 h-48 bg-emerald-500/8 rounded-full blur-3xl pointer-events-none"
+          animate={{ x: [0, 20, 0], y: [0, -10, 0] }}
+          transition={{ duration: 12, repeat: Infinity, ease: "easeInOut", delay: 2 }}
+        />
+        {/* Top accent line */}
+        <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-blue-500/0 via-blue-500/60 to-emerald-500/0" />
+        
+        <div className="relative z-10">
+          <div className="flex items-center gap-3 mb-2">
+            <motion.div
+              animate={{ scale: [1, 1.1, 1] }}
+              transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+              className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500/15 to-emerald-500/10 border border-blue-500/30 flex items-center justify-center"
+            >
+              <ShieldCheck className="w-5 h-5 text-blue-500" />
+            </motion.div>
+            <div>
+              <h2 className="text-xl font-bold text-slate-100 flex items-center gap-2">
+                Security Center
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-blue-950 text-blue-400 border border-blue-800/60">
+                  2FA + E2EE
+                </span>
+              </h2>
+            </div>
+          </div>
+          <p className="text-sm text-slate-400 mt-1 max-w-2xl">
+            Lindungi portofolio finansial Anda dengan Otentikasi Dua Faktor (2FA) tingkat perbankan dan enkripsi pertukaran data end-to-end (E2EE).
+          </p>
+        </div>
+      </motion.div>
 
         {/* SEC2-AUTH: email verification status banner. Shown only when the user
             is logged in but their email hasn't been verified yet (or, conversely,
@@ -496,7 +535,6 @@ export default function SecurityCenter({ twoFactorEnabled, setTwoFactorEnabled }
             </div>
           </div>
         )}
-      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
