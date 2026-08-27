@@ -1,14 +1,42 @@
 :81 {
+	# FIX-ALL P0-8: previously `reverse_proxy localhost:{query.XTransformPort}`
+	# with NO allowlist — any unauthenticated client could proxy to ANY
+	# localhost port (Postgres 5432, Redis 6379, admin panels, etc.). Now we
+	# only allow ports explicitly used by the ZAYTRIX mini-services stack.
 	@transform_port_query {
 		query XTransformPort=*
 	}
 
 	handle @transform_port_query {
-		reverse_proxy localhost:{query.XTransformPort} {
-			header_up Host {host}
-			header_up X-Forwarded-For {remote_host}
-			header_up X-Forwarded-Proto {scheme}
-			header_up X-Real-IP {remote_host}
+		# Allow only the ZAYTRIX dev server (3000) + price-feed mini-service (3003)
+		# Add more ports here only when a new mini-service is intentionally exposed.
+		@allowed_port {
+			query XTransformPort=3000
+		}
+		handle @allowed_port {
+			reverse_proxy localhost:3000 {
+				header_up Host {host}
+				header_up X-Forwarded-For {remote_host}
+				header_up X-Forwarded-Proto {scheme}
+				header_up X-Real-IP {remote_host}
+			}
+		}
+
+		@allowed_port_3003 {
+			query XTransformPort=3003
+		}
+		handle @allowed_port_3003 {
+			reverse_proxy localhost:3003 {
+				header_up Host {host}
+				header_up X-Forwarded-For {remote_host}
+				header_up X-Forwarded-Proto {scheme}
+				header_up X-Real-IP {remote_host}
+			}
+		}
+
+		# Any other XTransformPort value → 403 forbidden.
+		handle {
+			respond "Forbidden: XTransformPort not in allowlist" 403
 		}
 	}
 

@@ -4,6 +4,28 @@
  * using the browser's high-fidelity native print engine.
  */
 
+// FIX-ALL P0-5: AI / markdown content is parsed into HTML and then written
+// into a new tab via document.write(). Without sanitization, an attacker who
+// can influence the AI output (prompt injection via uploaded PDF, news body,
+// or any /api/gemini/* prompt) can inject <script> / <img onerror=...> that
+// executes in the print window's same origin and hits /api/auth/me or any
+// authenticated endpoint. DOMPurify is already in package.json; import it.
+import DOMPurify, { type Config as PurifyConfig } from "dompurify";
+
+// Allow only the formatting tags our markdown parser actually emits;
+// strip all event handlers, scripts, iframes, etc.
+const PURIFY_CONFIG: PurifyConfig = {
+  ALLOWED_TAGS: [
+    "h2", "h3", "h4", "p", "ul", "ol", "li", "strong", "em",
+    "span", "br", "hr", "blockquote", "table", "thead", "tbody",
+    "tr", "th", "td", "code", "pre",
+  ],
+  ALLOWED_ATTR: ["style", "class"],
+  FORBID_ATTR: ["onerror", "onload", "onclick", "onmouseover", "onfocus"],
+  FORBID_TAGS: ["script", "iframe", "object", "embed", "form", "input"],
+  ALLOW_DATA_ATTR: false,
+};
+
 export function parseMarkdownToHtml(markdown: string): string {
   if (!markdown) return "";
   const lines = markdown.split("\n");
@@ -54,6 +76,13 @@ export function parseMarkdownToHtml(markdown: string): string {
     html += "</ul>";
   }
 
+  // FIX-ALL P0-5: Sanitize the assembled HTML before it is handed to
+  // document.write() in the print window. DOMPurify strips any <script>,
+  // event handlers, or dangerous tags that survived the markdown parse
+  // (e.g. AI output containing `<img onerror=...>`). Returns a safe string.
+  if (typeof window !== "undefined") {
+    return DOMPurify.sanitize(html, PURIFY_CONFIG) as unknown as string;
+  }
   return html;
 }
 

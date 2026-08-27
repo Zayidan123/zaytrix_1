@@ -34,14 +34,21 @@ async function getUserApiKeys(userId: string, exchange: string) {
 async function placeBinanceOrder(
   apiKey: string, apiSecret: string,
   symbol: string, side: "BUY" | "SELL", quantity: number
-): Promise<{ success: boolean; orderId?: string; executedPrice?: number; error?: string; isSimulation: boolean }> {
+): Promise<{ success: boolean; orderId?: string; executedPrice?: number; error?: string; isSimulation: boolean; clientOrderId?: string }> {
   try {
     const timestamp = Date.now();
+    // FIX-ALL P0-7: Binance supports `newClientOrderId` for idempotency.
+    // If the network times out AFTER the order was placed but BEFORE the
+    // response reached us, a client retry would otherwise place a DUPLICATE
+    // real-money order. With a stable clientOrderId, a retry returns the
+    // same orderId instead of creating a second fill.
+    const clientOrderId = `ZTX${timestamp}${crypto.randomBytes(4).toString("hex")}`.slice(0, 32);
     const params = new URLSearchParams({
       symbol: symbol.toUpperCase(),
       side,
       type: "MARKET",
       quantity: String(quantity),
+      newClientOrderId: clientOrderId,
       recvWindow: "5000",
       timestamp: String(timestamp),
     });
@@ -67,6 +74,7 @@ async function placeBinanceOrder(
     return {
       success: true,
       orderId: String(data.orderId),
+      clientOrderId,
       executedPrice: avgPrice,
       isSimulation: false,
     };
@@ -79,16 +87,20 @@ async function placeBinanceOrder(
 async function placeBybitOrder(
   apiKey: string, apiSecret: string,
   symbol: string, side: "Buy" | "Sell", qty: number
-): Promise<{ success: boolean; orderId?: string; executedPrice?: number; error?: string; isSimulation: boolean }> {
+): Promise<{ success: boolean; orderId?: string; executedPrice?: number; error?: string; isSimulation: boolean; clientOrderId?: string }> {
   try {
     const timestamp = Date.now().toString();
     const recvWindow = "5000";
+    // FIX-ALL P0-7: Bybit's `orderLinkId` is the idempotency key (max 36 chars).
+    // Prevents duplicate real-money orders on network-timeout retries.
+    const orderLinkId = `ZTX${timestamp}${crypto.randomBytes(4).toString("hex")}`.slice(0, 36);
     const body = JSON.stringify({
       category: "spot",
       symbol: symbol.toUpperCase(),
       side,
       orderType: "Market",
       qty: String(qty),
+      orderLinkId,
     });
     const paramStr = timestamp + apiKey + recvWindow + body;
     const sign = crypto.createHmac("sha256", apiSecret).update(paramStr).digest("hex");
@@ -112,6 +124,7 @@ async function placeBybitOrder(
     return {
       success: true,
       orderId: String(data.result?.orderId || ""),
+      clientOrderId: orderLinkId,
       isSimulation: false,
     };
   } catch (e: any) {
@@ -204,7 +217,12 @@ tradeExecutionRouter.post("/execute", async (req: Request, res: Response) => {
   }
 
   // If sandbox mode → always simulate
-  if (useSandbox) {
+  // FIX-ALL P0-7b: previously `if (useSandbox)` — but useSandbox comes from
+  // the request body as a string, and `if ("false")` is TRUTHY in JS, so a
+  // client sending useSandbox="false" would silently get simulation. Coerce
+  // properly: only simulate when useSandbox is boolean true or the string "true".
+  const sandboxMode = useSandbox === true || String(useSandbox).toLowerCase() === "true";
+  if (sandboxMode) {
     const sim = await simulateOrder(exchange || "Binance", symbol, side, qty);
     await logAudit(userId, "TRADE_EXECUTE", req, true, { exchange, symbol, side, amount: qty, mode: "sandbox" });
     return res.json({

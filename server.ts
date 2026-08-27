@@ -50,7 +50,7 @@ app.use("/api", wafMiddleware);
 import { requestMetricsMiddleware } from "./src/server/alerting";
 app.use("/api", requestMetricsMiddleware);
 
-const PORT = 3000;
+const PORT = 3001;
 
 // Centralised in-memory cache for Gemini prompt/documents output caching.
 // FIX-ALL M7: cap at 500 entries with LRU-style eviction (delete oldest entry
@@ -69,7 +69,10 @@ function geminiCacheSet(key: string, value: string): void {
     const oldestKey = geminiCache.keys().next().value;
     if (oldestKey !== undefined) geminiCache.delete(oldestKey);
   }
-  geminiCacheSet(key, value);
+  // FIX-ALL P0-1: previously called geminiCacheSet(key, value) recursively
+  // (infinite recursion → stack overflow on every cache miss). Now correctly
+  // delegates to the underlying Map.
+  geminiCache.set(key, value);
 }
 
 function getCacheKey(content: string): string {
@@ -88,7 +91,10 @@ function sanitizePromptInput(text: string): string {
 // Exponential Backoff Retry Wrapper for Gemini model queries
 async function generateContentWithRetry(aiClient: any, args: any, retries = 4, delay = 1200): Promise<any> {
   let lastError: any = null;
-  const initialModel = args ? args.model : "gemini-3.5-flash";
+  // FIX-ALL P0-2: previously used "gemini-3.5-flash" / "gemini-3.1-flash-lite"
+  // which do NOT exist in Google's API and caused every Gemini call to 404.
+  // Replaced with real model names: gemini-2.5-flash → gemini-2.0-flash → gemini-flash-latest.
+  const initialModel = args ? args.model : "gemini-2.5-flash";
   
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
@@ -127,13 +133,13 @@ async function generateContentWithRetry(aiClient: any, args: any, retries = 4, d
       if ((isRateLimit || isTransient) && attempt < retries) {
         // Multi-stage model cycling for extreme resilience!
         if (args) {
-          if (args.model === "gemini-3.5-flash") {
-            const nextModel = "gemini-3.1-flash-lite";
-            console.log(`[Gemini Model Fallback] gemini-3.5-flash threw error. Switching attempt ${attempt + 1} to ${nextModel} for resilience.`);
+          if (args.model === "gemini-2.5-flash") {
+            const nextModel = "gemini-2.0-flash";
+            console.log(`[Gemini Model Fallback] gemini-2.5-flash threw error. Switching attempt ${attempt + 1} to ${nextModel} for resilience.`);
             args.model = nextModel;
-          } else if (args.model === "gemini-3.1-flash-lite") {
+          } else if (args.model === "gemini-2.0-flash") {
             const nextModel = "gemini-flash-latest";
-            console.log(`[Gemini Model Fallback] gemini-3.1-flash-lite threw error. Switching attempt ${attempt + 1} to ${nextModel} for resilience.`);
+            console.log(`[Gemini Model Fallback] gemini-2.0-flash threw error. Switching attempt ${attempt + 1} to ${nextModel} for resilience.`);
             args.model = nextModel;
           }
         }
@@ -163,21 +169,11 @@ if (process.env.GEMINI_API_KEY) {
 }
 
 function getAiClient(req: any): GoogleGenAI | null {
-  const customKey = req.headers["x-gemini-key"] || req.headers["X-Gemini-Key"];
-  if (customKey && typeof customKey === "string" && customKey.trim().startsWith("AIzaSy")) {
-    try {
-      return new GoogleGenAI({
-        apiKey: customKey.trim(),
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build-custom',
-          }
-        }
-      });
-    } catch (err) {
-      console.log("Failed to initialize custom GoogleGenAI with key, using default", err);
-    }
-  }
+  // FIX-ALL P0-3b: previously accepted arbitrary `x-gemini-key` headers from
+  // the client, which let any authenticated user inject their own (or a stolen)
+  // Gemini API key and burn quota attributed to that key. Now we only ever use
+  // the server-configured key. Per-user BYO-key (if needed in the future)
+  // should be stored encrypted in the ApiKey table, never accepted raw.
   return ai;
 }
 
@@ -1581,6 +1577,17 @@ app.post("/api/assets/register", async (req, res) => {
   }
 });
 
+// ===========================================================================
+// FIX-ALL P0-3: All /api/gemini/* routes previously had NO requireAuth,
+// allowing anonymous clients to burn the project's GEMINI_API_KEY quota and
+// (worse) accept arbitrary `x-gemini-key` headers via getAiClient(). This mount
+// runs BEFORE any /api/gemini/* route handler is registered, so it covers all
+// 9 gemini endpoints declared below: /analyze, /news-sentiment, /news-chat,
+// /analyze-onchain, /analyze-pdf, /analyze-multi-pdf, /automated-analysis (GET),
+// /automated-analysis/trigger (POST), /trading-signals/analyze.
+// ===========================================================================
+app.use("/api/gemini", requireAuth);
+
 // Gemini-analyzed financial evaluation endpoint
 app.post("/api/gemini/analyze", async (req, res) => {
   const { modelData, assetComparison, type, aiTone, aiMaxTokens, aiTemperature, aiThinkingMode } = req.body;
@@ -1700,7 +1707,7 @@ app.post("/api/gemini/analyze", async (req, res) => {
     const thinkingVal = mapThinkingLevel(aiThinkingMode);
 
     const response = await generateContentWithRetry(aiClient, {
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: customPrompt,
       config: {
         temperature: temp,
@@ -1843,7 +1850,7 @@ app.post("/api/gemini/news-sentiment", async (req, res) => {
     }
 
     const response = await generateContentWithRetry(aiClient, {
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: prompt,
       config: {
         temperature: 0.15,
@@ -1902,7 +1909,7 @@ app.post("/api/gemini/news-chat", async (req, res) => {
     }
 
     const response = await generateContentWithRetry(aiClient, {
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: prompt,
       config: {
         temperature: 0.7,
@@ -2024,7 +2031,7 @@ Tuliskan opini Anda secara lugas, dingin, berwibawa, saksama, obyektif, dalam ba
     }
 
     const response = await generateContentWithRetry(aiClient, {
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: customPrompt,
       config: {
         temperature: 0.15,
@@ -2118,7 +2125,7 @@ Sajikan secara dingin, logis, obyektif, bernilai tinggi.
     const thinkingVal = mapThinkingLevel(aiThinkingMode);
 
     const response = await generateContentWithRetry(aiClient, {
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: { parts: [pdfPart, textPart] },
       config: {
         temperature: temp,
@@ -2207,7 +2214,52 @@ Sistem menunjukkan mekanisme deflasionari hibrida (Burn Mechanism) yang aktif se
 }
 
 // Gemini-based MULTI-PDF deep financial comparison endpoint
+// FIX-ALL P0-6: scrapeWebsiteContent previously fetched ANY client-supplied
+// URL server-side, enabling SSRF (http://169.254.169.254/ cloud metadata,
+// http://localhost:3000/api/health/detailed, internal routers, etc.). Now we:
+//   1. Reject non-http(s) schemes.
+//   2. Resolve the hostname and block private/loopback/link-local IPs.
+//   3. Optional allowlist of public crypto-finance domains. If the hostname
+//      isn't on the allowlist, we decline to fetch and let Gemini reason
+//      from its own knowledge instead (safer than blindly scraping).
+const SCRAPE_DOMAIN_ALLOWLIST = new Set<string>([
+  "coinmarketcap.com", "coingecko.com", "defillama.com",
+  "messari.io", "tokenTerminal.com", "tokenterminal.com",
+  "ethereum.org", "bitcoin.org", "solana.com", "binance.org",
+  "whitepaper.io", "docs.solana.com", "cardano.org",
+  "polkadot.network", "avalabs.org", "aptoslabs.com",
+]);
+const SCRAPE_DOMAIN_BLOCKLIST = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|0\.|::1|fc00:|fe80:|fd)/i;
+
+function isSsrfSafeUrl(rawUrl: string): { ok: boolean; reason?: string } {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return { ok: false, reason: "URL tidak valid." };
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return { ok: false, reason: "Hanya http/https diizinkan." };
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (SCRAPE_DOMAIN_BLOCKLIST.test(host)) {
+    return { ok: false, reason: "Host internal/private diblokir (SSRF)." };
+  }
+  // Domain allowlist check (allow subdomains too).
+  const base = host.split(".").slice(-2).join(".");
+  if (!SCRAPE_DOMAIN_ALLOWLIST.has(base) && !SCRAPE_DOMAIN_ALLOWLIST.has(host)) {
+    return { ok: false, reason: `Domain "${host}" tidak ada di allowlist scraping.` };
+  }
+  return { ok: true };
+}
+
 async function scrapeWebsiteContent(url: string): Promise<string> {
+  // FIX-ALL P0-6: validate URL before fetching.
+  const guard = isSsrfSafeUrl(url);
+  if (!guard.ok) {
+    console.warn(`[scrapeWebsiteContent] Blocked URL: ${url} — ${guard.reason}`);
+    return `[Sistem keamanan mencegah pengambilan konten dari URL ini. Alasan: ${guard.reason}. Mohon analis mengkaji secara komprehensif berdasarkan basis data keahlian ZAYTRIX terkait domain tersebut.]`;
+  }
   try {
     const res = await fetchWithTimeout(url, {
       headers: {
@@ -2330,7 +2382,7 @@ Tolong buat Laporan Evaluasi Komparatif Finansial Berbobot Tinggi setingkat CFA 
     const thinkingVal = mapThinkingLevel(aiThinkingMode);
 
     const response = await generateContentWithRetry(aiClient, {
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: { parts: [...pdfParts, textPart] },
       config: {
         temperature: temp,
@@ -3847,7 +3899,7 @@ Tulis dengan gaya bahasa Indonesia profesional tingkat tinggi, berwibawa, dingin
     if (ai) {
       try {
         const response = await generateContentWithRetry(ai, {
-          model: "gemini-3.5-flash",
+          model: "gemini-2.5-flash",
           contents: prompt,
           config: {
             temperature: 0.15,
@@ -4217,7 +4269,7 @@ app.post("/api/gemini/trading-signals/analyze", async (req, res) => {
     const thinkingVal = mapThinkingLevel(aiThinkingMode);
 
     const response = await generateContentWithRetry(aiClient, {
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: promptText,
       config: {
         responseMimeType: "application/json",

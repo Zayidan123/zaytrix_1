@@ -4,27 +4,18 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App.tsx';
 import './index.css';
 
-// Global Script Error & ResizeObserver loop limits safety shields
+// FIX-ALL P0-4: Previously this file overrode window.alert/confirm/prompt with
+// no-op / always-true stubs "for iframe friendliness". That silently disabled
+// every destructive-action confirmation in the app (revoke session, revoke all
+// sessions, delete Firebase account, GDPR "right to be forgotten" → real
+// deleteUser + deleteDoc, etc.). Those overrides have been REMOVED. If an
+// iframe sandbox blocks the native dialogs, the proper fix is in-app modal
+// components (the codebase already has motion + AnimatePresence available).
+// The error swallowers for ResizeObserver / "script error" noise are kept
+// because they are genuinely safe to mute (browser noise unrelated to app logic).
+
 if (typeof window !== "undefined") {
-  // Override iframe-sensitive blocking modals to avoid fatal SecurityError in sandboxes
-  window.alert = function (message) {
-    const msg = String(message || "");
-    console.warn("Iframe-friendly Alert Triggered:", msg);
-    const event = new CustomEvent("system-alert", { detail: { message: msg, type: "error" } });
-    window.dispatchEvent(event);
-  };
-
-  window.confirm = function (message) {
-    console.warn("Iframe-friendly Confirm Demanded:", message);
-    return true; // Auto-confirm safely
-  };
-
-  window.prompt = function (message, defaultVal) {
-    console.warn("Iframe-friendly Prompt Demanded:", message);
-    return defaultVal || "";
-  };
-
-  window.onerror = function (message, source, lineno, colno, error) {
+  window.onerror = function (message, _source, _lineno, _colno, _error) {
     const msg = String(message || "").toLowerCase();
     if (
       msg.includes("script error") ||
@@ -35,10 +26,9 @@ if (typeof window !== "undefined") {
       msg === "script error."
     ) {
       console.warn("Suppressed main.tsx script/resize error:", message);
-      return true; // Silence the error fully
+      return true;
     }
-    // Always returns true to prevent browser-level unhandled exceptions escaping inside standard dev container
-    return true;
+    return false;
   };
 
   window.addEventListener("error", (event) => {
