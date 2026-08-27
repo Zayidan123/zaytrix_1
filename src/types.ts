@@ -30,6 +30,7 @@ export interface PortfolioAsset {
   purchasePrice: number;
   quantity: number;
   currentPrice: number;
+  notes?: string; // FIX: added to match Prisma schema + server API
 }
 
 export interface AlertConfig {

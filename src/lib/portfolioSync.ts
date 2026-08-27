@@ -59,16 +59,19 @@ export async function fetchPortfolioFromServer(): Promise<boolean> {
       try { localStorage.setItem("financara_ledger", JSON.stringify(txs)); } catch {}
     }
 
-    // Conversions → conversionHistory
+    // Conversions → conversionHistory — map server API fields to frontend type fields
     const convData = await conversionsRes.json();
     if (convData.success && Array.isArray(convData.conversions)) {
       const convs: ConversionTransaction[] = convData.conversions.map((c: any) => ({
         id: c.id,
-        fromSymbol: c.fromSymbol,
-        fromAmount: c.fromAmount,
-        toSymbol: c.toSymbol,
-        toAmount: c.toAmount,
-        rate: c.rate,
+        sourceSymbol: c.fromSymbol,
+        sourceQty: c.fromAmount,
+        sourcePrice: c.rate > 0 ? c.fromAmount / c.rate : 0,
+        targetSymbol: c.toSymbol,
+        targetQty: c.toAmount,
+        targetPrice: c.rate > 0 ? c.toAmount * c.rate / c.fromAmount : 0,
+        slippagePercent: 0,
+        feePaidUsd: 0,
         timestamp: c.timestamp,
       }));
       store.conversionHistory = convs;
@@ -157,13 +160,13 @@ async function syncPortfolioToServer(): Promise<void> {
       body: JSON.stringify({ transactions }),
     }).catch(() => {});
 
-    // Sync conversions
+    // Sync conversions — map frontend type fields to server API field names
     const conversions = store.conversionHistory.map((c: ConversionTransaction) => ({
-      fromSymbol: c.fromSymbol,
-      fromAmount: c.fromAmount,
-      toSymbol: c.toSymbol,
-      toAmount: c.toAmount,
-      rate: c.rate,
+      fromSymbol: c.sourceSymbol,
+      fromAmount: c.sourceQty,
+      toSymbol: c.targetSymbol,
+      toAmount: c.targetQty,
+      rate: c.sourcePrice > 0 ? c.targetPrice / c.sourcePrice : 0,
       timestamp: c.timestamp,
     }));
     await fetch("/api/portfolio/conversions/sync", {

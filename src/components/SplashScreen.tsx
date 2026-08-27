@@ -39,7 +39,7 @@ export default function SplashScreen({ onComplete }: SplashScreenProps) {
       opacity: 1,
       scale: 1,
       y: 0,
-      transition: { duration: 0.8, ease: [0.22, 1, 0.36, 1] },
+      transition: { duration: 0.8, ease: [0.22, 1, 0.36, 1] as const },
     },
   };
 
@@ -48,7 +48,7 @@ export default function SplashScreen({ onComplete }: SplashScreenProps) {
     visible: {
       opacity: 1,
       y: 0,
-      transition: { duration: 0.7, delay: 0.3, ease: [0.22, 1, 0.36, 1] },
+      transition: { duration: 0.7, delay: 0.3, ease: [0.22, 1, 0.36, 1] as const },
     },
   };
 
@@ -57,7 +57,7 @@ export default function SplashScreen({ onComplete }: SplashScreenProps) {
     visible: {
       opacity: 1,
       y: 0,
-      transition: { duration: 0.6, delay: 0.6, ease: [0.22, 1, 0.36, 1] },
+      transition: { duration: 0.6, delay: 0.6, ease: [0.22, 1, 0.36, 1] as const },
     },
   };
 
@@ -65,7 +65,7 @@ export default function SplashScreen({ onComplete }: SplashScreenProps) {
     hidden: { scaleX: 0 },
     visible: {
       scaleX: 1,
-      transition: { duration: 2.2, delay: 0.5, ease: [0.25, 0.1, 0.25, 1] },
+      transition: { duration: 2.2, delay: 0.5, ease: [0.25, 0.1, 0.25, 1] as const },
     },
   };
 
