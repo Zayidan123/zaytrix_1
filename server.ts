@@ -70,7 +70,7 @@ app.use("/api", wafMiddleware);
 import { requestMetricsMiddleware } from "./src/server/alerting";
 app.use("/api", requestMetricsMiddleware);
 
-const PORT = 3001;
+const PORT = parseInt(process.env.PORT || "3000", 10);
 
 // Centralised in-memory cache for Gemini prompt/documents output caching.
 // FIX-ALL M7: cap at 500 entries with LRU-style eviction (delete oldest entry

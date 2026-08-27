@@ -27,22 +27,19 @@ import {
   MailCheck,
   RefreshCw,
 } from "lucide-react";
-import { db, auth } from "../lib/firebase";
-import { doc, getDoc, setDoc, deleteDoc } from "firebase/firestore";
-import {
-  updatePassword,
-  deleteUser,
-  reauthenticateWithCredential,
-  EmailAuthProvider,
-  signOut as firebaseSignOut
-} from "firebase/auth";
 import { useGlobalStore } from "../store";
+// OPT-7: Firebase removed. Profile data now persists to localStorage only
+// (the previous Firestore path was already a no-op — Firestore rules denied
+// every read/write because user.uid is the Prisma id, not a Firebase Auth
+// uid, so request.auth.uid was always null). Account deletion now calls the
+// server-side GDPR endpoint DELETE /api/user/delete-all. Password change
+// routes through the server-side reset-email flow (forgotPassword).
 import {
   getSessions,
   revokeSession,
   revokeOtherSessions,
   resendVerification,
-  type AuthUser,
+  forgotPassword,
 } from "../lib/auth";
 
 // Preset Avatars
@@ -64,38 +61,10 @@ const PRESET_HEADERS = [
   { id: "cosmic-purple", name: "Deep Space", style: "bg-gradient-to-r from-purple-800 via-slate-950 to-fuchsia-800" }
 ];
 
-enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
-}
-
-interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId?: string | null;
-    email?: string | null;
-  }
-}
-
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-    },
-    operationType,
-    path
-  };
-  console.error('Firestore Secure Log Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
-}
+// OPT-7: removed the `OperationType` enum + `FirestoreErrorInfo` interface +
+// `handleFirestoreError` helper. They referenced `auth.currentUser` (now the
+// null stub) and were only called from the Firestore write path, which is
+// itself replaced by localStorage.setItem below.
 
 export interface ProfileData {
   fullName: string;
@@ -290,47 +259,43 @@ export default function Profile() {
     }
   }
 
-  // Fetch from Firestore on load
+  // OPT-7: Load profile from localStorage. Previously this hit Firestore
+  // (`doc(db, "profiles", user.uid)`), but Firestore rules denied every read
+  // (user.uid is the Prisma id, not a Firebase Auth uid → request.auth.uid
+  // was always null), so the catch branch (localStorage fallback) was
+  // already the real path. We now make localStorage the PRIMARY + only path.
   useEffect(() => {
     async function loadProfile() {
       if (!user) {
         setLoading(false);
         return;
       }
+      const STORAGE_KEY = `z_profile_${user.uid}`;
       try {
-        const docRef = doc(db, "profiles", user.uid);
-        const docSnap = await getDoc(docRef);
-        
-        if (docSnap.exists()) {
-          const data = docSnap.data() as ProfileData;
+        const savedLocal = localStorage.getItem(STORAGE_KEY);
+        if (savedLocal) {
+          const data = JSON.parse(savedLocal) as ProfileData;
           setProfile(prev => ({ ...prev, ...data }));
           // Sync with 2FA store
           if (data.twoFactorEnabled !== undefined) {
             setTwoFactorEnabled(data.twoFactorEnabled);
           }
-          addExecutionLog(`[FIRESTORE] Profil berhasil dimuat untuk ${data.fullName || user.email}`);
+          addExecutionLog(`[PROFILE] Profil berhasil dimuat dari penyimpanan lokal untuk ${data.fullName || user.email}`);
         } else {
           // Initialize with default template from authenticated user
           const defaultProf: ProfileData = {
             ...profile,
             fullName: user.displayName || "",
             email: user.email || "",
-            phoneNumber: user.phoneNumber || "",
+            phoneNumber: (user as any).phoneNumber || "",
             username: user.email ? user.email.split("@")[0] : "investor_z",
           };
           setProfile(defaultProf);
-          addExecutionLog(`[FIRESTORE] Dokumen profil baru diinisialisasi untuk uid: ${user.uid}`);
+          addExecutionLog(`[PROFILE] Dokumen profil baru diinisialisasi untuk uid: ${user.uid}`);
         }
       } catch (err) {
-        console.error("Error loading profile from Firestore: ", err);
-        addExecutionLog(`[WARNING] Gagal sinkronisasi Firestore: ${err instanceof Error ? err.message : String(err)}`);
-        // load from local as fallback
-        const savedLocal = localStorage.getItem(`z_profile_${user.uid}`);
-        if (savedLocal) {
-          try {
-            setProfile(JSON.parse(savedLocal));
-          } catch (_) {}
-        }
+        console.error("Error loading profile from localStorage: ", err);
+        addExecutionLog(`[WARNING] Gagal memuat profil lokal: ${err instanceof Error ? err.message : String(err)}`);
       } finally {
         setLoading(false);
       }
@@ -338,7 +303,7 @@ export default function Profile() {
     loadProfile();
   }, [user]);
 
-  // Handle Save Profile
+  // Handle Save Profile — OPT-7: localStorage only (Firestore removed).
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) {
@@ -348,7 +313,7 @@ export default function Profile() {
 
     setSaving(true);
     setSaveStatus(null);
-    addExecutionLog(`[FIRESTORE] Memulai transmisi pembaruan profil ke database sandboxed...`);
+    addExecutionLog(`[PROFILE] Menyimpan pembaruan profil ke penyimpanan lokal...`);
 
     const updatedProfile = {
       ...profile,
@@ -356,30 +321,24 @@ export default function Profile() {
     };
 
     try {
-      const docRef = doc(db, "profiles", user.uid);
-      await setDoc(docRef, updatedProfile);
-      
-      // Save local fallback
       localStorage.setItem(`z_profile_${user.uid}`, JSON.stringify(updatedProfile));
-      
       setSaveStatus("success");
-      addExecutionLog(`[FIRESTORE] Dokumen profil berhasil diperbarui secara permanen.`);
-      
-      // Temporarily alert success
-      alert("Profil berhasil disimpan dengan aman di Firestore!");
+      addExecutionLog(`[PROFILE] Dokumen profil berhasil diperbarui secara permanen.`);
+      alert("Profil berhasil disimpan dengan aman!");
     } catch (err) {
       setSaveStatus("error");
-      handleFirestoreError(err, OperationType.WRITE, `profiles/${user.uid}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      addExecutionLog(`[PROFILE][ERROR] Gagal menyimpan profil: ${msg}`);
     } finally {
       setSaving(false);
     }
   };
 
-  // Handle Password Update
-  // Previously this was a FAKE: setTimeout(800ms) → success alert, no Firebase
-  // call. Now we call Firebase's real updatePassword(). If the user is the
-  // splash-user bypass (auth.currentUser is null), we honestly tell the user
-  // the feature requires an active Firebase login.
+  // Handle Password Update — OPT-7: Firebase `updatePassword` is gone, so
+  // we route through the server-side password-reset email flow (POST
+  // /api/auth/forgot-password). The user receives a reset link and chooses a
+  // new password there. This is the same security posture as Firebase's
+  // email-based reauth — the server verifies email ownership.
   const handleUpdatePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setPasswordStatus(null);
@@ -393,61 +352,32 @@ export default function Profile() {
       return;
     }
 
-    const currentUser = auth.currentUser;
-    if (!currentUser) {
-      // Honest message: the dashboard currently auto-logs-in a fake "splash-user"
-      // (see App.tsx). There is no real Firebase auth session, so we cannot
-      // change a password. Previously the UI faked success — now we are honest.
-      setPasswordStatus({
-        success: false,
-        message: "Fitur ubah kata sandi memerlukan login Firebase yang aktif. Sesi saat ini adalah splash-user (tidak terautentikasi)."
-      });
-      addExecutionLog(`[SECURITY][WARN] Ubah sandi dibatalkan: auth.currentUser null (splash-user bypass).`);
+    if (!user?.email) {
+      setPasswordStatus({ success: false, message: "Akun tidak memiliki email terdaftar — tidak dapat mengirim tautan reset." });
       return;
     }
 
-    if (!currentPassword) {
-      setPasswordStatus({ success: false, message: "Kata sandi saat ini wajib diisi (reautentikasi Firebase)." });
-      return;
-    }
-
-    addExecutionLog(`[SECURITY] Memvalidasi sesi otentikasi saat ini untuk perubahan sandi...`);
+    addExecutionLog(`[SECURITY] Mengirim tautan reset kata sandi ke ${user.email}...`);
     try {
-      // Firebase requires recent sign-in for sensitive operations. We
-      // re-authenticate with the user's email + currentPassword first.
-      const email = currentUser.email;
-      if (!email) {
-        throw new Error("Akun tidak memiliki email terdaftar — tidak dapat reautentikasi.");
+      const res = await forgotPassword(user.email);
+      if (res.success) {
+        setPasswordStatus({
+          success: true,
+          message: "Tautan reset kata sandi telah dikirim ke email Anda. Buka email tersebut untuk menetapkan sandi baru."
+        });
+        addExecutionLog(`[SECURITY] Tautan reset sandi berhasil dikirim ke ${user.email}.`);
+        setCurrentPassword("");
+        setNewPassword("");
+        setConfirmPassword("");
+      } else {
+        const msg = res.error || "Gagal mengirim tautan reset kata sandi.";
+        setPasswordStatus({ success: false, message: msg });
+        addExecutionLog(`[SECURITY][WARN] Gagal kirim tautan reset: ${msg}`);
       }
-      const credential = EmailAuthProvider.credential(email, currentPassword);
-      try {
-        await reauthenticateWithCredential(currentUser, credential);
-      } catch (reauthErr: any) {
-        const code = reauthErr?.code || "";
-        if (code === "auth/wrong-password" || code === "auth/invalid-credential") {
-          throw new Error("Kata sandi saat ini salah.");
-        }
-        throw new Error(`Gagal reautentikasi: ${reauthErr?.message || code}`);
-      }
-
-      await updatePassword(currentUser, newPassword);
-      setPasswordStatus({ success: true, message: "Kata sandi akun Firebase Anda berhasil diperbarui." });
-      addExecutionLog(`[SECURITY] Kata sandi akun Firebase berhasil diubah (updatePassword).`);
-      setCurrentPassword("");
-      setNewPassword("");
-      setConfirmPassword("");
     } catch (err: any) {
-      const code = err?.code || "";
-      let msg = err?.message || "Gagal mengganti kata sandi.";
-      if (code === "auth/requires-recent-login") {
-        msg = "Firebase memerlukan login ulang. Silakan logout dan login kembali sebelum mengganti sandi.";
-      } else if (code === "auth/weak-password") {
-        msg = "Kata sandi baru terlalu lemah (min 6 karakter).";
-      } else if (code === "auth/too-many-requests") {
-        msg = "Terlalu banyak percobaan. Coba lagi nanti.";
-      }
+      const msg = err?.message || "Gagal mengirim tautan reset kata sandi.";
       setPasswordStatus({ success: false, message: msg });
-      addExecutionLog(`[SECURITY][WARN] Gagal ubah sandi: ${msg}`);
+      addExecutionLog(`[SECURITY][WARN] Gagal kirim tautan reset: ${msg}`);
     }
   };
 
@@ -476,71 +406,45 @@ export default function Profile() {
     addExecutionLog(`[PRIVACY] Arsip komprehensif data pengguna berhasil diekstraksi dan diunduh.`);
   };
 
-  // Real account deletion — previously a FAKE: confirm → alert → signOut only.
-  // Now we call Firebase Auth deleteUser() AND delete the Firestore profile
-  // document. If auth.currentUser is null (splash-user bypass), we honestly
-  // tell the user the feature requires an active Firebase login.
+  // Real account deletion — OPT-7: calls the server-side GDPR endpoint
+  // DELETE /api/user/delete-all (server.ts:5489). This wipes the user's Prisma
+  // record + all related data (sessions, portfolio, ledger, etc.), logs an
+  // ACCOUNT_DELETED audit event, and clears the `zaytrix_session` cookie.
+  // Previously this called Firebase Auth `deleteUser()` + Firestore
+  // `deleteDoc` — both were no-ops because Firebase wasn't really configured
+  // (and Firestore rules denied the delete anyway).
   const handleDeleteAccount = async () => {
     const confirmDelete = window.confirm(
-      "PERINGATAN SANGAT FATAL: Tindakan ini akan menghapus akun Firebase Auth Anda DAN dokumen profil Firestore secara permanen. Tindakan ini tidak dapat dibatalkan. Lanjutkan?"
+      "PERINGATAN SANGAT FATAL: Tindakan ini akan menghapus akun Anda DAN semua data terkait secara permanen (sesi, portofolio, ledger, konversi). Tindakan ini tidak dapat dibatalkan. Lanjutkan?"
     );
     if (!confirmDelete) return;
 
-    const currentUser = auth.currentUser;
-    if (!currentUser) {
-      // Honest message: with splash-user bypass, there is no real auth account
-      // to delete. We refuse to fake success.
-      alert(
-        "Fitur hapus akun memerlukan login Firebase yang aktif. Sesi saat ini adalah splash-user (tidak terautentikasi) — tidak ada akun Firebase yang dapat dihapus."
-      );
-      addExecutionLog(`[PRIVACY][WARN] Hapus akun dibatalkan: auth.currentUser null (splash-user bypass).`);
-      return;
-    }
+    const uid = user?.uid || user?.id;
+    addExecutionLog(`[PRIVACY] Memulai penghapusan akun via DELETE /api/user/delete-all (uid: ${uid})...`);
 
-    const uid = currentUser.uid;
-    addExecutionLog(`[PRIVACY] Memulai penghapusan akun Firebase + dokumen Firestore profiles/${uid}...`);
-
-    // 1. Delete the Firestore profile document first (so we still have a valid
-    //    auth session while writing). If Firestore rules block this, we still
-    //    surface the error and abort before deleting the auth account.
     try {
-      const docRef = doc(db, "profiles", uid);
-      await deleteDoc(docRef);
-      addExecutionLog(`[PRIVACY] Dokumen Firestore profiles/${uid} berhasil dihapus.`);
-    } catch (fsErr: any) {
-      const msg = fsErr?.message || String(fsErr);
-      alert(`Gagal menghapus dokumen profil Firestore: ${msg}\n\nAkun Firebase Auth TIDAK dihapus. Aborted.`);
-      addExecutionLog(`[PRIVACY][ERROR] Gagal hapus Firestore: ${msg}. Akun auth tidak dihapus.`);
-      return;
-    }
-
-    // 2. Delete the Firebase Auth user record. This may fail with
-    //    auth/requires-recent-login — if so, we tell the user to re-login.
-    try {
-      await deleteUser(currentUser);
-      addExecutionLog(`[PRIVACY] Akun Firebase Auth (uid: ${uid}) berhasil dihapus secara permanen.`);
-    } catch (authErr: any) {
-      const code = authErr?.code || "";
-      let msg = authErr?.message || String(authErr);
-      if (code === "auth/requires-recent-login") {
-        msg = "Firebase memerlukan login ulang untuk menghapus akun. Silakan logout, login kembali, lalu coba lagi.";
+      const res = await fetch("/api/user/delete-all", {
+        method: "DELETE",
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success) {
+        const msg = data?.error || `HTTP ${res.status}`;
+        alert(`Gagal menghapus akun: ${msg}`);
+        addExecutionLog(`[PRIVACY][ERROR] Gagal hapus akun: ${msg}`);
+        return;
       }
-      alert(
-        `Dokumen Firestore sudah dihapus, namun gagal menghapus akun Firebase Auth: ${msg}\n\n` +
-        `Anda perlu login ulang dan mengulangi permintaan hapus akun.`
-      );
-      addExecutionLog(`[PRIVACY][ERROR] Gagal hapus akun Auth (Firestore sudah dihapus): ${msg}`);
+      addExecutionLog(`[PRIVACY] Akun + seluruh data berhasil dihapus permanen oleh server.`);
+    } catch (err: any) {
+      const msg = err?.message || String(err);
+      alert(`Gagal menghapus akun: ${msg}`);
+      addExecutionLog(`[PRIVACY][ERROR] Gagal hapus akun: ${msg}`);
       return;
     }
 
-    // 3. Clean up local fallback data + sign out + reload.
-    try {
-      localStorage.removeItem(`z_profile_${uid}`);
-    } catch {}
-    try {
-      await firebaseSignOut(auth);
-    } catch {}
-    alert("Akun Firebase Auth + dokumen profil Firestore berhasil dihapus permanen. Anda akan dialihkan ke layar login.");
+    // Clean up local fallback data + reload to AuthScreen.
+    try { localStorage.clear(); } catch {}
+    alert("Akun + seluruh data Anda berhasil dihapus permanen. Anda akan dialihkan ke layar login.");
     window.location.reload();
   };
 

@@ -53,8 +53,11 @@ import RebalanceWidget from "./RebalanceWidget";
 import CorrelationMatrixWidget from "./CorrelationMatrixWidget";
 import DCACalculator from "./DCACalculator";
 import { SectionErrorBoundary } from "./SectionErrorBoundary"; // OPT-2b: per-section crash isolation
-import { db, auth } from "../lib/firebase";
-import { doc, getDoc } from "firebase/firestore";
+// OPT-7: Firebase removed — profile data is read from localStorage
+// (key `z_profile_${user.uid}`, written by Profile.tsx). Previously this hit
+// Firestore `doc(db, "profiles", user.uid)`, but Firestore rules denied every
+// read (user.uid is the Prisma id, not a Firebase Auth uid), so the catch
+// branch (defaultProfile) was already the real path.
 
 interface DashboardProps {
   assets: Asset[];
@@ -95,6 +98,8 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
   const user = useGlobalStore(state => state.user);
   const [profileData, setProfileData] = useState<any>(null);
 
+  // OPT-7: read profile from localStorage (Profile.tsx writes to this key).
+  // Falls back to a defaultProfile if nothing is stored yet.
   useEffect(() => {
     async function fetchProfile() {
       if (!user) return;
@@ -107,18 +112,18 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
         timezone: "Asia/Jakarta"
       };
       try {
-        const docRef = doc(db, "profiles", user.uid);
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
+        const savedLocal = localStorage.getItem(`z_profile_${user.uid}`);
+        if (savedLocal) {
+          const data = JSON.parse(savedLocal);
           setProfileData({
             ...defaultProfile,
-            ...docSnap.data()
+            ...data,
           });
         } else {
           setProfileData(defaultProfile);
         }
       } catch (err) {
-        console.warn("Error fetching dashboard profile: ", err);
+        console.warn("Error fetching dashboard profile from localStorage: ", err);
         setProfileData(defaultProfile);
       }
     }

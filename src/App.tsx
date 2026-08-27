@@ -36,8 +36,9 @@ import Ledger from "./components/Ledger";
 import NewsSection from "./components/NewsSection";
 import CoinsRankings from "./components/CoinsRankings";
 import { motion, AnimatePresence } from "motion/react";
-import { auth } from "./lib/firebase";
-import { fetchCurrentUser, logoutUser } from "./lib/auth";
+// OPT-7: Firebase removed — server-side JWT+Prisma (/api/auth/me) is the sole
+// auth source. The previous `auth` import from "./lib/firebase" is deleted.
+import { fetchCurrentUser } from "./lib/auth";
 import { fetchPortfolioFromServer, schedulePortfolioSync } from "./lib/portfolioSync";
 import AuthScreen from "./components/AuthScreen";
 import SplashScreen from "./components/SplashScreen";
@@ -333,10 +334,9 @@ export default function App() {
   // While it is false, App shows SplashScreen as a LOADING indicator
   // (no auto-login bypass — see the gate near the bottom of this component).
   const [authReady, setAuthReady] = useState(false);
-  // Tracks whether the secondary Firebase onAuthStateChanged listener has
-  // received its initial state report (so we can distinguish the initial
-  // null callback from a real signOut event triggered by Sidebar's "Keluar Aman").
-  const firebaseListenerReadyRef = useRef(false);
+  // OPT-7: the Firebase onAuthStateChanged listener + firebaseListenerReadyRef
+  // were removed. /api/auth/me (above) is the sole auth source. Sidebar now
+  // calls logoutUser() directly — no DOM click-walker hack needed.
   const portfolio = useGlobalStore(state => state.portfolio);
   const alerts = useGlobalStore(state => state.alerts);
   const twoFactorEnabled = useGlobalStore(state => state.twoFactorEnabled);
@@ -415,66 +415,12 @@ export default function App() {
     return () => unsub();
   }, []);
 
-  // SECONDARY Firebase listener — retained because Sidebar.tsx and Profile.tsx
-  // still import from "../lib/firebase". We ignore Firebase's initial null
-  // state (Firebase isn't really configured in this sandbox) and only react to
-  // subsequent null transitions, which fire when the user clicks "Keluar Aman"
-  // in Sidebar (which calls signOut(auth)). On that transition we also clear
-  // our server-side session cookie + null out user state.
-  useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged((firebaseUser) => {
-      if (!firebaseListenerReadyRef.current) {
-        // Initial state report — record and do nothing (let /api/auth/me decide).
-        firebaseListenerReadyRef.current = true;
-        return;
-      }
-      if (firebaseUser) {
-        // Rare path: Firebase actually returned a user — use it.
-        setUser(firebaseUser);
-      } else {
-        // signOut(auth) was called from Sidebar's "Keluar Aman" button.
-        // Clear our server session cookie + null out user state so AuthScreen shows.
-        logoutUser().finally(() => setUser(null));
-      }
-    });
-    return () => unsubscribe();
-  }, [setUser]);
-
-  // LOGOUT CLICK INTERCEPTOR — Sidebar.tsx's "Keluar Aman" button calls
-  // `signOut(auth)` (Firebase). In this sandbox Firebase isn't really
-  // configured, so `signOut(auth)` is a no-op that does NOT fire
-  // onAuthStateChanged (verified empirically) and does NOT clear our
-  // `zaytrix_session` cookie. Because Sidebar.tsx is outside this agent's
-  // ownership, we cannot modify its onClick. Instead, we install a
-  // capture-phase click listener on `window` that detects clicks on the
-  // logout button (identified by its unique `title` attribute) and routes
-  // them to our real `logoutUser()` + `setUser(null)` flow. stopPropagation
-  // prevents Sidebar's onClick (signOut(auth)) from firing, since it would
-  // be a redundant no-op anyway.
-  useEffect(() => {
-    const LOGOUT_BUTTON_TITLE = "Selesaikan Sesi Otentikasi Aman (Logout)";
-    const handleLogoutClick = (e: MouseEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (!target) return;
-      // Walk up the DOM to find the button (click may land on the icon/span).
-      let el: HTMLElement | null = target;
-      while (el && el !== document.body) {
-        if (
-          el instanceof HTMLButtonElement &&
-          el.title === LOGOUT_BUTTON_TITLE
-        ) {
-          // Intercept: call our real logout, block Sidebar's signOut(auth) no-op.
-          e.stopPropagation();
-          logoutUser().finally(() => setUser(null));
-          return;
-        }
-        el = el.parentElement;
-      }
-    };
-    // Capture phase so we run BEFORE Sidebar's bubbling-phase onClick.
-    window.addEventListener("click", handleLogoutClick, true);
-    return () => window.removeEventListener("click", handleLogoutClick, true);
-  }, [setUser]);
+  // OPT-7: REMOVED the secondary Firebase `onAuthStateChanged` listener AND
+  // the capture-phase window click-walker that intercepted Sidebar's logout
+  // button by its `title` string. Both are obsolete now that:
+  //   (1) /api/auth/me (called above) is the sole auth state source, and
+  //   (2) Sidebar.tsx calls `logoutUser()` directly from its onClick handler.
+  // This eliminates the dual-auth race + brittle DOM-walker noted in audit 2-c.
 
   // Dynamic real-time UTC clock updater
   useEffect(() => {

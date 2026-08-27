@@ -21,8 +21,9 @@ import {
   MessageCircle,
   Layers
 } from "lucide-react";
-import { auth, signOut } from "../lib/firebase";
 import { useGlobalStore } from "../store";
+// OPT-7: Firebase removed — call server-side logoutUser() instead of signOut(auth).
+import { logoutUser } from "../lib/auth";
 
 interface SidebarProps {
   activeTab: string;
@@ -42,6 +43,16 @@ export default function Sidebar({
   setIsCollapsed 
 }: SidebarProps) {
   const user = useGlobalStore(state => state.user);
+  // OPT-7: server-side logout. Clears the httpOnly `zaytrix_session` cookie via
+  // POST /api/auth/logout, then nulls the global user + wipes localStorage so
+  // the next mount shows AuthScreen (no stale portfolio/ledger/alerts leak).
+  const handleLogout = async () => {
+    try {
+      await logoutUser();
+    } catch {}
+    try { useGlobalStore.getState().setUser(null); } catch {}
+    try { localStorage.clear(); } catch {}
+  };
   const menuItems = [
     { id: "dashboard", name: "Dashboard", icon: LayoutDashboard },
     { id: "coins", name: "Coins Rankings", icon: Layers, status: "100 COINS" },
@@ -191,9 +202,7 @@ export default function Sidebar({
             )}
           </div>
           <button
-            onClick={() => {
-              signOut(auth);
-            }}
+            onClick={handleLogout}
             className={`flex items-center gap-2 text-slate-400 hover:text-red-400 transition-colors cursor-pointer w-full text-left ${
               isCollapsed ? "justify-center p-1" : "px-2 py-1.5 hover:bg-red-500/10 rounded-md text-[10px] font-bold uppercase font-mono"
             }`}
