@@ -1,4 +1,8 @@
 @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&display=swap');
+/* OPT-1b: Tailwind v4 CSS-first config. The legacy v3 JS config
+   (tailwind.config.ts) was dead weight — @tailwindcss/vite reads theme
+   settings directly from this `@theme` block, so the JS file has been
+   removed. Add custom design tokens via `@theme` below, not via JS. */
 @import "tailwindcss";
 
 @theme {

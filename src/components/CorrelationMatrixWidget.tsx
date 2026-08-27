@@ -28,6 +28,7 @@ import {
   AlertTriangle,
   CheckCircle2,
 } from "lucide-react";
+import { useAbortableFetch } from "../hooks/use-abortable-fetch"; // OPT-2a: abort in-flight fetches on unmount
 
 interface MatrixCell {
   a: string;
@@ -86,6 +87,8 @@ export default function CorrelationMatrixWidget() {
   const [showSymbolPicker, setShowSymbolPicker] = useState(false);
   const [hoveredCell, setHoveredCell] = useState<MatrixCell | null>(null);
 
+  const { abortableFetch } = useAbortableFetch(); // OPT-2a
+
   const fetchData = useCallback(async () => {
     if (symbols.length < 2) {
       setError("Minimal 2 simbol diperlukan.");
@@ -95,9 +98,11 @@ export default function CorrelationMatrixWidget() {
     setError(null);
     setLoading(true);
     try {
-      const res = await fetch(
+      // OPT-2a: abortable fetch — returns null when aborted (unmount / symbols/days change).
+      const res = await abortableFetch(
         `/api/portfolio/correlation-matrix?symbols=${encodeURIComponent(symbols.join(","))}&days=${days}`
       );
+      if (!res) return; // aborted (unmount / superseded by next poll or param change)
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       if (json.success) {
@@ -110,7 +115,7 @@ export default function CorrelationMatrixWidget() {
     } finally {
       setLoading(false);
     }
-  }, [symbols, days]);
+  }, [symbols, days, abortableFetch]);
 
   useEffect(() => {
     fetchData();

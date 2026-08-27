@@ -60,7 +60,10 @@ const providerHealth: Record<string, ProviderHealth> = {
 // ─── 9router Call (OpenAI-compatible) ────────────────────────────────
 async function call9Router(req: AIRequest): Promise<AIResponse> {
   const startTime = Date.now();
-  const messages: any[] = [];
+  // OPT-3e: typed message shape (was `any[]`). 9router + OpenAI expect
+  // `Array<{ role: "system"|"user"|"assistant"; content: string }>` — we only
+  // push system + user messages, so a narrow literal union is correct here.
+  const messages: Array<{ role: "system" | "user"; content: string }> = [];
   if (req.systemPrompt) {
     messages.push({ role: "system", content: req.systemPrompt });
   }
@@ -99,7 +102,13 @@ async function call9Router(req: AIRequest): Promise<AIResponse> {
       throw new Error(`9router HTTP ${res.status}: ${sanitizedErr}`);
     }
 
-    const data = await res.json() as any;
+    // OPT-3e: typed response shape (was `as any`). 9router is OpenAI-compatible,
+    // so we model only the fields we actually read: choices[0].message.content
+    // + usage.total_tokens. Extra fields are ignored by structural typing.
+    const data = (await res.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+      usage?: { total_tokens?: number };
+    };
     const text = data?.choices?.[0]?.message?.content || "";
     const tokensUsed = data?.usage?.total_tokens || 0;
     const latencyMs = Date.now() - startTime;
@@ -120,10 +129,14 @@ async function call9Router(req: AIRequest): Promise<AIResponse> {
       latencyMs,
       fallbackUsed: false,
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
+    // OPT-3e: narrow `unknown` to a real message (was `any`). We only need
+    // `error.message` for the audit/health record — anything else becomes
+    // a String() fallback so we never throw a non-Error from this catch.
+    const errorMessage = error instanceof Error ? error.message : String(error);
     const latencyMs = Date.now() - startTime;
     providerHealth["9router"].available = false;
-    providerHealth["9router"].lastError = error.message;
+    providerHealth["9router"].lastError = errorMessage;
     providerHealth["9router"].failureCount++;
 
     return {
@@ -131,7 +144,7 @@ async function call9Router(req: AIRequest): Promise<AIResponse> {
       text: "",
       provider: "9router",
       latencyMs,
-      error: error.message,
+      error: errorMessage,
       fallbackUsed: false,
     };
   }
@@ -165,8 +178,13 @@ async function callGemini(req: AIRequest): Promise<AIResponse> {
       },
     });
 
-    const text = response.text || "";
-    const tokensUsed = (response as any)?.usageMetadata?.totalTokenCount || 0;
+    // OPT-3e: GoogleGenAI's GenerateContentResponse type in some SDK versions
+    // doesn't expose `usageMetadata` directly. We model the field we read via
+    // a minimal structural cast (was `as any`) — keeps type safety for the
+    // rest of the response object.
+    const geminiResponse = response as { text?: string; usageMetadata?: { totalTokenCount?: number } };
+    const text = geminiResponse.text || "";
+    const tokensUsed = geminiResponse?.usageMetadata?.totalTokenCount || 0;
     const latencyMs = Date.now() - startTime;
 
     providerHealth["gemini"].available = true;
@@ -184,10 +202,12 @@ async function callGemini(req: AIRequest): Promise<AIResponse> {
       latencyMs,
       fallbackUsed: true,
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
+    // OPT-3e: narrow `unknown` → message string (was `any`).
+    const errorMessage = error instanceof Error ? error.message : String(error);
     const latencyMs = Date.now() - startTime;
     providerHealth["gemini"].available = false;
-    providerHealth["gemini"].lastError = error.message;
+    providerHealth["gemini"].lastError = errorMessage;
     providerHealth["gemini"].failureCount++;
 
     return {
@@ -195,7 +215,7 @@ async function callGemini(req: AIRequest): Promise<AIResponse> {
       text: "",
       provider: "gemini",
       latencyMs,
-      error: error.message,
+      error: errorMessage,
       fallbackUsed: true,
     };
   }
@@ -297,7 +317,9 @@ export async function test9RouterConnection(): Promise<{ success: boolean; laten
 
     providerHealth["9router"].available = true;
     return { success: true, latencyMs };
-  } catch (error: any) {
-    return { success: false, latencyMs: Date.now() - startTime, error: error.message };
+  } catch (error: unknown) {
+    // OPT-3e: narrow `unknown` → message string (was `any`).
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return { success: false, latencyMs: Date.now() - startTime, error: errorMessage };
   }
 }

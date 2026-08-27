@@ -1,6 +1,7 @@
 {
   "name": "ZAYTRIX",
-  "description": "Multi-asset financial modeling tool for Indonesian stocks and cryptocurrencies, featuring portfolio analytics, professional PDF document audits, strategy backtesting, and AI analyst insights with downloadable reports.",
+  "version": "5.1.0",
+  "description": "ZAYTRIX — Institutional Crypto Gateway. Terminal analisis kripto real-time dengan data on-chain live, AI analysis, derivatif, dan keamanan tingkat enterprise.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

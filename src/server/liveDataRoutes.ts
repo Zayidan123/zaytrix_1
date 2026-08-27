@@ -18,7 +18,7 @@
 // =============================================================================
 
 import express from "express";
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import * as cheerio from "cheerio";
 import * as zlib from "zlib";
 import { execFile } from "child_process";
@@ -225,12 +225,27 @@ export const liveDataRouter = express.Router();
 // from the server's egress IP → upstream IP-ban (HTTP 418) → all live-data
 // features dead for legit users. 120 req/min/IP is generous enough for first-page-load
 // (App.tsx fetches ~10 live endpoints on mount) but still blocks bot-style fan-out.
+//
+// OPT-3a: explicit keyGenerator using req.ip. security.ts sets
+// `app.set("trust proxy", 1)` BEFORE this router is mounted (server.ts:50
+// applySecurityMiddleware runs at line 50; liveDataRouter mounts later at
+// ~line 5397 inside the async bootstrap block). So req.ip resolves to the
+// real client IP from X-Forwarded-For (not 127.0.0.1) when behind Caddy.
+// Making the keyGenerator explicit avoids the default `req.ip` fallback
+// silently changing behavior if express-rate-limit's default ever drifts.
 liveDataRouter.use(
   rateLimit({
     windowMs: 60 * 1000, // 1 minute
     max: 120, // 120 requests per minute per IP (first-load burst + normal usage)
     standardHeaders: true,
     legacyHeaders: false,
+    // OPT-3a: use real client IP from X-Forwarded-For (trust proxy is set in security.ts).
+    // Uses express-rate-limit's `ipKeyGenerator` helper (instead of bare `req.ip`)
+    // to normalize IPv6 addresses — the library warns (ERR_ERL_KEY_GEN_IPV6) when
+    // a custom keyGenerator uses req.ip directly because raw IPv6 strings can
+    // let users bypass limits by varying the address representation. Falls
+    // back to "unknown" only if req.ip is somehow undefined.
+    keyGenerator: (req) => ipKeyGenerator(req.ip || "unknown"),
     message: {
       success: false,
       error: "Terlalu banyak request data live. Coba lagi dalam 1 menit.",

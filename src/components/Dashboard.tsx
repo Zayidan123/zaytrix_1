@@ -52,6 +52,7 @@ import RiskScoreWidget from "./RiskScoreWidget";
 import RebalanceWidget from "./RebalanceWidget";
 import CorrelationMatrixWidget from "./CorrelationMatrixWidget";
 import DCACalculator from "./DCACalculator";
+import { SectionErrorBoundary } from "./SectionErrorBoundary"; // OPT-2b: per-section crash isolation
 import { db, auth } from "../lib/firebase";
 import { doc, getDoc } from "firebase/firestore";
 
@@ -1119,22 +1120,37 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
       `}</style>
 
       {/* NEW FEATURE: Market Sentiment Radar + Price Alert Manager side-by-side */}
+      {/* OPT-2b: each widget is wrapped in its own SectionErrorBoundary so a render-time
+          crash in one widget surfaces as an inline error card instead of blanking the
+          whole dashboard. */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <MarketSentimentWidget />
-        <RiskScoreWidget />
+        <SectionErrorBoundary sectionName="Market Sentiment">
+          <MarketSentimentWidget />
+        </SectionErrorBoundary>
+        <SectionErrorBoundary sectionName="Risk Score">
+          <RiskScoreWidget />
+        </SectionErrorBoundary>
       </div>
 
       {/* Price Alert Manager (full width, since alert list can be long) */}
-      <PriceAlertsWidget />
+      <SectionErrorBoundary sectionName="Price Alerts">
+        <PriceAlertsWidget />
+      </SectionErrorBoundary>
 
       {/* NEW FEATURE: Portfolio Rebalancing Advisor */}
-      <RebalanceWidget />
+      <SectionErrorBoundary sectionName="Rebalance Advisor">
+        <RebalanceWidget />
+      </SectionErrorBoundary>
 
       {/* NEW FEATURE: Multi-asset Correlation Matrix */}
-      <CorrelationMatrixWidget />
+      <SectionErrorBoundary sectionName="Correlation Matrix">
+        <CorrelationMatrixWidget />
+      </SectionErrorBoundary>
 
       {/* NEW FEATURE: DCA Calculator with historical performance */}
-      <DCACalculator />
+      <SectionErrorBoundary sectionName="DCA Calculator">
+        <DCACalculator />
+      </SectionErrorBoundary>
 
       {/* Charts section: Line chart of Daily Portfolio Growth & Pie Chart of Allocation */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

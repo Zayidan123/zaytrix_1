@@ -297,6 +297,13 @@ export async function fetchLiveOnChainDataModular() {
   let hypePrice = 18.50;
   let hypePriceChangePercent = 5.60;
 
+  // OPT-5a: track whether ANY upstream fetch fell back to the hardcoded values
+  // above. Set to true in every catch block / fallback path so the frontend can
+  // surface a "STALE DATA" badge when isStale === true. A consolidated post-fetch
+  // check (below, before `return`) also catches HTTP non-ok responses that
+  // don't throw — those silently leave the hardcoded value in place.
+  let staleFallbackUsed = false;
+
   // FIX-D-9: Parallel price fetches via Promise.allSettled (was 7 sequential awaits —
   // each blocked the next, making the API response ~7x slower). Each fetcher closes
   // over the price variables and mutates them on success. Errors are caught per-fetcher
@@ -310,6 +317,7 @@ export async function fetchLiveOnChainDataModular() {
         btcPriceChangePercent = parseFloat(data.priceChangePercent) || btcPriceChangePercent;
       }
     } catch (e: any) {
+      staleFallbackUsed = true; // OPT-5a: fallback used
       console.log("[Whale Helper] Live BTC ticker error:", e.message);
     }
   };
@@ -323,6 +331,7 @@ export async function fetchLiveOnChainDataModular() {
         ethPriceChangePercent = parseFloat(data.priceChangePercent) || ethPriceChangePercent;
       }
     } catch (e: any) {
+      staleFallbackUsed = true; // OPT-5a: fallback used
       console.log("[Whale Helper] Live ETH ticker error:", e.message);
     }
   };
@@ -336,6 +345,7 @@ export async function fetchLiveOnChainDataModular() {
         bnbPriceChangePercent = parseFloat(data.priceChangePercent) || bnbPriceChangePercent;
       }
     } catch (e: any) {
+      staleFallbackUsed = true; // OPT-5a: fallback used
       console.log("[Whale Helper] Live BNB ticker error:", e.message);
     }
   };
@@ -349,6 +359,7 @@ export async function fetchLiveOnChainDataModular() {
         solPriceChangePercent = parseFloat(data.priceChangePercent) || solPriceChangePercent;
       }
     } catch (e: any) {
+      staleFallbackUsed = true; // OPT-5a: fallback used
       console.log("[Whale Helper] Live SOL ticker error:", e.message);
     }
   };
@@ -362,6 +373,7 @@ export async function fetchLiveOnChainDataModular() {
         trxPriceChangePercent = parseFloat(data.priceChangePercent) || trxPriceChangePercent;
       }
     } catch (e: any) {
+      staleFallbackUsed = true; // OPT-5a: fallback used
       console.log("[Whale Helper] Live TRX ticker error:", e.message);
     }
   };
@@ -375,6 +387,7 @@ export async function fetchLiveOnChainDataModular() {
         xrpPriceChangePercent = parseFloat(data.priceChangePercent) || xrpPriceChangePercent;
       }
     } catch (e: any) {
+      staleFallbackUsed = true; // OPT-5a: fallback used
       console.log("[Whale Helper] Live XRP ticker error:", e.message);
     }
   };
@@ -402,6 +415,7 @@ export async function fetchLiveOnChainDataModular() {
         }
       }
     } catch (e: any) {
+      staleFallbackUsed = true; // OPT-5a: fallback used (both Gate.io + Bybit failed)
       console.log("[Whale Helper] Live HYPE ticker error:", e.message);
     }
   };
@@ -432,6 +446,7 @@ export async function fetchLiveOnChainDataModular() {
       }
     }
   } catch (e: any) {
+    staleFallbackUsed = true; // OPT-5a: fallback used
     console.log("[Whale Helper Height] blockchain.info failed:", e.message);
   }
 
@@ -447,6 +462,7 @@ export async function fetchLiveOnChainDataModular() {
         }
       }
     } catch (e: any) {
+      staleFallbackUsed = true; // OPT-5a: fallback used
       console.log("[Whale Helper Height] blockstream failed:", e.message);
     }
   }
@@ -463,6 +479,7 @@ export async function fetchLiveOnChainDataModular() {
         }
       }
     } catch (e: any) {
+      staleFallbackUsed = true; // OPT-5a: fallback used
       console.log("[Whale Helper Height] mempool failed:", e.message);
     }
   }
@@ -477,6 +494,7 @@ export async function fetchLiveOnChainDataModular() {
       }
     }
   } catch (e: any) {
+    staleFallbackUsed = true; // OPT-5a: fallback used
     console.log("[Whale Helper Hash] blockchain.info failed:", e.message);
   }
 
@@ -490,6 +508,7 @@ export async function fetchLiveOnChainDataModular() {
         }
       }
     } catch (e: any) {
+      staleFallbackUsed = true; // OPT-5a: fallback used
       console.log("[Whale Helper Hash] blockstream failed:", e.message);
     }
   }
@@ -504,6 +523,7 @@ export async function fetchLiveOnChainDataModular() {
         }
       }
     } catch (e: any) {
+      staleFallbackUsed = true; // OPT-5a: fallback used
       console.log("[Whale Helper Hash] mempool failed:", e.message);
     }
   }
@@ -515,6 +535,7 @@ export async function fetchLiveOnChainDataModular() {
       recommendedFees = await feesRes.json() as any;
     }
   } catch (e: any) {
+    staleFallbackUsed = true; // OPT-5a: fallback used
     console.log("[Whale Helper Fees Check] Recommended fees error:", e.message);
   }
 
@@ -672,6 +693,30 @@ export async function fetchLiveOnChainDataModular() {
   // Save updated cache
   saveCachedTransactions(mergedList);
 
+  // OPT-5a: consolidated fallback detection. The per-catch-block flag above
+  // only fires on thrown exceptions (network errors). HTTP non-ok responses
+  // (e.g. 429/5xx from Binance/blockchain.info) don't throw — they silently
+  // leave the hardcoded value in place. This check catches those cases by
+  // comparing every critical value against its hardcoded fallback seed.
+  // False-positive risk is negligible: a live BTC price of exactly $95,230.00
+  // or a block hash of exactly 64 specific hex chars is astronomically
+  // unlikely. The recommendedFees check uses the `fastestFee === 22` sentinel
+  // (mempool.space always returns dynamic values, never a flat 22/18/12/8/2).
+  if (
+    btcPrice === 95230.00 ||
+    ethPrice === 3380.00 ||
+    bnbPrice === 612.00 ||
+    solPrice === 168.00 ||
+    trxPrice === 0.142 ||
+    xrpPrice === 2.50 ||
+    hypePrice === 18.50 ||
+    blockHeight === 848500 ||
+    blockHash === "00000000000000000002abce15f0236a282bc7228a0ca2ee8de964f6916e7af2" ||
+    recommendedFees.fastestFee === 22
+  ) {
+    staleFallbackUsed = true;
+  }
+
   return {
     processedTxs: mergedList,
     blockHeight,
@@ -690,6 +735,7 @@ export async function fetchLiveOnChainDataModular() {
     xrpPrice,
     xrpPriceChangePercent,
     hypePrice,
-    hypePriceChangePercent
+    hypePriceChangePercent,
+    isStale: staleFallbackUsed, // OPT-5a: true when ANY upstream fetch fell back to hardcoded values
   };
 }

@@ -206,6 +206,7 @@ const CSRF_EXEMPT_PATHS = new Set<string>([
   "/api/auth/reset-password",
   "/api/auth/verify-email",
   "/api/auth/login/2fa",
+  "/api/auth/2fa/backup-login", // OPT-5c: pre-auth recovery endpoint (user has no session yet)
 ]);
 
 // Lazy import to avoid a circular dependency at module-load time (auth.ts
@@ -249,9 +250,14 @@ export const csrfMiddleware: RequestHandler = async (req: Request, res: Response
   //    need the header.
   const cookie = req.cookies?.["zaytrix_csrf"];
   if (!cookie) {
-    if (process.env.NODE_ENV !== "production") {
-      console.warn(`[csrf] allowing unauthenticated mutation ${method} ${url} (no zaytrix_csrf cookie — backward compat)`);
-    }
+    // OPT-5b: log missing CSRF token (monitoring mode — not blocking yet).
+    // Previously this only warned in non-production, which meant production
+    // traffic flew under the radar. We now warn in ALL environments so the
+    // ops dashboard can surface "mutation without csrf cookie" events and we
+    // can measure how many frontend call-sites still need migration before
+    // flipping this branch to a 403. Safe: still calls next() (no breakage).
+    console.warn(`[csrf] mutation without csrf cookie: ${method} ${url}`);
+    // TODO: flip to 403 after frontend migration to send csrf token on all mutations
     return next();
   }
   // 5. Cookie present → header MUST match + be signature-valid.

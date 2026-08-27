@@ -18,8 +18,45 @@ export function initMonitoring() {
       environment: process.env.NODE_ENV || "development",
       tracesSampleRate: 0.1, // 10% of transactions traced
       profilesSampleRate: 0.1,
+      // OPT-1f: scrub PII from Sentry events before they leave the process.
+      // Removes Authorization/Cookie headers, strips query params (which may
+      // carry tokens) from request URLs, and redacts any extra context keys
+      // whose name looks like a secret (token/password/secret/key/email/api).
+      beforeSend(event) {
+        try {
+          if (event.request) {
+            if (event.request.headers) {
+              delete event.request.headers.authorization;
+              delete event.request.headers.Authorization;
+              delete event.request.headers.cookie;
+              delete event.request.headers.Cookie;
+            }
+            if (event.request.url) {
+              // drop query string — may contain access tokens / API keys
+              event.request.url = String(event.request.url).split("?")[0];
+            }
+            if (event.request.query_string) {
+              event.request.query_string = "";
+            }
+          }
+          if (event.extra && typeof event.extra === "object") {
+            const scrubbed: Record<string, unknown> = {};
+            for (const [key, value] of Object.entries(event.extra)) {
+              if (/token|password|secret|key|email|api/i.test(key)) {
+                scrubbed[key] = "[REDACTED]";
+              } else {
+                scrubbed[key] = value;
+              }
+            }
+            event.extra = scrubbed;
+          }
+        } catch {
+          // Never let the scrubber itself drop an event — return as-is.
+        }
+        return event;
+      },
     });
-    console.log("[monitoring] Sentry initialized (DSN configured).");
+    console.log("[monitoring] Sentry initialized (DSN configured, PII scrubbing on).");
   } else {
     console.log("[monitoring] Sentry NOT initialized (no SENTRY_DSN). Errors logged to console only.");
   }

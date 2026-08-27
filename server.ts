@@ -19,6 +19,8 @@ import { initMonitoring, captureError, sentryErrorHandler } from "./src/server/m
 // SEC3: WAF + data retention
 import { wafMiddleware, strictBotCheck } from "./src/server/waf";
 import { startDataRetentionJob, exportUserData, deleteAllUserData } from "./src/server/dataRetention";
+// OPT-3c: upstream API health checker (Binance/CoinGecko) — additive, runs in background.
+import { startUpstreamHealthChecker } from "./src/server/upstreamHealth";
 
 dotenv.config();
 
@@ -27,6 +29,12 @@ initMonitoring();
 
 // SEC3: start data retention background job (purges old audit logs, expired sessions/tokens)
 startDataRetentionJob();
+
+// OPT-3c: start the upstream API health checker (Binance/CoinGecko). Runs in
+// the background — pings each upstream every 60s and records healthy/latency.
+// Purely additive: no route is blocked based on health (handlers may consult
+// `isUpstreamHealthy(name)` to short-circuit calls to known-down APIs).
+startUpstreamHealthChecker();
 
 const app = express();
 // FIX-A-1: Global body limit lowered from 50mb to 100kb to prevent OOM DoS
@@ -5518,9 +5526,37 @@ async function startServer() {
   app.use(sentryErrorHandler(app));
   app.use(sanitizeError);
 
-  app.listen(PORT, "0.0.0.0", () => {
+  // OPT-1d: graceful shutdown — drain in-flight requests before exit, then
+  // disconnect Prisma. Prevents abrupt WebSocket drops + cancelled requests
+  // when the process receives SIGTERM (container stop) or SIGINT (Ctrl-C).
+  const server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`Financial Modelling Server running on port ${PORT}`);
   });
+
+  // OPT-1e: 30s hard socket timeout — guards against slow/hanging HTTP
+  // requests holding connections indefinitely (Express Server.setTimeout).
+  server.setTimeout(30000);
+
+  function gracefulShutdown(signal: string) {
+    console.log(`[${signal}] Graceful shutdown initiated...`);
+    server.close(() => {
+      console.log("[shutdown] HTTP server closed. Draining DB pool...");
+      // Lazy-import Prisma to avoid loading it at boot if unused.
+      import("./src/server/db")
+        .then(({ prisma }) => prisma.$disconnect())
+        .finally(() => {
+          console.log("[shutdown] Complete. Exiting.");
+          process.exit(0);
+        });
+    });
+    // Force exit after 10s if graceful close hangs (stuck socket / slow client)
+    setTimeout(() => {
+      console.error("[shutdown] Force exit (timeout)");
+      process.exit(1);
+    }, 10000).unref();
+  }
+  process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+  process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 }
 
 startServer();

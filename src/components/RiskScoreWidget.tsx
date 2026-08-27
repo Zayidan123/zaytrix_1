@@ -27,6 +27,7 @@ import {
   Target,
   Zap,
 } from "lucide-react";
+import { useAbortableFetch } from "../hooks/use-abortable-fetch"; // OPT-2a: abort in-flight fetches on unmount
 
 interface RiskData {
   totalValue: number;
@@ -129,10 +130,14 @@ export default function RiskScoreWidget() {
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
+  const { abortableFetch } = useAbortableFetch(); // OPT-2a
+
   const fetchRisk = async () => {
     try {
       setError(null);
-      const res = await fetch("/api/portfolio/risk-score");
+      // OPT-2a: abortable fetch — returns null when aborted (unmount / superseded by next poll).
+      const res = await abortableFetch("/api/portfolio/risk-score");
+      if (!res) return; // aborted (unmount / next poll cycle)
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (data.success) {

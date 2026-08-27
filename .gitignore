@@ -16,7 +16,8 @@ notifications-config.json
 .zscripts/mini-service-*.log
 preview-*.png
 tool-results/
-.github/workflows/ci.yml
+# OPT-3d: do NOT ignore .github/workflows/ci.yml (was previously excluded,
+# preventing CI from being tracked in git). Removed so the CI pipeline ships.
 postcss.config.mjs
 
 # FIX-D-11: vendored ClawHub skill catalogs (unrelated to ZAYTRIX app, ~MBs of bloat).

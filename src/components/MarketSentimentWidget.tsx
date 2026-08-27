@@ -14,6 +14,7 @@
 import React, { useEffect, useState, useMemo } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Activity, TrendingUp, TrendingDown, Gauge, Globe2, RefreshCw, Sparkles } from "lucide-react";
+import { useAbortableFetch } from "../hooks/use-abortable-fetch"; // OPT-2a: abort in-flight fetches on unmount
 
 interface FearGreedData {
   current: { value: number; classification: string };
@@ -106,17 +107,38 @@ export default function MarketSentimentWidget() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const { abortableFetch } = useAbortableFetch(); // OPT-2a
+
   const fetchAll = async () => {
     try {
       setError(null);
-      const [mRes, gRes] = await Promise.allSettled([
-        fetch("/api/onchain/metrics").then((r) => r.json()),
-        fetch("/api/coins/global-stats").then((r) => r.json()),
-      ]);
-      if (mRes.status === "fulfilled") setMetrics(mRes.value);
-      if (gRes.status === "fulfilled") setGlobal(gRes.value);
+      // OPT-2a: abortable fetches — null when aborted (unmount / superseded by next poll).
+      // Sequential await so the hook's single AbortController doesn't abort the sibling
+      // fetch mid-flight (which would happen if both were launched in parallel). Each
+      // .json() parse is wrapped in its own try/catch to preserve Promise.allSettled-like
+      // isolation: one bad response must not abort the other.
+      const mRaw = await abortableFetch("/api/onchain/metrics");
+      if (mRaw === null) return; // aborted
+      const gRaw = await abortableFetch("/api/coins/global-stats");
+      if (gRaw === null) return; // aborted
+      let mOk = false;
+      let gOk = false;
+      try {
+        const j = await mRaw.json();
+        setMetrics(j);
+        mOk = true;
+      } catch {
+        /* ignore parse error — preserve allSettled semantics */
+      }
+      try {
+        const j = await gRaw.json();
+        setGlobal(j);
+        gOk = true;
+      } catch {
+        /* ignore parse error — preserve allSettled semantics */
+      }
       setLastUpdated(new Date());
-      if (mRes.status === "rejected" && gRes.status === "rejected") {
+      if (!mOk && !gOk) {
         setError("Tidak dapat mengambil data pasar.");
       }
     } catch (e: any) {

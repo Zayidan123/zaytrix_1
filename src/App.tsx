@@ -375,6 +375,12 @@ export default function App() {
   // Ref tracking the WS reconnect timeout so it can be cleared on unmount (prevents memory leak)
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // OPT-2c: exponential backoff counter for WS reconnect attempts.
+  // Each failed reconnect doubles the delay (5s → 10s → 20s → 40s → 60s cap)
+  // so a long Binance outage doesn't hammer the endpoint with a new WS handshake
+  // every 5 seconds. Reset to 0 on a successful ws.onopen.
+  const wsRetryCountRef = useRef(0);
+
   // PRIMARY auth gate: check server-side session via /api/auth/me on mount.
   // The httpOnly `zaytrix_session` cookie cannot be read by JS, so /api/auth/me
   // is the single source of truth for auth state. While this fetch is in-flight,
@@ -565,6 +571,9 @@ export default function App() {
         ws.onopen = () => {
           isWsActive = true;
           setTickerSource("WebSocket");
+          // OPT-2c: reset backoff counter on a successful connection so the next
+          // outage starts again from the 5s base delay.
+          wsRetryCountRef.current = 0;
         };
 
         ws.onmessage = async (event) => {
@@ -614,14 +623,20 @@ export default function App() {
         ws.onclose = () => {
           isWsActive = false;
           setTickerSource("HTTP Polling");
-          // Attempt reconnect after 5 seconds. Track the timeout so it can be cleared on unmount.
+          // OPT-2c: exponential backoff for reconnect (5s → 10s → 20s → 40s → 60s cap).
+          // Replaces the previous fixed 5000ms delay that hammered Binance with a new
+          // WS handshake every 5 seconds during a prolonged outage. The fallback HTTP
+          // poller (4s interval) keeps ticker data flowing while we wait to retry WS.
+          const delay = Math.min(5000 * Math.pow(2, wsRetryCountRef.current), 60000);
+          wsRetryCountRef.current++;
+          console.log(`[WS] Reconnecting in ${delay}ms (attempt ${wsRetryCountRef.current})`);
           if (reconnectTimeoutRef.current) {
             clearTimeout(reconnectTimeoutRef.current);
           }
           reconnectTimeoutRef.current = setTimeout(() => {
             reconnectTimeoutRef.current = null;
             connectWebSocket();
-          }, 5000);
+          }, delay);
         };
       } catch (err) {
         console.error("Failed to initialize WebSocket stream:", err);

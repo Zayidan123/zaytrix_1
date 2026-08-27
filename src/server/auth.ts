@@ -730,6 +730,90 @@ authRouter.post("/login/2fa", async (req: Request, res: Response, next: NextFunc
   }
 });
 
+// POST /api/auth/2fa/backup-login (OPT-5c — public, pre-auth, CSRF-exempt)
+// Body: { email, backupCode } — lets a user who lost their authenticator device
+// recover access by consuming a one-time backup code (issued at /2fa/verify
+// time). The backup code is a 128-bit random hex string (formatted as 8 groups
+// of 4 hex chars separated by dashes), so it is strong enough to serve as a
+// single-factor recovery credential. The authLimiter (5 req/min/IP) caps
+// brute-force attempts at the IP level. On success the matched hash is REMOVED
+// from the stored array so the code can never be reused (one-time semantics,
+// matching TOTP). When the remaining code count drops to ≤2, a warning is
+// returned advising the user to regenerate backup codes via /2fa/disable +
+// /2fa/setup + /2fa/verify.
+//
+// ADAPTATION NOTE: the task brief assumed backup codes live inside the
+// encrypted `twoFactorSecret` column as `{hash, used}` objects. In this codebase
+// they actually live in the legacy `totpSecret` column as PLAINTEXT JSON
+// `{"backupCodes": ["sha256hex", ...]}` (a string array, not objects) — see
+// /2fa/verify around line 902. So we read `user.totpSecret` directly (no
+// decrypt) and mark a code "used" by splicing it out of the array.
+authRouter.post("/2fa/backup-login", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
+    const backupCode = typeof req.body?.backupCode === "string" ? req.body.backupCode.trim() : "";
+    if (!email || !backupCode) {
+      recordAuthAttempt(false);
+      return res.status(400).json({ success: false, error: "Email dan kode backup wajib diisi." });
+    }
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user || !user.twoFactorEnabled || !user.totpSecret) {
+      recordAuthAttempt(false);
+      // OPT-5c: don't reveal whether the email exists — generic 400.
+      return res.status(400).json({ success: false, error: "2FA tidak aktif untuk akun ini." });
+    }
+    // Parse backup codes from the totpSecret JSON envelope (plaintext JSON,
+    // not encrypted — only sha256 hashes are stored).
+    let secretData: { backupCodes?: string[] };
+    try {
+      secretData = JSON.parse(user.totpSecret);
+    } catch {
+      return res.status(500).json({ success: false, error: "Gagal membaca rahasia 2FA." });
+    }
+    if (!Array.isArray(secretData.backupCodes) || secretData.backupCodes.length === 0) {
+      return res.status(400).json({ success: false, error: "Tidak ada kode backup untuk akun ini." });
+    }
+    // Verify the backup code: hash the input (strips dashes + lowercases) and
+    // look for a match in the stored hash array.
+    const hashedInput = hashBackupCode(backupCode);
+    const matchIndex = secretData.backupCodes.indexOf(hashedInput);
+    if (matchIndex === -1) {
+      recordAuthAttempt(false);
+      await logAudit(user.id, "BACKUP_CODE_LOGIN", req, false, { reason: "invalid_or_used" });
+      return res.status(401).json({ success: false, error: "Kode backup tidak valid atau sudah digunakan." });
+    }
+    // Mark the code as used by REMOVING it from the stored array. The existing
+    // storage format is a plain string[] (not {hash, used} objects), so removal
+    // is the cleanest one-time-use semantics — the hash can never match again.
+    secretData.backupCodes.splice(matchIndex, 1);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { totpSecret: JSON.stringify(secretData) },
+    });
+    // Issue session — mirrors the /login/2fa success path (signToken +
+    // setSessionCookie + recordSession).
+    recordAuthAttempt(true);
+    await logAudit(user.id, "BACKUP_CODE_LOGIN", req, true, { remaining: secretData.backupCodes.length });
+    const token = signToken({ sub: user.id, email: user.email, displayName: user.displayName });
+    setSessionCookie(res, token);
+    await recordSession(req, user.id, token);
+    const response: any = {
+      success: true,
+      user: publicUser(user),
+      message: "Login berhasil dengan kode backup. Kode ini tidak dapat digunakan lagi.",
+    };
+    // Warn the user when they're running low on backup codes so they can
+    // regenerate before they're locked out entirely.
+    if (secretData.backupCodes.length <= 2) {
+      response.warning = `Sisa kode backup: ${secretData.backupCodes.length}. Nonaktifkan lalu aktifkan kembali 2FA untuk membuat kode cadangan baru.`;
+    }
+    return res.json(response);
+  } catch (err) {
+    recordAuthAttempt(false);
+    next(err);
+  }
+});
+
 // POST /api/auth/logout
 authRouter.post("/logout", (req: Request, res: Response) => {
   const userId = req.user?.sub || null;

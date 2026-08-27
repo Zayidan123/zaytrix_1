@@ -131,6 +131,15 @@ model PortfolioHolding {
   updatedAt     DateTime @updatedAt
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  // OPT-4b: shadow Decimal columns for money/quantity fields. Existing Float
+  // columns remain untouched so JS code using `parseFloat`/arithmetic on
+  // `purchasePrice`/`quantity` is unaffected. Future writes SHOULD populate both
+  // the Float column (for backward-compat reads) and these Decimal columns
+  // (for precision-safe math). Migration is gradual: readers first dual-read,
+  // then writers stop populating Float, then Float column is dropped.
+  purchasePriceDec Decimal?
+  quantityDec       Decimal?
+
   @@index([userId])
 }
 
@@ -147,6 +156,23 @@ model LedgerTransaction {
   notes         String?
   createdAt     DateTime @default(now())
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // OPT-4b: shadow Decimal columns for money/quantity fields. Existing Float
+  // columns remain untouched so JS code using `parseFloat`/arithmetic on
+  // `quantity`/`price`/`totalAmount`/`feePaidUsd` is unaffected. Future writes
+  // SHOULD populate both the Float column (backward-compat) and these Decimal
+  // columns (precision-safe). See PortfolioHolding for migration plan.
+  quantityDec       Decimal?
+  priceDec          Decimal?
+  totalAmountDec    Decimal?
+  feePaidUsdDec     Decimal?
+
+  // OPT-4c: shadow DateTime column for the legacy String `timestamp` field.
+  // Existing String column stays untouched so JS code that parses it as an ISO
+  // string is unaffected. Future writes SHOULD populate both columns: the
+  // String (backward compat with client format) and this DateTime (proper
+  // DB-side date queries, range scans, ordering).
+  timestampDt       DateTime?
 
   @@index([userId])
   @@index([userId, timestamp])
@@ -170,6 +196,21 @@ model BacktestResult {
   createdAt     DateTime @default(now())
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  // OPT-4b: shadow Decimal columns for money fields. Existing Float columns
+  // (`initialCapital`/`finalCapital`/`totalReturn`) remain untouched so JS
+  // arithmetic on them is unaffected. `sharpeRatio`/`maxDrawdown`/`winRate`
+  // are deliberately NOT shadowed — they're computed statistics, not money;
+  // Float precision is acceptable for analytics ratios.
+  initialCapitalDec Decimal?
+  finalCapitalDec   Decimal?
+  totalReturnDec    Decimal?
+
+  // OPT-4c: shadow DateTime columns for the legacy String `startDate`/`endDate`
+  // fields. Existing String columns stay untouched so JS parsing of ISO strings
+  // is unaffected. Future writes SHOULD populate both columns.
+  startDateDt       DateTime?
+  endDateDt         DateTime?
+
   @@index([userId])
 }
 
@@ -184,6 +225,17 @@ model ConversionTransaction {
   timestamp     String
   createdAt     DateTime @default(now())
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // OPT-4b: shadow Decimal columns for money fields. Existing Float columns
+  // (`fromAmount`/`toAmount`/`rate`) remain untouched. Future writes should
+  // populate both.
+  fromAmountDec Decimal?
+  toAmountDec   Decimal?
+  rateDec       Decimal?
+
+  // OPT-4c: shadow DateTime column for the legacy String `timestamp` field.
+  // Future writes SHOULD populate both columns.
+  timestampDt   DateTime?
 
   @@index([userId])
 }
@@ -202,6 +254,21 @@ model AlertConfig {
   triggeredAt   DateTime?
   triggerPrice  Float?   // the live price when the alert fired
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // OPT-4b: shadow Decimal columns for price fields. Existing Float columns
+  // (`targetPrice`/`triggerPrice`) remain untouched so JS comparison/arithmetic
+  // is unaffected. Future writes should populate both.
+  targetPriceDec Decimal?
+  triggerPriceDec Decimal?
+
+  // OPT-4c: shadow DateTime column for the legacy String `createdAt` field.
+  // NOTE: Task spec called for `@default(now())`, but SQLite forbids adding a
+  // column with a non-constant default via ALTER TABLE (Prisma db push fails
+  // with "Cannot add a column with non-constant default"). So the shadow is a
+  // plain `DateTime?`. Future code that wants auto-population must explicitly
+  // set `createdAtDt: new Date()` on inserts. Existing rows stay NULL until
+  // backfilled (NULL = "not yet migrated", which is the correct signal).
+  createdAtDt     DateTime?
 
   @@index([userId])
   @@index([triggered, createdAt])
