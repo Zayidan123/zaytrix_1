@@ -195,9 +195,16 @@ model AlertConfig {
   condition     String   // above, below
   targetPrice   Float
   createdAt     String
+  // FIX-P1-C / NEW FEATURE: triggered-alert tracking. When the price-checker
+  // detects the condition is met, these fields are set so the UI can show
+  // "Triggered" status + timestamp, and toast the user.
+  triggered     Boolean  @default(false)
+  triggeredAt   DateTime?
+  triggerPrice  Float?   // the live price when the alert fired
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@index([triggered, createdAt])
 }
 
 // SEC3-AUTH (AUTH10): WebAuthn / passkey credentials.

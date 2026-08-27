@@ -328,3 +328,134 @@ portfolioRouter.delete("/alerts/:id", async (req: Request, res: Response) => {
     res.status(404).json({ success: false, error: "Alert tidak ditemukan." });
   }
 });
+
+// ============================================================================
+// NEW FEATURE: Price Alert Checker
+// ----------------------------------------------------------------------------
+// Periodically fetches live prices for all unique symbols that have un-triggered
+// alerts, evaluates each alert's condition (above/below), and marks triggered
+// alerts with timestamp + the live price at trigger time. Runs every 30s.
+// ============================================================================
+
+// Simple in-memory price cache (symbol → { price, ts }) to avoid hitting
+// Binance repeatedly when multiple alerts share a symbol.
+const alertPriceCache = new Map<string, { price: number; ts: number }>();
+const ALERT_PRICE_CACHE_TTL = 15_000; // 15s
+
+async function fetchAlertPrice(symbol: string): Promise<number | null> {
+  const now = Date.now();
+  const cached = alertPriceCache.get(symbol);
+  if (cached && now - cached.ts < ALERT_PRICE_CACHE_TTL) {
+    return cached.price;
+  }
+  try {
+    // Binance spot ticker — symbol like BTCUSDT
+    const binanceSymbol = symbol.toUpperCase().endsWith("USDT")
+      ? symbol.toUpperCase()
+      : symbol.toUpperCase() + "USDT";
+    const res = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${binanceSymbol}`);
+    if (!res.ok) return cached?.price ?? null;
+    const data = (await res.json()) as any;
+    const price = parseFloat(data.price);
+    if (!Number.isFinite(price) || price <= 0) return cached?.price ?? null;
+    alertPriceCache.set(symbol, { price, ts: now });
+    return price;
+  } catch {
+    return cached?.price ?? null;
+  }
+}
+
+async function runAlertChecker(): Promise<void> {
+  try {
+    // Only check alerts that haven't triggered yet.
+    const activeAlerts = await prisma.alertConfig.findMany({
+      where: { triggered: false },
+      select: { id: true, userId: true, symbol: true, condition: true, targetPrice: true },
+    });
+    if (activeAlerts.length === 0) return;
+
+    // Group by symbol to minimize upstream calls.
+    const bySymbol = new Map<string, typeof activeAlerts>();
+    for (const a of activeAlerts) {
+      const list = bySymbol.get(a.symbol) ?? [];
+      list.push(a);
+      bySymbol.set(a.symbol, list);
+    }
+
+    const updates: Promise<any>[] = [];
+    for (const [symbol, alerts] of bySymbol) {
+      const price = await fetchAlertPrice(symbol);
+      if (price == null) continue;
+      for (const a of alerts) {
+        const cond = a.condition?.toLowerCase();
+        const hit = (cond === "above" && price >= a.targetPrice) || (cond === "below" && price <= a.targetPrice);
+        if (hit) {
+          updates.push(
+            prisma.alertConfig.update({
+              where: { id: a.id },
+              data: {
+                triggered: true,
+                triggeredAt: new Date(),
+                triggerPrice: price,
+              },
+            })
+          );
+        }
+      }
+    }
+    if (updates.length > 0) {
+      await Promise.allSettled(updates);
+      console.log(`[alertChecker] Triggered ${updates.length} alert(s)`);
+    }
+  } catch (e: any) {
+    console.error("[alertChecker] run error:", e?.message || e);
+  }
+}
+
+// Start the background checker (30s interval, 10s initial delay).
+let alertCheckerStarted = false;
+export function startAlertChecker(): void {
+  if (alertCheckerStarted) return;
+  alertCheckerStarted = true;
+  setTimeout(() => {
+    runAlertChecker().catch((e) => console.error("[alertChecker] initial run:", e?.message || e));
+  }, 10_000);
+  setInterval(() => {
+    runAlertChecker().catch((e) => console.error("[alertChecker] interval run:", e?.message || e));
+  }, 30_000);
+  console.log("[alertChecker] Started — runs every 30s (first run in 10s)");
+}
+
+// GET /api/portfolio/alerts/triggered — returns only alerts that fired since
+// the provided `since` timestamp (so the UI can toast newly-triggered ones).
+portfolioRouter.get("/alerts/triggered", async (req: Request, res: Response) => {
+  try {
+    const sinceRaw = req.query.since;
+    const since = typeof sinceRaw === "string" ? new Date(sinceRaw) : new Date(0);
+    const triggered = await prisma.alertConfig.findMany({
+      where: {
+        userId: req.user!.sub,
+        triggered: true,
+        triggeredAt: { gt: since },
+      },
+      orderBy: { triggeredAt: "desc" },
+      take: 20,
+    });
+    res.json({ success: true, triggered });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: "Gagal memuat alert terpicu." });
+  }
+});
+
+// POST /api/portfolio/alerts/:id/acknowledge — mark a triggered alert as
+// acknowledged by deleting it (UI calls this after showing the toast).
+portfolioRouter.post("/alerts/:id/acknowledge", async (req: Request, res: Response) => {
+  try {
+    await prisma.alertConfig.delete({
+      where: { id: req.params.id, userId: req.user!.sub },
+    });
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(404).json({ success: false, error: "Alert tidak ditemukan." });
+  }
+});

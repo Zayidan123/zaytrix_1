@@ -5319,8 +5319,10 @@ app.use("/api/user/api-keys", apiKeysRouter);
 // SEC2-DATA: mount portfolio + real trade execution routers.
 // Portfolio router self-mounts requireAuth. Trade execution router also self-mounts requireAuth.
 try {
-  const { portfolioRouter } = await import("./src/server/portfolio");
+  const { portfolioRouter, startAlertChecker } = await import("./src/server/portfolio");
   app.use("/api/portfolio", portfolioRouter);
+  // NEW FEATURE: start the background price-alert checker (polls Binance every 30s).
+  startAlertChecker();
   console.log("[portfolio] router mounted successfully.");
 } catch (e: any) {
   console.log("[portfolio] router not available:", e?.message || e);

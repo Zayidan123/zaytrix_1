@@ -47,6 +47,7 @@ import { Asset, PortfolioAsset } from "../types";
 import { useGlobalStore } from "../store";
 import CorrelationHeatmap from "./CorrelationHeatmap";
 import MarketSentimentWidget from "./MarketSentimentWidget";
+import PriceAlertsWidget from "./PriceAlertsWidget";
 import { db, auth } from "../lib/firebase";
 import { doc, getDoc } from "firebase/firestore";
 
@@ -959,32 +960,44 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Total Portfolio Value */}
         <motion.div 
-          whileHover={{ y: -4, scale: 1.015, borderColor: "rgba(59, 130, 246, 0.4)" }}
+          whileHover={{ y: -6, scale: 1.02, borderColor: "rgba(59, 130, 246, 0.5)" }}
           transition={{ type: "spring", stiffness: 400, damping: 25 }}
-          className="bg-slate-900/40 border border-slate-800/80 p-5 rounded-xl flex items-center justify-between transition-colors shadow-xl relative overflow-hidden"
+          className="bg-slate-900/40 border border-slate-800/80 p-5 rounded-xl flex items-center justify-between transition-colors shadow-xl relative overflow-hidden group"
         >
+          {/* STYLING UPGRADE: top accent bar */}
+          <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-blue-500 via-cyan-400 to-blue-500 opacity-60 group-hover:opacity-100 transition-opacity" />
+          {/* STYLING UPGRADE: hover shimmer */}
+          <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none">
+            <div className="absolute -inset-x-full h-full bg-gradient-to-r from-transparent via-blue-500/10 to-transparent skew-x-12 group-hover:animate-[shimmer_1.5s_ease-in-out]" />
+          </div>
           <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/5 rounded-full blur-2xl pointer-events-none" />
-          <div className="space-y-1">
+          <div className="space-y-1 relative z-10">
             <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest font-mono">TOTAL NILAI PORTFOLIO</p>
             <h3 className="text-2xl font-black text-white tracking-tight">{formatIDR(totalCurrentValue)}</h3>
             <p className="text-[10px] text-slate-400 font-semibold flex items-center gap-1">
-              <span className="w-1 h-1 rounded-full bg-blue-500" />
+              <span className="w-1 h-1 rounded-full bg-blue-500 animate-pulse" />
               Konversi Kurs: Rp {USD_TO_IDR.toLocaleString()}/USD
             </p>
           </div>
-          <div className="w-12 h-12 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center shrink-0 shadow-inner">
-            <Wallet className="w-5.5 h-5.5 text-blue-400" />
+          {/* STYLING UPGRADE: double-layered icon container with depth */}
+          <div className="relative w-12 h-12 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center shrink-0 shadow-inner">
+            <div className="absolute inset-0 rounded-xl bg-gradient-to-br from-blue-400/10 to-transparent pointer-events-none" />
+            <Wallet className="w-5.5 h-5.5 text-blue-400 relative z-10" />
           </div>
         </motion.div>
 
         {/* Invested Capital */}
         <motion.div 
-          whileHover={{ y: -4, scale: 1.015, borderColor: "rgba(148, 163, 184, 0.4)" }}
+          whileHover={{ y: -6, scale: 1.02, borderColor: "rgba(148, 163, 184, 0.5)" }}
           transition={{ type: "spring", stiffness: 400, damping: 25 }}
-          className="bg-slate-900/40 border border-slate-800/80 p-5 rounded-xl flex items-center justify-between transition-colors shadow-xl relative overflow-hidden"
+          className="bg-slate-900/40 border border-slate-800/80 p-5 rounded-xl flex items-center justify-between transition-colors shadow-xl relative overflow-hidden group"
         >
+          <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-slate-400 via-slate-300 to-slate-400 opacity-60 group-hover:opacity-100 transition-opacity" />
+          <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none">
+            <div className="absolute -inset-x-full h-full bg-gradient-to-r from-transparent via-slate-400/10 to-transparent skew-x-12 group-hover:animate-[shimmer_1.5s_ease-in-out]" />
+          </div>
           <div className="absolute top-0 right-0 w-32 h-32 bg-slate-500/5 rounded-full blur-2xl pointer-events-none" />
-          <div className="space-y-1">
+          <div className="space-y-1 relative z-10">
             <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest font-mono">MODAL DIINVESTASIKAN</p>
             <h3 className="text-2xl font-black text-slate-200 tracking-tight">{formatIDR(totalInvested)}</h3>
             <p className="text-[10px] text-slate-400 font-semibold flex items-center gap-1">
@@ -992,25 +1005,38 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
               Nilai basis harga rata-rata beli
             </p>
           </div>
-          <div className="w-12 h-12 rounded-xl bg-slate-800/60 border border-slate-700/60 flex items-center justify-center shrink-0 shadow-inner">
-            <Coins className="w-5.5 h-5.5 text-slate-400" />
+          <div className="relative w-12 h-12 rounded-xl bg-slate-800/60 border border-slate-700/60 flex items-center justify-center shrink-0 shadow-inner">
+            <div className="absolute inset-0 rounded-xl bg-gradient-to-br from-slate-300/10 to-transparent pointer-events-none" />
+            <Coins className="w-5.5 h-5.5 text-slate-400 relative z-10" />
           </div>
         </motion.div>
 
         {/* Unrealized Gain/Loss */}
         <motion.div 
           whileHover={{ 
-            y: -4, 
-            scale: 1.015, 
-            borderColor: absoluteUnrealizedGain >= 0 ? "rgba(52, 211, 153, 0.4)" : "rgba(239, 68, 68, 0.4)" 
+            y: -6, 
+            scale: 1.02, 
+            borderColor: absoluteUnrealizedGain >= 0 ? "rgba(52, 211, 153, 0.5)" : "rgba(239, 68, 68, 0.5)" 
           }}
           transition={{ type: "spring", stiffness: 400, damping: 25 }}
-          className="bg-slate-900/40 border border-slate-800/80 p-5 rounded-xl flex items-center justify-between transition-colors shadow-xl relative overflow-hidden"
+          className="bg-slate-900/40 border border-slate-800/80 p-5 rounded-xl flex items-center justify-between transition-colors shadow-xl relative overflow-hidden group"
         >
+          <div className={`absolute top-0 left-0 right-0 h-[2px] opacity-60 group-hover:opacity-100 transition-opacity ${
+            absoluteUnrealizedGain >= 0
+              ? "bg-gradient-to-r from-emerald-500 via-green-400 to-emerald-500"
+              : "bg-gradient-to-r from-rose-500 via-red-400 to-rose-500"
+          }`} />
+          <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none">
+            <div className={`absolute -inset-x-full h-full skew-x-12 group-hover:animate-[shimmer_1.5s_ease-in-out] ${
+              absoluteUnrealizedGain >= 0
+                ? "bg-gradient-to-r from-transparent via-emerald-500/10 to-transparent"
+                : "bg-gradient-to-r from-transparent via-rose-500/10 to-transparent"
+            }`} />
+          </div>
           <div className={`absolute top-0 right-0 w-32 h-32 rounded-full blur-2xl pointer-events-none ${
             absoluteUnrealizedGain >= 0 ? "bg-emerald-500/5" : "bg-rose-500/5"
           }`} />
-          <div className="space-y-1">
+          <div className="space-y-1 relative z-10">
             <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest font-mono">BELUM DIREALISASI (P&L)</p>
             <h3 className={`text-2xl font-black tracking-tight ${
               absoluteUnrealizedGain >= 0 ? "text-emerald-400" : "text-rose-500"
@@ -1029,27 +1055,36 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
               </span>
             </div>
           </div>
-          <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 border shadow-inner ${
+          <div className={`relative w-12 h-12 rounded-xl flex items-center justify-center shrink-0 border shadow-inner ${
             absoluteUnrealizedGain >= 0 
               ? "bg-emerald-500/10 border-emerald-500/20" 
               : "bg-rose-500/10 border-rose-500/20"
           }`}>
+            <div className={`absolute inset-0 rounded-xl pointer-events-none ${
+              absoluteUnrealizedGain >= 0
+                ? "bg-gradient-to-br from-emerald-400/15 to-transparent"
+                : "bg-gradient-to-br from-rose-400/15 to-transparent"
+            }`} />
             {absoluteUnrealizedGain >= 0 ? (
-              <TrendingUp className="w-5.5 h-5.5 text-emerald-400" />
+              <TrendingUp className="w-5.5 h-5.5 text-emerald-400 relative z-10" />
             ) : (
-              <TrendingDown className="w-5.5 h-5.5 text-rose-400" />
+              <TrendingDown className="w-5.5 h-5.5 text-rose-400 relative z-10" />
             )}
           </div>
         </motion.div>
 
         {/* CFA Target recommendation */}
         <motion.div 
-          whileHover={{ y: -4, scale: 1.015, borderColor: "rgba(96, 165, 250, 0.4)" }}
+          whileHover={{ y: -6, scale: 1.02, borderColor: "rgba(96, 165, 250, 0.5)" }}
           transition={{ type: "spring", stiffness: 400, damping: 25 }}
-          className="bg-slate-900/40 border border-slate-800/80 p-5 rounded-xl flex items-center justify-between transition-colors shadow-xl relative overflow-hidden"
+          className="bg-slate-900/40 border border-slate-800/80 p-5 rounded-xl flex items-center justify-between transition-colors shadow-xl relative overflow-hidden group"
         >
+          <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-amber-500 via-orange-400 to-amber-500 opacity-60 group-hover:opacity-100 transition-opacity" />
+          <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none">
+            <div className="absolute -inset-x-full h-full bg-gradient-to-r from-transparent via-amber-500/10 to-transparent skew-x-12 group-hover:animate-[shimmer_1.5s_ease-in-out]" />
+          </div>
           <div className="absolute top-0 right-0 w-32 h-32 bg-amber-500/5 rounded-full blur-2xl pointer-events-none" />
-          <div className="space-y-1">
+          <div className="space-y-1 relative z-10">
             <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest font-mono">REKOMENDASI PORTFOLIO</p>
             <h3 className="text-sm font-black text-slate-100 tracking-tight uppercase">
               {riskProfile === "Low" && "Alokasi Defensif"}
@@ -1064,14 +1099,26 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
               {riskProfile === "Aggressive" && "60% Crypto / 40% Saham"}
             </p>
           </div>
-          <div className="w-12 h-12 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center shrink-0">
-            <ShieldAlert className="w-5.5 h-5.5 text-amber-400 animate-pulse" />
+          <div className="relative w-12 h-12 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center shrink-0">
+            <div className="absolute inset-0 rounded-xl bg-gradient-to-br from-amber-400/15 to-transparent pointer-events-none" />
+            <ShieldAlert className="w-5.5 h-5.5 text-amber-400 animate-pulse relative z-10" />
           </div>
         </motion.div>
       </div>
 
-      {/* NEW FEATURE: Market Sentiment Radar — Fear & Greed gauge + global market stats */}
-      <MarketSentimentWidget />
+      {/* STYLING UPGRADE: shimmer keyframe for stat cards */}
+      <style>{`
+        @keyframes shimmer {
+          0% { transform: translateX(-100%) skewX(12deg); }
+          100% { transform: translateX(100%) skewX(12deg); }
+        }
+      `}</style>
+
+      {/* NEW FEATURE: Market Sentiment Radar + Price Alert Manager side-by-side */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <MarketSentimentWidget />
+        <PriceAlertsWidget />
+      </div>
 
       {/* Charts section: Line chart of Daily Portfolio Growth & Pie Chart of Allocation */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
