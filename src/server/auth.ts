@@ -136,8 +136,9 @@ function verifyToken(token: string): ZCapitalJwtPayload | null {
   }
 }
 
-// sha256(jwt) — used as the server-side Session lookup key. We hash so a DB
-// leak cannot be turned into live session tokens.
+// sha256(token) — used as the server-side lookup key for Session, EmailVerification,
+// and PasswordReset tokens. We hash so a DB leak cannot be turned into live tokens
+// (the raw token is only ever held by the user via email/link, never stored).
 function hashToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
@@ -411,14 +412,16 @@ authRouter.post("/register", async (req: Request, res: Response, next: NextFunct
     await recordSession(req, user.id, token);
 
     // SEC2-AUTH: send a verification email (best-effort — failures don't block
-    // registration). We issue the token + persist it before sending so the
+    // registration). We issue the token + persist its HASH before sending so the
     // user can refresh the resend endpoint if the email never arrives.
+    // FIX-P1-A: store sha256(token), never the raw token — a DB leak cannot be
+    // turned into live verification links. The raw token only exists in the email.
     try {
       const evToken = randomTokenString();
       await prisma.emailVerificationToken.create({
         data: {
           userId: user.id,
-          token: evToken,
+          token: hashToken(evToken),
           expiresAt: new Date(Date.now() + EMAIL_VERIFICATION_TTL_MS),
         },
       });
@@ -890,7 +893,8 @@ authRouter.post("/verify-email", async (req: Request, res: Response, next: NextF
   try {
     const token = typeof req.body?.token === "string" ? req.body.token.trim() : "";
     if (!token) return res.status(400).json({ success: false, error: "Token wajib diisi." });
-    const row = await prisma.emailVerificationToken.findUnique({ where: { token } });
+    // FIX-P1-A: lookup by hash, not raw token.
+    const row = await prisma.emailVerificationToken.findUnique({ where: { token: hashToken(token) } });
     if (!row) return res.status(400).json({ success: false, error: "Token tidak valid." });
     if (row.expiresAt.getTime() < Date.now()) {
       await prisma.emailVerificationToken.delete({ where: { id: row.id } }).catch(() => {});
@@ -920,11 +924,12 @@ authRouter.post("/resend-verification", requireAuth, async (req: Request, res: R
     }
     // Delete any outstanding tokens for this user (1 outstanding at a time).
     await prisma.emailVerificationToken.deleteMany({ where: { userId: user.id } }).catch(() => {});
+    // FIX-P1-A: store hash, send raw via email.
     const token = randomTokenString();
     await prisma.emailVerificationToken.create({
       data: {
         userId: user.id,
-        token,
+        token: hashToken(token),
         expiresAt: new Date(Date.now() + EMAIL_VERIFICATION_TTL_MS),
       },
     });
@@ -956,11 +961,12 @@ authRouter.post("/forgot-password", async (req: Request, res: Response, next: Ne
     }
     const user = await prisma.user.findUnique({ where: { email } });
     if (user) {
+      // FIX-P1-A: store hash of reset token, send raw token via email.
       const token = randomTokenString();
       await prisma.user.update({
         where: { id: user.id },
         data: {
-          resetToken: token,
+          resetToken: hashToken(token),
           resetTokenExpiry: new Date(Date.now() + PASSWORD_RESET_TTL_MS),
         },
       });
@@ -989,8 +995,9 @@ authRouter.post("/reset-password", async (req: Request, res: Response, next: Nex
     if (newPassword.length < 8) {
       return res.status(400).json({ success: false, error: "Kata sandi minimal 8 karakter." });
     }
+    // FIX-P1-A: lookup by hash, not raw token.
     const user = await prisma.user.findFirst({
-      where: { resetToken: token, resetTokenExpiry: { gt: new Date() } },
+      where: { resetToken: hashToken(token), resetTokenExpiry: { gt: new Date() } },
     });
     if (!user) {
       await logAudit(null, "PASSWORD_RESET", req, false, { reason: "bad_or_expired_token" });

@@ -139,22 +139,13 @@ export function mapRawToOnChainTx(item: any): any {
   const usdAmount = item.usdAmount || 0;
   const timestamp = item.timestamp || new Date().toISOString();
 
-  // Determine exchanges names deterministically from hex characters
-  const secondChar = txHash.startsWith("0x") ? txHash.charAt(2) : txHash.charAt(0);
-  const thirdChar = txHash.startsWith("0x") ? txHash.charAt(3) : txHash.charAt(1);
-
+  // FIX-P1-B: previously "guessed" exchange names deterministically from the
+  // txhash hex chars (e.g. if char[2] was 'a'-'f' → label as Binance/Bybit/etc).
+  // That fabricated exchange attribution for transactions that were actually
+  // from unknown wallets. Now we leave the label as "Unknown Wallet" honestly
+  // unless the upstream RPC explicitly tagged the source/dest.
   let sourceName = item.sourceName || "Unknown Wallet";
   let destName = item.destName || "Unknown Wallet";
-
-  const sourceIdx = parseInt(secondChar || "0", 16);
-  const destIdx = parseInt(thirdChar || "0", 16);
-
-  if (sourceName === "Unknown Wallet" && sourceIdx >= 10 && sourceIdx < 16) {
-    sourceName = exchanges[(sourceIdx - 10) % exchanges.length];
-  }
-  if (destName === "Unknown Wallet" && destIdx >= 10 && destIdx < 16) {
-    destName = exchanges[(destIdx - 10) % exchanges.length];
-  }
 
   if (sourceName !== "Unknown Wallet" && sourceName === destName) {
     destName = "Unknown Wallet";
@@ -204,8 +195,12 @@ export function mapRawToOnChainTx(item: any): any {
     ? rawReceiver.substring(0, 10) + "..." + rawReceiver.substring(rawReceiver.length - 8) 
     : rawReceiver;
 
-  const senderBalance = item.senderBalance !== undefined ? item.senderBalance : parseFloat((amount * 1.5).toFixed(2));
-  const receiverBalance = item.receiverBalance !== undefined ? item.receiverBalance : parseFloat((amount * 2.2).toFixed(2));
+  // FIX-P1-B: previously fabricated balances as `amount * 1.5` / `amount * 2.2`
+  // when the upstream RPC didn't provide them. That presented fake data as
+  // "100% real" on a financial terminal. Now we surface `null` honestly so
+  // the UI can show "—" / "unknown" instead of misleading users.
+  const senderBalance = item.senderBalance !== undefined ? item.senderBalance : null;
+  const receiverBalance = item.receiverBalance !== undefined ? item.receiverBalance : null;
   const sizeBytes = item.vsize || item.sizeBytes || 225;
 
   return {
@@ -238,7 +233,25 @@ function getCachedTransactions(): any[] {
       const data = fs.readFileSync(CACHE_FILE_PATH, "utf-8");
       const parsed = JSON.parse(data);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed.map(tx => mapRawToOnChainTx(tx));
+        // FIX-P1-B: stale cache (committed in git) contains fabricated
+        // senderBalance/receiverBalance (amount*1.5 / amount*2.2) and
+        // exchange names guessed from txhash hex chars. Strip them here
+        // so even old cache files are served with honest "null / Unknown"
+        // values. New cache writes will only contain null balances.
+        const sanitized = parsed.map((tx: any) => {
+          const amount = tx.amount || 0;
+          const sb = tx.senderBalance;
+          const rb = tx.receiverBalance;
+          // Detect fabrication pattern: balance === amount * 1.5 (±0.01)
+          const sbFabricated = typeof sb === "number" && amount > 0 && Math.abs(sb - amount * 1.5) < 0.01;
+          const rbFabricated = typeof rb === "number" && amount > 0 && Math.abs(rb - amount * 2.2) < 0.01;
+          return {
+            ...tx,
+            senderBalance: sbFabricated ? null : sb,
+            receiverBalance: rbFabricated ? null : rb,
+          };
+        });
+        return sanitized.map(tx => mapRawToOnChainTx(tx));
       }
     }
   } catch (err: any) {
@@ -877,8 +890,8 @@ export async function fetchLiveOnChainDataModular() {
       destName,
       sender: sender.length > 40 ? sender.substring(0, 10) + "..." + sender.substring(sender.length - 8) : sender,
       receiver: receiver.length > 40 ? receiver.substring(0, 10) + "..." + receiver.substring(receiver.length - 8) : receiver,
-      senderBalance: parseFloat((amount * 1.5).toFixed(2)),
-      receiverBalance: parseFloat((amount * 2.2).toFixed(2)),
+      senderBalance: null, // FIX-P1-B: was `amount * 1.5` (fabricated). RPC doesn't expose wallet balance.
+      receiverBalance: null, // FIX-P1-B: was `amount * 2.2` (fabricated).
       explorerUrl,
       sizeBytes: item.vsize || 225
     };

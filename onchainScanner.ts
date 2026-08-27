@@ -40,39 +40,34 @@ export function safeParseDateISO(val: any): string {
 }
 
 /**
- * Ensures clean, realistic, distinct blockchain wallet addresses
+ * FIX-P1-B: Previously fabricated fake wallet addresses (e.g. `bc1q9x${suffix}p${endSuffix}`)
+ * derived from the txhash when the upstream RPC returned "Unknown Wallet". That
+ * presented fabricated addresses as real on a financial terminal. Now we return
+ * an honest placeholder so the UI can label it "Unknown" instead of deceiving users.
  */
-export function formatToRealisticAddress(blockchain: string, rawAddr: string, role: "sender" | "receiver", txhash: string): string {
-  let addr = (rawAddr || "").trim();
-  if (addr.toLowerCase() === "unknown" || addr === "" || addr === "unknown wallet" || addr === "Unknown Wallet") {
-    // Generate realistic deterministic address based on txhash to guarantee uniqueness and distinct sender/receiver
-    const seed = txhash.startsWith("0x") ? txhash.substring(2) : txhash;
-    const offset = role === "sender" ? 0 : 8;
-    const suffix = seed.substring(offset, offset + 6).toLowerCase();
-    const endSuffix = seed.substring(seed.length - 4).toLowerCase();
-    
-    if (blockchain === "Bitcoin") {
-      return role === "sender" ? `bc1q9x${suffix}p${endSuffix}` : `bc1q3v${suffix}m${endSuffix}`;
-    } else if (blockchain === "Ethereum" || blockchain === "BSC") {
-      return role === "sender" ? `0x7a${suffix}ff${endSuffix}` : `0x9c${suffix}aa${endSuffix}`;
-    } else if (blockchain === "Tron") {
-      return role === "sender" ? `TWh${suffix}Xy${endSuffix}` : `TRx${suffix}Km${endSuffix}`;
-    } else if (blockchain === "Solana") {
-      const formattedSuffix = suffix.replace(/[0-9]/g, (m) => String.fromCharCode(65 + parseInt(m)));
-      return role === "sender" ? `G2j${formattedSuffix}Xy${endSuffix}` : `H1I${formattedSuffix}W5${endSuffix}`;
-    } else if (blockchain === "XRP Ledger") {
-      return role === "sender" ? `rHb${suffix}Th${endSuffix}` : `rLN${suffix}ih${endSuffix}`;
-    }
+export function formatToRealisticAddress(blockchain: string, rawAddr: string, role: "sender" | "receiver", _txhash: string): string {
+  const addr = (rawAddr || "").trim();
+  if (
+    addr.toLowerCase() === "unknown" ||
+    addr === "" ||
+    addr.toLowerCase() === "unknown wallet"
+  ) {
+    // Honest placeholder — the UI renders this distinctly so users know the
+    // address wasn't disclosed by the upstream RPC.
+    return role === "sender" ? "Unknown Sender" : "Unknown Receiver";
   }
-  
+
   if (blockchain === "Tron" && addr.startsWith("41") && addr.length === 42) {
     return "T" + addr.substring(2, 10) + "..." + addr.substring(addr.length - 8);
   }
-  
+
   return addr;
 }
 
-// 100% real historical whale transaction seeds to guarantee Etherscan, Mempool, etc. searches succeed on first load
+// FIX-P1-B: previously labelled "100% real historical whale transaction seeds"
+// but several entries had invalid hashes (wrong length / fake format). They are
+// kept as fallback "sample" seeds so first-load always returns SOMETHING, but
+// the UI must label them as samples, not live data.
 export const REAL_HISTORICAL_SEEDS: OnChainTx[] = [
   {
     txhash: "f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16",

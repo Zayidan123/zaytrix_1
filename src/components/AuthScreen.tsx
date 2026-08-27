@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { motion, AnimatePresence } from "motion/react";
 import {
   loginUser,
   registerUser,
@@ -9,7 +10,7 @@ import {
   type AuthUser,
 } from "../lib/auth";
 import { useGlobalStore } from "../store";
-import { Shield, Mail, Lock, Phone, Chrome, AlertCircle, CheckCircle, ShieldAlert, KeyRound, ArrowLeft } from "lucide-react";
+import { Shield, Mail, Lock, Phone, Chrome, AlertCircle, CheckCircle, ShieldAlert, KeyRound, ArrowLeft, ShieldCheck, Fingerprint, Zap } from "lucide-react";
 
 interface AuthScreenProps {
   onAuthSuccess: (user: AuthUser) => void;
@@ -316,130 +317,248 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
 
   return (
     <div className="min-h-screen bg-[#020617] text-slate-100 flex items-center justify-center p-4 relative overflow-hidden" id="auth-main-card">
-      {/* Visual Background Details */}
-      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-blue-600/10 rounded-full blur-3xl pointer-events-none" />
-      <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-amber-600/10 rounded-full blur-3xl pointer-events-none" />
-      
-      <div className="w-full max-w-md bg-[#0B1329]/90 backdrop-blur-xl border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-2xl relative z-10 space-y-6">
-        
-        {/* Banner Title */}
-        <div className="text-center space-y-2">
-          <div className="mx-auto w-20 h-20 flex items-center justify-center rounded-xl shadow-lg shadow-amber-500/15">
-            <img src="/logo.png" alt="ZAYTRIX Logo" className="w-full h-full object-contain" />
-          </div>
-          <h1 className="text-2xl font-black tracking-tight font-sans bg-clip-text text-transparent bg-gradient-to-r from-slate-100 via-slate-200 to-amber-400">
-            ZAYTRIX
-          </h1>
-          <p className="text-xs text-slate-400 font-mono">
-            Gerbang Multi-Sistem Otentikasi Militer & Real-Time Security
-          </p>
-        </div>
+      {/* STYLING UPGRADE: layered animated background — 3 floating orbs + grid overlay */}
+      <motion.div
+        aria-hidden
+        className="absolute top-1/4 left-1/4 w-96 h-96 bg-blue-600/10 rounded-full blur-3xl pointer-events-none"
+        animate={{ x: [0, 30, 0], y: [0, -20, 0], opacity: [0.4, 0.7, 0.4] }}
+        transition={{ duration: 12, repeat: Infinity, ease: "easeInOut" }}
+      />
+      <motion.div
+        aria-hidden
+        className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-amber-600/10 rounded-full blur-3xl pointer-events-none"
+        animate={{ x: [0, -30, 0], y: [0, 20, 0], opacity: [0.4, 0.7, 0.4] }}
+        transition={{ duration: 14, repeat: Infinity, ease: "easeInOut", delay: 2 }}
+      />
+      <motion.div
+        aria-hidden
+        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-emerald-600/5 rounded-full blur-3xl pointer-events-none"
+        animate={{ scale: [1, 1.15, 1], opacity: [0.3, 0.5, 0.3] }}
+        transition={{ duration: 18, repeat: Infinity, ease: "easeInOut", delay: 4 }}
+      />
+      {/* Subtle grid overlay */}
+      <div
+        aria-hidden
+        className="absolute inset-0 pointer-events-none opacity-[0.03]"
+        style={{
+          backgroundImage:
+            "linear-gradient(rgba(148,163,184,1) 1px, transparent 1px), linear-gradient(90deg, rgba(148,163,184,1) 1px, transparent 1px)",
+          backgroundSize: "48px 48px",
+        }}
+      />
 
-        {/* Tab Controls — hidden when an alternate flow (2FA, forgot, reset, verify-email) is active. */}
-        {!altFlow && (
-        <div className="grid grid-cols-3 bg-[#111A36] p-1 rounded-lg border border-slate-800">
-          <button
-            onClick={() => { setAuthMode("login"); setErrMessage(null); setSuccessMessage(null); }}
-            className={`py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
-              authMode === "login" 
-                ? "bg-blue-600 text-white shadow" 
-                : "text-slate-400 hover:text-slate-200"
-            }`}
-          >
-            Masuk
-          </button>
-          <button
-            onClick={() => { setAuthMode("register"); setErrMessage(null); setSuccessMessage(null); }}
-            className={`py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
-              authMode === "register" 
-                ? "bg-blue-600 text-white shadow" 
-                : "text-slate-400 hover:text-slate-200"
-            }`}
-          >
-            Daftar Akun
-          </button>
-          <button
-            onClick={() => { setAuthMode("phone"); setErrMessage(null); setSuccessMessage(null); }}
-            className={`py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
-              authMode === "phone" 
-                ? "bg-amber-600 text-white shadow animate-pulse" 
-                : "text-slate-400 hover:text-slate-200"
-            }`}
-          >
-            OTP Seluler
-          </button>
-        </div>
-        )}
+      <motion.div
+        initial={{ opacity: 0, y: 20, scale: 0.97 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
+        className="w-full max-w-md relative z-10"
+      >
+        {/* STYLING UPGRADE: animated gradient border wrapper */}
+        <div className="relative bg-[#0B1329]/90 backdrop-blur-xl rounded-2xl shadow-2xl overflow-hidden">
+          {/* Animated gradient border */}
+          <div
+            aria-hidden
+            className="absolute inset-0 rounded-2xl pointer-events-none"
+            style={{
+              padding: "1px",
+              background:
+                "linear-gradient(135deg, rgba(59,130,246,0.6), rgba(245,158,11,0.4), rgba(16,185,129,0.5), rgba(59,130,246,0.6))",
+              backgroundSize: "300% 300%",
+              animation: "zaytrix-border-flow 8s ease infinite",
+              WebkitMask:
+                "linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)",
+              WebkitMaskComposite: "xor",
+              maskComposite: "exclude",
+            }}
+          />
+          <style>{`
+            @keyframes zaytrix-border-flow {
+              0% { background-position: 0% 50%; }
+              50% { background-position: 100% 50%; }
+              100% { background-position: 0% 50%; }
+            }
+            @keyframes zaytrix-logo-pulse {
+              0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4), 0 0 30px 0 rgba(245, 158, 11, 0.15); }
+              50% { box-shadow: 0 0 0 8px rgba(245, 158, 11, 0), 0 0 40px 4px rgba(245, 158, 11, 0.25); }
+            }
+          `}</style>
 
-        {/* Feedback Alert Banners */}
-        {errMessage && (
-          <div className="bg-red-950/50 border border-red-500/50 rounded-lg p-3 flex gap-2.5 items-start">
-            <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
-            <p className="text-[11px] text-red-200 leading-normal font-mono">{errMessage}</p>
-          </div>
-        )}
-
-        {successMessage && (
-          <div className="bg-emerald-950/50 border border-emerald-500/50 rounded-lg p-3 flex gap-2.5 items-start">
-            <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
-            <p className="text-[11px] text-emerald-200 leading-normal font-mono">{successMessage}</p>
-          </div>
-        )}
-
-        {/* Form rendering */}
-        {authMode === "login" && !altFlow && (
-          <form onSubmit={handleEmailLogin} className="space-y-4">
-            <div className="space-y-1">
-              <label className="text-[10px] uppercase font-mono font-bold text-slate-400 flex items-center gap-1">
-                <Mail className="w-3 h-3" /> Email Bergaransi Keamanan
-              </label>
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="namadepan@zaytrix.com"
-                className="w-full bg-[#0A0F1D] border border-slate-800 rounded-lg px-3 py-2.5 text-xs outline-none focus:border-blue-500 font-mono text-slate-100"
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-[10px] uppercase font-mono font-bold text-slate-400 flex items-center gap-1">
-                <Lock className="w-3 h-3" /> Kata Sandi Enkripsi
-              </label>
-              <input
-                type="password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••••••"
-                className="w-full bg-[#0A0F1D] border border-slate-800 rounded-lg px-3 py-2.5 text-xs outline-none focus:border-blue-500 font-mono text-slate-100"
-              />
-            </div>
-
-            {/* SEC2-AUTH: "Lupa Kata Sandi?" link — switches to the forgot-password flow. */}
-            <div className="text-right">
-              <button
-                type="button"
-                onClick={() => {
-                  setAltFlow("forgot");
-                  setErrMessage(null);
-                  setSuccessMessage(null);
-                }}
-                className="text-[10px] text-slate-400 hover:text-amber-400 font-mono cursor-pointer underline"
+          <div className="p-6 sm:p-8 space-y-6">
+            {/* Banner Title */}
+            <div className="text-center space-y-2">
+              <motion.div
+                initial={{ scale: 0.8, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ delay: 0.2, type: "spring", stiffness: 200, damping: 15 }}
+                className="mx-auto w-20 h-20 flex items-center justify-center rounded-xl shadow-lg"
+                style={{ animation: "zaytrix-logo-pulse 3s ease-in-out infinite" }}
               >
-                Lupa Kata Sandi?
+                <img src="/logo.png" alt="ZAYTRIX Logo" className="w-full h-full object-contain" />
+              </motion.div>
+              <h1 className="text-2xl font-black tracking-tight font-sans bg-clip-text text-transparent bg-gradient-to-r from-slate-100 via-slate-200 to-amber-400">
+                ZAYTRIX
+              </h1>
+              <p className="text-xs text-slate-400 font-mono">
+                Gerbang Multi-Sistem Otentikasi Militer &amp; Real-Time Security
+              </p>
+
+              {/* STYLING UPGRADE: security feature badges */}
+              <div className="flex flex-wrap items-center justify-center gap-1.5 pt-2">
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-950/60 border border-emerald-700/40 text-[9px] font-mono font-bold text-emerald-300">
+                  <ShieldCheck className="w-2.5 h-2.5" /> AES-256
+                </span>
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-950/60 border border-blue-700/40 text-[9px] font-mono font-bold text-blue-300">
+                  <Fingerprint className="w-2.5 h-2.5" /> JWT httpOnly
+                </span>
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-950/60 border border-amber-700/40 text-[9px] font-mono font-bold text-amber-300">
+                  <Zap className="w-2.5 h-2.5" /> WAF Protected
+                </span>
+              </div>
+            </div>
+
+            {/* Tab Controls — hidden when an alternate flow (2FA, forgot, reset, verify-email) is active. */}
+            {!altFlow && (
+            <div className="grid grid-cols-3 bg-[#111A36] p-1 rounded-lg border border-slate-800">
+              <button
+                onClick={() => { setAuthMode("login"); setErrMessage(null); setSuccessMessage(null); }}
+                className={`py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                  authMode === "login"
+                    ? "bg-blue-600 text-white shadow"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                Masuk
+              </button>
+              <button
+                onClick={() => { setAuthMode("register"); setErrMessage(null); setSuccessMessage(null); }}
+                className={`py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                  authMode === "register"
+                    ? "bg-blue-600 text-white shadow"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                Daftar Akun
+              </button>
+              <button
+                onClick={() => { setAuthMode("phone"); setErrMessage(null); setSuccessMessage(null); }}
+                className={`py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                  authMode === "phone"
+                    ? "bg-amber-600 text-white shadow animate-pulse"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                OTP Seluler
               </button>
             </div>
+            )}
 
-            <button
-              type="submit"
+            {/* Feedback Alert Banners */}
+            <AnimatePresence>
+              {errMessage && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0, marginBottom: 0 }}
+                  animate={{ opacity: 1, height: "auto", marginBottom: 0 }}
+                  exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+                  transition={{ duration: 0.25 }}
+                  className="overflow-hidden"
+                >
+                  <div className="bg-red-950/50 border border-red-500/50 rounded-lg p-3 flex gap-2.5 items-start">
+                    <motion.div
+                      initial={{ scale: 0, rotate: -30 }}
+                      animate={{ scale: 1, rotate: 0 }}
+                      transition={{ delay: 0.1, type: "spring", stiffness: 300 }}
+                    >
+                      <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                    </motion.div>
+                    <p className="text-[11px] text-red-200 leading-normal font-mono">{errMessage}</p>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            <AnimatePresence>
+              {successMessage && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0, marginBottom: 0 }}
+                  animate={{ opacity: 1, height: "auto", marginBottom: 0 }}
+                  exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+                  transition={{ duration: 0.25 }}
+                  className="overflow-hidden"
+                >
+                  <div className="bg-emerald-950/50 border border-emerald-500/50 rounded-lg p-3 flex gap-2.5 items-start">
+                    <motion.div
+                      initial={{ scale: 0 }}
+                      animate={{ scale: 1 }}
+                      transition={{ delay: 0.1, type: "spring", stiffness: 300 }}
+                    >
+                      <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+                    </motion.div>
+                    <p className="text-[11px] text-emerald-200 leading-normal font-mono">{successMessage}</p>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* Form rendering */}
+            {authMode === "login" && !altFlow && (
+              <motion.form
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ duration: 0.3 }}
+                onSubmit={handleEmailLogin}
+                className="space-y-4"
+              >
+                <div className="space-y-1">
+                  <label className="text-[10px] uppercase font-mono font-bold text-slate-400 flex items-center gap-1">
+                    <Mail className="w-3 h-3" /> Email Bergaransi Keamanan
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="namadepan@zaytrix.com"
+                    className="w-full bg-[#0A0F1D] border border-slate-800 rounded-lg px-3 py-2.5 text-xs outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all font-mono text-slate-100"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] uppercase font-mono font-bold text-slate-400 flex items-center gap-1">
+                    <Lock className="w-3 h-3" /> Kata Sandi Enkripsi
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••••••"
+                    className="w-full bg-[#0A0F1D] border border-slate-800 rounded-lg px-3 py-2.5 text-xs outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all font-mono text-slate-100"
+                  />
+                </div>
+
+                {/* SEC2-AUTH: "Lupa Kata Sandi?" link — switches to the forgot-password flow. */}
+                <div className="text-right">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAltFlow("forgot");
+                      setErrMessage(null);
+                      setSuccessMessage(null);
+                    }}
+                    className="text-[10px] text-slate-400 hover:text-amber-400 font-mono cursor-pointer underline"
+                  >
+                    Lupa Kata Sandi?
+                  </button>
+                </div>
+
+                <button
+                  type="submit"
               disabled={loading}
               className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 disabled:opacity-50 py-2.5 rounded-lg text-xs font-bold hover:shadow-lg hover:shadow-blue-500/20 active:scale-[0.98] transition-all cursor-pointer"
             >
               {loading ? "Memvalidasi Kredensial..." : "MASUK KE TERMINAL UTAMA"}
             </button>
-          </form>
+          </motion.form>
         )}
 
         {/* SEC2-AUTH: 2FA challenge flow — shown when loginUser() returns requiresTwoFactor. */}
@@ -773,7 +892,9 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
           </p>
         </div>
 
-      </div>
+          </div>
+        </div>
+      </motion.div>
     </div>
   );
 }

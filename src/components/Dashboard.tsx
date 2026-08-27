@@ -46,6 +46,7 @@ import {
 import { Asset, PortfolioAsset } from "../types";
 import { useGlobalStore } from "../store";
 import CorrelationHeatmap from "./CorrelationHeatmap";
+import MarketSentimentWidget from "./MarketSentimentWidget";
 import { db, auth } from "../lib/firebase";
 import { doc, getDoc } from "firebase/firestore";
 
@@ -1068,6 +1069,9 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
           </div>
         </motion.div>
       </div>
+
+      {/* NEW FEATURE: Market Sentiment Radar — Fear & Greed gauge + global market stats */}
+      <MarketSentimentWidget />
 
       {/* Charts section: Line chart of Daily Portfolio Growth & Pie Chart of Allocation */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
