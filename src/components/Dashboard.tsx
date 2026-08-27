@@ -49,6 +49,7 @@ import CorrelationHeatmap from "./CorrelationHeatmap";
 import MarketSentimentWidget from "./MarketSentimentWidget";
 import PriceAlertsWidget from "./PriceAlertsWidget";
 import RiskScoreWidget from "./RiskScoreWidget";
+import RebalanceWidget from "./RebalanceWidget";
 import { db, auth } from "../lib/firebase";
 import { doc, getDoc } from "firebase/firestore";
 
@@ -1123,6 +1124,9 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
 
       {/* Price Alert Manager (full width, since alert list can be long) */}
       <PriceAlertsWidget />
+
+      {/* NEW FEATURE: Portfolio Rebalancing Advisor */}
+      <RebalanceWidget />
 
       {/* Charts section: Line chart of Daily Portfolio Growth & Pie Chart of Allocation */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

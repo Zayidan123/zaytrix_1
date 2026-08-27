@@ -532,6 +532,223 @@ portfolioRouter.get("/risk-score", async (req: Request, res: Response) => {
 });
 
 // ============================================================================
+// NEW FEATURE: Portfolio Rebalancing Suggestions
+// ----------------------------------------------------------------------------
+// GET /api/portfolio/rebalance?riskProfile=Balanced
+// Computes suggested allocation adjustments based on:
+//   - User's risk profile (Low/Moderate/Balanced/Aggressive) → target crypto %
+//   - Current portfolio weights (live prices)
+//   - Drift from target allocation
+//
+// Returns per-asset actions: HOLD / BUY / SELL / REDUCE with suggested USD amount
+// + target weight %. Only suggests when drift > 5% (threshold).
+// ============================================================================
+
+const RISK_PROFILE_TARGETS: Record<string, { cryptoPct: number; stockPct: number; maxSinglePosition: number }> = {
+  Low: { cryptoPct: 0.15, stockPct: 0.85, maxSinglePosition: 0.30 },
+  Moderate: { cryptoPct: 0.25, stockPct: 0.75, maxSinglePosition: 0.35 },
+  Balanced: { cryptoPct: 0.40, stockPct: 0.60, maxSinglePosition: 0.40 },
+  Aggressive: { cryptoPct: 0.60, stockPct: 0.40, maxSinglePosition: 0.50 },
+};
+
+portfolioRouter.get("/rebalance", async (req: Request, res: Response) => {
+  try {
+    const riskProfile = typeof req.query.riskProfile === "string"
+      ? (["Low", "Moderate", "Balanced", "Aggressive"].includes(req.query.riskProfile) ? req.query.riskProfile : "Balanced")
+      : "Balanced";
+
+    const targets = RISK_PROFILE_TARGETS[riskProfile];
+    const holdings = await prisma.portfolioHolding.findMany({
+      where: { userId: req.user!.sub },
+    });
+
+    if (holdings.length === 0) {
+      return res.json({
+        success: true,
+        rebalance: {
+          riskProfile,
+          totalValue: 0,
+          currentCryptoPct: 0,
+          currentStockPct: 0,
+          targetCryptoPct: targets.cryptoPct * 100,
+          targetStockPct: targets.stockPct * 100,
+          actions: [],
+          summary: "Belum ada holding. Tambahkan aset di Crypto Hub untuk mendapatkan saran rebalancing.",
+          driftScore: 0,
+        },
+      });
+    }
+
+    // Fetch live prices + compute current weights
+    interface RebalanceHolding {
+      id: string;
+      symbol: string;
+      category: string;
+      quantity: number;
+      purchasePrice: number;
+      currentPrice: number;
+      currentValue: number;
+      currentWeight: number;
+      targetWeight: number;
+      drift: number; // currentWeight - targetWeight (positive = overweight)
+    }
+
+    const enriched: RebalanceHolding[] = [];
+    let totalValue = 0;
+    for (const h of holdings) {
+      const { price } = await fetchAssetVolatility(h.symbol, h.category);
+      const currentPrice = price > 0 ? price : h.purchasePrice;
+      const currentValue = currentPrice * h.quantity;
+      totalValue += currentValue;
+      enriched.push({
+        id: h.id,
+        symbol: h.symbol,
+        category: h.category,
+        quantity: h.quantity,
+        purchasePrice: h.purchasePrice,
+        currentPrice,
+        currentValue,
+        currentWeight: 0, // computed after loop
+        targetWeight: 0,
+        drift: 0,
+      });
+    }
+
+    if (totalValue <= 0) {
+      return res.json({
+        success: true,
+        rebalance: {
+          riskProfile,
+          totalValue: 0,
+          currentCryptoPct: 0,
+          currentStockPct: 0,
+          targetCryptoPct: targets.cryptoPct * 100,
+          targetStockPct: targets.stockPct * 100,
+          actions: [],
+          summary: "Total nilai portofolio nol. Tidak dapat menghitung rebalancing.",
+          driftScore: 0,
+        },
+      });
+    }
+
+    // Compute current weights
+    for (const h of enriched) {
+      h.currentWeight = h.currentValue / totalValue;
+    }
+
+    // Compute target weights per asset:
+    //   - Allocate target category % equally across all assets in that category
+    //   - Cap individual position at maxSinglePosition (if exceeded, redistribute)
+    const cryptoHoldings = enriched.filter((h) => h.category === "crypto");
+    const stockHoldings = enriched.filter((h) => h.category === "stock");
+
+    const cryptoTargetPerAsset = cryptoHoldings.length > 0
+      ? Math.min(targets.maxSinglePosition, targets.cryptoPct / cryptoHoldings.length)
+      : 0;
+    const stockTargetPerAsset = stockHoldings.length > 0
+      ? Math.min(targets.maxSinglePosition, targets.stockPct / stockHoldings.length)
+      : 0;
+
+    for (const h of enriched) {
+      h.targetWeight = h.category === "crypto" ? cryptoTargetPerAsset : stockTargetPerAsset;
+      h.drift = h.currentWeight - h.targetWeight;
+    }
+
+    // Compute category-level stats
+    const currentCryptoPct = cryptoHoldings.reduce((s, h) => s + h.currentWeight, 0) * 100;
+    const currentStockPct = stockHoldings.reduce((s, h) => s + h.currentWeight, 0) * 100;
+
+    // Generate actions per holding
+    //   - |drift| < 5% → HOLD
+    //   - drift > 5% → REDUCE (sell the excess)
+    //   - drift < -5% → BUY (buy the deficit)
+    //   - largest position > maxSinglePosition → SELL to cap
+    const actions = enriched
+      .filter((h) => h.currentValue > 0)
+      .map((h) => {
+        const driftPct = h.drift * 100;
+        const targetValue = h.targetWeight * totalValue;
+        const valueDelta = h.currentValue - targetValue;
+        const absDriftPct = Math.abs(driftPct);
+
+        let action: "HOLD" | "BUY" | "SELL" | "REDUCE";
+        let suggestedAmount = 0; // USD amount to buy (+) or sell (-)
+        let reason: string;
+
+        if (h.currentWeight > targets.maxSinglePosition && valueDelta > 0) {
+          // Position exceeds max single-position cap — SELL to bring it down to cap
+          action = "SELL";
+          const capValue = targets.maxSinglePosition * totalValue;
+          suggestedAmount = -(h.currentValue - capValue);
+          reason = `Posisi ${h.symbol} (${(h.currentWeight * 100).toFixed(1)}%) melebihi batas maksimum ${(targets.maxSinglePosition * 100).toFixed(0)}% untuk profil ${riskProfile}. Kurangi ke batas.`;
+        } else if (absDriftPct < 5) {
+          action = "HOLD";
+          suggestedAmount = 0;
+          reason = `Bobot ${h.symbol} (${(h.currentWeight * 100).toFixed(1)}%) sudah dekat dengan target ${(h.targetWeight * 100).toFixed(1)}%. Tidak perlu penyesuaian.`;
+        } else if (driftPct > 0) {
+          // Overweight — REDUCE
+          action = "REDUCE";
+          suggestedAmount = -valueDelta;
+          reason = `${h.symbol} overweight ${(driftPct.toFixed(1))}% dari target. Jual ~$${Math.abs(valueDelta).toFixed(2)} untuk rebalance.`;
+        } else {
+          // Underweight — BUY
+          action = "BUY";
+          suggestedAmount = -valueDelta; // positive
+          reason = `${h.symbol} underweight ${Math.abs(driftPct).toFixed(1)}% dari target. Beli ~$${Math.abs(valueDelta).toFixed(2)} untuk rebalance.`;
+        }
+
+        return {
+          holdingId: h.id,
+          symbol: h.symbol,
+          category: h.category,
+          currentValue: h.currentValue,
+          currentWeightPct: h.currentWeight * 100,
+          targetWeightPct: h.targetWeight * 100,
+          driftPct,
+          action,
+          suggestedAmountUsd: Math.round(suggestedAmount * 100) / 100,
+          reason,
+        };
+      })
+      .sort((a, b) => Math.abs(b.driftPct) - Math.abs(a.driftPct)); // most-drifted first
+
+    // Overall drift score (0 = perfectly balanced, 100 = completely off-target)
+    const driftScore = Math.min(
+      100,
+      Math.round(
+        enriched.reduce((s, h) => s + Math.abs(h.drift), 0) * 50 // sum of abs drifts × 50
+      )
+    );
+
+    // Summary
+    const needsAction = actions.filter((a) => a.action !== "HOLD").length;
+    const summary = needsAction === 0
+      ? `Portofolio Anda sudah seimbang untuk profil risiko ${riskProfile}. Tidak ada penyesuaian signifikan yang diperlukan.`
+      : `${needsAction} aset perlu rebalancing untuk profil risiko ${riskProfile}. Lihat saran tindakan di bawah.`;
+
+    res.json({
+      success: true,
+      rebalance: {
+        riskProfile,
+        totalValue,
+        currentCryptoPct,
+        currentStockPct,
+        targetCryptoPct: targets.cryptoPct * 100,
+        targetStockPct: targets.stockPct * 100,
+        maxSinglePositionPct: targets.maxSinglePosition * 100,
+        actions,
+        summary,
+        driftScore,
+        holdingsCount: enriched.length,
+      },
+    });
+  } catch (e: any) {
+    console.error("[rebalance] error:", e?.message || e);
+    res.status(500).json({ success: false, error: "Gagal menghitung saran rebalancing." });
+  }
+});
+
+// ============================================================================
 // NEW FEATURE: Price Alert Checker
 // ----------------------------------------------------------------------------
 // Periodically fetches live prices for all unique symbols that have un-triggered

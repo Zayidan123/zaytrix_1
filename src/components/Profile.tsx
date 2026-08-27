@@ -560,19 +560,56 @@ export default function Profile() {
   return (
     <div className="space-y-6 max-w-5xl mx-auto" id="profile-panel-workbench">
       
-      {/* Header Cover Banner Layout */}
-      <div className="relative rounded-2xl overflow-hidden border border-slate-800 bg-slate-950" id="profile-header-banner">
-        {/* Cover gradient */}
-        <div className={`h-36 sm:h-44 transition-all duration-300 ${selectedHeader.style}`} />
+      {/* Header Cover Banner Layout — STYLING UPGRADE */}
+      <motion.div
+        initial={{ opacity: 0, y: -10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5 }}
+        className="relative rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 shadow-2xl"
+        id="profile-header-banner"
+      >
+        {/* Cover gradient with animated overlay */}
+        <div className={`relative h-36 sm:h-44 transition-all duration-300 ${selectedHeader.style}`}>
+          {/* STYLING UPGRADE: animated shimmer overlay on cover */}
+          <motion.div
+            aria-hidden
+            className="absolute inset-0 pointer-events-none"
+            animate={{
+              background: [
+                "linear-gradient(110deg, transparent 30%, rgba(255,255,255,0.08) 50%, transparent 70%)",
+                "linear-gradient(110deg, transparent 60%, rgba(255,255,255,0.08) 80%, transparent 100%)",
+                "linear-gradient(110deg, transparent 30%, rgba(255,255,255,0.08) 50%, transparent 70%)",
+              ],
+            }}
+            transition={{ duration: 8, repeat: Infinity, ease: "linear" }}
+          />
+          {/* Top accent line */}
+          <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-white/40 to-transparent" />
+          {/* Bottom fade into card body */}
+          <div className="absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-slate-950 to-transparent" />
+        </div>
         
         {/* Profile Avatar Overlay and Basic Details */}
         <div className="px-6 pb-6 pt-1 md:pt-0 flex flex-col md:flex-row md:items-end justify-between gap-4 relative mt-[-48px] sm:mt-[-64px]">
           <div className="flex flex-col md:flex-row items-center md:items-end gap-4 text-center md:text-left">
             <div className="relative group shrink-0">
+              {/* STYLING UPGRADE: glowing ring around avatar */}
+              <motion.div
+                aria-hidden
+                className="absolute -inset-1 rounded-xl pointer-events-none"
+                animate={{
+                  boxShadow: [
+                    "0 0 0 0 rgba(245, 158, 11, 0.4)",
+                    "0 0 20px 4px rgba(245, 158, 11, 0.2)",
+                    "0 0 0 0 rgba(245, 158, 11, 0.4)",
+                  ],
+                }}
+                transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+              />
               <img 
                 src={profile.avatarUrl} 
                 alt="Avatar" 
-                className="w-24 h-24 sm:w-28 sm:h-28 rounded-xl object-cover border-4 border-slate-950 shadow-2xl bg-slate-900" 
+                className="relative w-24 h-24 sm:w-28 sm:h-28 rounded-xl object-cover border-4 border-slate-950 shadow-2xl bg-slate-900" 
                 referrerPolicy="no-referrer"
               />
               <div className="absolute inset-0 bg-black/60 rounded-xl opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity cursor-pointer">
@@ -584,9 +621,15 @@ export default function Profile() {
                 <h3 className="text-lg sm:text-xl font-bold text-slate-100 tracking-tight">
                   {profile.fullName || "Pengguna Z-Capital"}
                 </h3>
-                <span className="bg-amber-500/10 text-amber-500 border border-amber-500/25 text-[9px] font-bold px-1.5 py-0.5 rounded uppercase font-mono">
-                  Verified Investor
-                </span>
+                {/* STYLING UPGRADE: animated verified badge */}
+                <motion.span
+                  initial={{ scale: 0, rotate: -20 }}
+                  animate={{ scale: 1, rotate: 0 }}
+                  transition={{ delay: 0.3, type: "spring", stiffness: 200 }}
+                  className="bg-amber-500/10 text-amber-500 border border-amber-500/25 text-[9px] font-bold px-1.5 py-0.5 rounded uppercase font-mono flex items-center gap-1"
+                >
+                  <ShieldCheck className="w-2.5 h-2.5" /> Verified
+                </motion.span>
               </div>
               <p className="text-xs text-slate-400 font-mono">@{profile.username || "investor"}</p>
               <p className="text-[10px] text-slate-500 flex items-center justify-center md:justify-start gap-1 font-mono">
@@ -608,7 +651,7 @@ export default function Profile() {
             ))}
           </div>
         </div>
-      </div>
+      </motion.div>
 
       <form onSubmit={handleSaveProfile} className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         
