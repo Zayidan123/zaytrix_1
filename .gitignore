@@ -18,3 +18,7 @@ preview-*.png
 tool-results/
 .github/workflows/ci.yml
 postcss.config.mjs
+
+# FIX-D-11: vendored ClawHub skill catalogs (unrelated to ZAYTRIX app, ~MBs of bloat).
+# Files kept on disk for the skill system but untracked from git.
+skills/

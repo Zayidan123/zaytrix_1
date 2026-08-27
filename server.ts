@@ -29,8 +29,20 @@ initMonitoring();
 startDataRetentionJob();
 
 const app = express();
-app.use(express.json({ limit: "50mb" }));
-app.use(express.urlencoded({ limit: "50mb", extended: true }));
+// FIX-A-1: Global body limit lowered from 50mb to 100kb to prevent OOM DoS
+// (an unauthenticated attacker could exhaust server memory by POSTing huge
+// JSON bodies). The PDF routes (/api/gemini/analyze-pdf,
+// /api/gemini/analyze-multi-pdf) legitimately need larger bodies, so they
+// get a path-scoped express.json({ limit: "15mb" }) mounted BEFORE the
+// global 100kb parser. body-parser explicitly skips parsing when req._body is
+// already true (see body-parser lib/types/json.js "skip-if-already-parsed"),
+// so the path-scoped 15mb parser runs first on those routes and the global
+// 100kb parser becomes a no-op for them — no 413 for legitimate PDF uploads,
+// and the global 100kb cap still applies to every other route.
+app.use("/api/gemini/analyze-pdf", express.json({ limit: "15mb" }));
+app.use("/api/gemini/analyze-multi-pdf", express.json({ limit: "15mb" }));
+app.use(express.json({ limit: "100kb" }));
+app.use(express.urlencoded({ limit: "100kb", extended: true }));
 
 // SEC-BACKEND: install helmet + cors + cookie-parser + general rate limiter.
 // This MUST come after express.json/urlencoded so the body is parsed before
@@ -585,7 +597,11 @@ refreshLiveAssets().then(() => {
 });
 
 // Secure server-side proxy route for multi-channel webhook alerts (Telegram, Discord, WhatsApp)
-app.post("/api/send-alert", async (req, res) => {
+// FIX-A-2: route was previously public — anyone could submit Telegram bot
+// token + chat ID + message and the server would relay it to Telegram/Discord/
+// WhatsApp, turning ZAYTRIX into an open spam relay (and potentially leaking
+// the submitted bot token via logs). Now gated by `requireAuth`.
+app.post("/api/send-alert", requireAuth, async (req, res) => {
   const {
     telegramEnabled,
     telegramBotToken,
@@ -597,6 +613,10 @@ app.post("/api/send-alert", async (req, res) => {
     whatsappPhoneNumber,
     messageText
   } = req.body;
+
+  // FIX-A-2: never log the raw bot token — log only whether one was supplied.
+  console.log("[send-alert] bot token:", telegramBotToken ? "[REDACTED]" : "(none)");
+  console.log(`[send-alert] authenticated user: ${req.user?.email || req.user?.sub || "(unknown)"}`);
 
   const results: Record<string, { success: boolean; error?: string }> = {};
 
@@ -3373,7 +3393,11 @@ setInterval(() => {
 }, 45000);
 
 // Endpoint to synchronize notification settings from front-end
-app.post("/api/settings/notifications", (req, res) => {
+// FIX-A-3: previously public — anonymous attacker could overwrite the user's
+// notification config + bot tokens written to disk with default (world-readable)
+// file perms. Now gated by `requireAuth`, file perms set to 0o600, and the
+// response no longer echoes back secrets (bot token / webhook URLs / phone).
+app.post("/api/settings/notifications", requireAuth, (req, res) => {
   try {
     const {
       telegramEnabled,
@@ -3396,12 +3420,34 @@ app.post("/api/settings/notifications", (req, res) => {
       whatsappPhoneNumber: whatsappPhoneNumber || ""
     };
     try {
-      fs.writeFileSync(CONFIG_FILE_PATH, JSON.stringify(activeNotificationConfig, null, 2), "utf-8");
-      console.log("[On-Chain Data Background] Settings successfully written to disk:", activeNotificationConfig);
+      // FIX-A-3: mode 0o600 → only the file owner can read/write the config
+      // (which contains Telegram bot token + Discord/WhatsApp webhook URLs).
+      fs.writeFileSync(CONFIG_FILE_PATH, JSON.stringify(activeNotificationConfig, null, 2), { encoding: "utf-8", mode: 0o600 });
+      // FIX-A-3: do NOT log the config object — it contains bot tokens /
+      // webhook URLs. Log only the boolean flags + a redacted presence flag.
+      console.log("[On-Chain Data Background] Settings successfully written to disk for user:",
+        req.user?.email || req.user?.sub || "(unknown)",
+        "| telegram:", activeNotificationConfig.telegramEnabled,
+        "| discord:", activeNotificationConfig.discordEnabled,
+        "| whatsapp:", activeNotificationConfig.whatsappEnabled,
+        "| botToken:", activeNotificationConfig.telegramBotToken ? "[REDACTED]" : "(none)");
     } catch (e: any) {
       console.log("[On-Chain Data Background] Failed to save config file:", e.message);
     }
-    return res.json({ success: true, config: activeNotificationConfig });
+    // FIX-A-3: redact secrets in the response — never echo bot token / webhook
+    // URLs / phone back to the client (the client already has them; echoing
+    // them invites token theft via intercepted responses / browser devtools).
+    const redactedConfig = {
+      telegramEnabled: activeNotificationConfig.telegramEnabled,
+      telegramBotToken: activeNotificationConfig.telegramBotToken ? "[REDACTED]" : "",
+      telegramChatId: activeNotificationConfig.telegramChatId,
+      discordEnabled: activeNotificationConfig.discordEnabled,
+      discordWebhookUrl: activeNotificationConfig.discordWebhookUrl ? "[REDACTED]" : "",
+      whatsappEnabled: activeNotificationConfig.whatsappEnabled,
+      whatsappWebhookUrl: activeNotificationConfig.whatsappWebhookUrl ? "[REDACTED]" : "",
+      whatsappPhoneNumber: activeNotificationConfig.whatsappPhoneNumber ? "[REDACTED]" : ""
+    };
+    return res.json({ success: true, config: redactedConfig });
   } catch (error: any) {
     return res.status(500).json({ success: false, error: error.message });
   }
@@ -4202,8 +4248,15 @@ app.post("/api/gemini/trading-signals/analyze", async (req, res) => {
 
   const onchainMetrics = getOnChainMetrics(upperSymbol);
 
-  // Cache look-up based on symbol, current asset price and customFocus instructions
-  const cacheKey = getCacheKey(`signals_${upperSymbol}_${matchedAsset.price}_${customFocus || ""}_${aiTone || ""}`);
+  // FIX-A-4: cache key must NOT include `matchedAsset.price` — live price
+  // changes on every tick (sub-second), so any key derived from it would
+  // never hit. The AI trading-signal recommendation for a given symbol is
+  // driven by symbol + customFocus + aiTone (the prompt-determining factors),
+  // not by sub-tick price changes — within the cache TTL the cached
+  // recommendation is still valid. So we key on (symbol, customFocus, aiTone)
+  // only. The live price is still embedded into the prompt body (line below)
+  // for the cache-MISS path so fresh analyses reflect the current price.
+  const cacheKey = getCacheKey(`signals_${upperSymbol}_${customFocus || ""}_${aiTone || ""}`);
   if (geminiCache.has(cacheKey)) {
     console.log(`[Gemini Cache] Serving Trade Signal for ${upperSymbol} from cache.`);
     try {

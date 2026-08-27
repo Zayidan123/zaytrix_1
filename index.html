@@ -1,13 +1,21 @@
 <!doctype html>
-<html lang="en">
+<html lang="id">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="ZAYTRIX — Terminal analisis kripto institusional dengan data on-chain live, AI analysis, dan keamanan tingkat enterprise." />
+    <meta name="theme-color" content="#020617" />
+    <meta property="og:title" content="ZAYTRIX | Institutional Crypto Gateway" />
+    <meta property="og:description" content="Terminal analisis kripto real-time dengan data on-chain live, derivatif, AI analysis." />
+    <meta property="og:type" content="website" />
     <link rel="icon" type="image/png" href="/logo.png" />
     <link rel="apple-touch-icon" href="/logo.png" />
     <title>ZAYTRIX | Institutional Crypto Gateway</title>
     <script>
-      // Global defensive shield for cross-origin or third-party script loading/runtime errors
+      // FIX-D-10: Only suppress known browser noise (ResizeObserver loop,
+      // cross-origin script error). Previously returned `true` unconditionally,
+      // which swallowed EVERY error silently and hid real bugs. main.tsx already
+      // owns the same logic; this head-shield must match it (return false → propagate).
       window.onerror = function (message, source, lineno, colno, error) {
         var msg = String(message || "").toLowerCase();
         if (
@@ -21,8 +29,9 @@
           console.warn("Suppressed global error in head script-shield:", message);
           return true; // Prevents the error from propagating to the browser or test frameworks
         }
-        // Always safeguard the main framework environment from bubbling crash signals
-        return true;
+        // FIX-D-10: was `return true` (swallowed ALL errors). Now let real errors propagate
+        // so the ErrorBoundary in main.tsx can catch them and developers see them in console.
+        return false;
       };
 
       window.addEventListener("error", function (event) {

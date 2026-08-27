@@ -175,16 +175,24 @@ export function buildOtpauthUri(issuer: string, account: string, secretB32: stri
 
 // ---------------------------------------------------------------------------
 // Backup codes — 8 one-time-use codes per user, hashed at rest with sha256.
-// Each code is 10 hex chars (5 bytes of entropy) — enough entropy to resist
-// guessing while remaining human-typeable. Format: XXXX-XXXX-XX (dashes added
-// only for display; stored/hashed without dashes).
+// FIX-C-5: raised from 5 bytes (40-bit) to 16 bytes (128-bit) per code.
+// Plain unsalted sha256 over 40-bit entropy is brute-forceable on a consumer
+// GPU in ~110 seconds (2^40 ≈ 1.1T hashes; ~10^10 sha256/s). At 128 bits
+// (2^128 ≈ 3.4×10^38) plain sha256 brute-force becomes computationally
+// infeasible, so a bcrypt/argon2 restructure is not required. The code is
+// formatted as 8 groups of 4 hex chars separated by dashes for readability
+// (dashes are stripped before hashing — see hashBackupCode).
 // ---------------------------------------------------------------------------
 export function generateBackupCodes(): { plaintext: string[]; hashed: string[] } {
   const plaintext: string[] = [];
   const hashed: string[] = [];
   for (let i = 0; i < 8; i++) {
-    const raw = crypto.randomBytes(5).toString("hex"); // 10 hex chars
-    plaintext.push(raw.slice(0, 4) + "-" + raw.slice(4, 8) + "-" + raw.slice(8));
+    // FIX-C-5: raised from 5 bytes (40-bit) to 16 bytes (128-bit) — makes
+    // plain sha256 brute-force infeasible (2^128 vs 2^40).
+    const raw = crypto.randomBytes(16).toString("hex"); // 32 hex chars
+    // Group into 8 chunks of 4 hex chars separated by dashes for readability.
+    const formatted = (raw.match(/.{1,4}/g) || []).join("-");
+    plaintext.push(formatted);
     hashed.push(hashBackupCode(raw));
   }
   return { plaintext, hashed };

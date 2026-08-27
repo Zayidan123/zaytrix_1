@@ -1,8 +1,6 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "experimentalDecorators": true,
-    "useDefineForClassFields": false,
     "module": "ESNext",
     "lib": [
       "ES2022",
@@ -17,11 +15,22 @@
     "jsx": "react-jsx",
     "paths": {
       "@/*": [
-        "./*"
+        "./src/*"
       ]
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
-  }
+  },
+  "include": [
+    "src/**/*",
+    "server.ts",
+    "onchainDataHelper.ts",
+    "onchainScanner.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "skills",
+    "examples"
+  ]
 }
-

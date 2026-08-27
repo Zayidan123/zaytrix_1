@@ -22,16 +22,22 @@ const MALICIOUS_PATTERNS: RegExp[] = [
   /(\/etc\/passwd|\/proc\/self|\/var\/log)/i,
   // Command injection
   /(\||;|`|\$\().*(cat|ls|wget|curl|bash|sh|nc|python|perl|ruby)\b/i,
-  /(\$\{.*\})/, // template literal injection
-  // SSRF
-  /(file|gopher|dict|ftp|ldap):\/\//i,
+  // FIX-C-6: removed /\$\{.*\}/ (blocked legit JS template literals in notes /
+  // JSON payloads) and the (file|gopher|dict|ftp|ldap):// SSRF pattern (SSRF is
+  // now mitigated at the fetch layer — scrapeWebsiteContent has an allowlist).
+  // The command-injection pattern above still catches $(cmd) process
+  // substitution; ${...} object access in JS payloads is not malicious by itself.
 ];
 
 // Known bad User-Agents (scrapers, bots, attack tools)
+// FIX-C-6: removed /index/i (too broad — matched legit clients whose UA
+// contained the word "index", e.g. some mobile browsers + crawler names).
+// Added /zgrab/i (ZGrab network scanner). The broad /bot|crawler|spider|scrape/
+// patterns remain but are mitigated by the search-engine whitelist below.
 const BAD_USER_AGENTS = [
   /sqlmap/i, /nikto/i, /nmap/i, /masscan/i, /acunetix/i, /nessus/i, /openvas/i,
-  /burp/i, /zap/i, /hydra/i, /metasploit/i, /havij/i, /wpscan/i,
-  /bot/i, /crawler/i, /spider/i, /scrape/i, /index/i,
+  /burp/i, /zap/i, /hydra/i, /metasploit/i, /havij/i, /wpscan/i, /zgrab/i,
+  /bot/i, /crawler/i, /spider/i, /scrape/i,
 ];
 
 // Suspicious request characteristics
@@ -71,7 +77,10 @@ function isSuspiciousRequest(req: Request): { blocked: boolean; reason: string }
   for (const pattern of BAD_USER_AGENTS) {
     if (pattern.test(ua)) {
       // Allow Googlebot/Bingbot for SEO (whitelist)
-      if (/googlebot|bingbot|slurp|duckduckbot|baiduspark/i.test(ua) && !/sqlmap|nikto|nikto|acunetix/i.test(ua)) {
+      // FIX-C-6: deduped the "nikto" entry inside this blacklist-within-whitelist
+      // check (was /sqlmap|nikto|nikto|acunetix/i — the duplicate had no functional
+      // effect but was dead weight).
+      if (/googlebot|bingbot|slurp|duckduckbot|baiduspark/i.test(ua) && !/sqlmap|nikto|acunetix/i.test(ua)) {
         // It's a legitimate search engine bot — allow
         continue;
       }

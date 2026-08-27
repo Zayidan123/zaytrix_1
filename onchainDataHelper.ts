@@ -297,84 +297,101 @@ export async function fetchLiveOnChainDataModular() {
   let hypePrice = 18.50;
   let hypePriceChangePercent = 5.60;
 
-  // 1. Fetch live prices from Binance / Gate.io / Bybit with 100% precision
-  try {
-    const res = await fetch("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT");
-    if (res.ok) {
-      const data = await res.json() as any;
-      btcPrice = parseFloat(data.lastPrice) || btcPrice;
-      btcPriceChangePercent = parseFloat(data.priceChangePercent) || btcPriceChangePercent;
-    }
-  } catch (e: any) {
-    console.log("[Whale Helper] Live BTC ticker error:", e.message);
-  }
-
-  try {
-    const res = await fetch("https://api.binance.com/api/v3/ticker/24hr?symbol=ETHUSDT");
-    if (res.ok) {
-      const data = await res.json() as any;
-      ethPrice = parseFloat(data.lastPrice) || ethPrice;
-      ethPriceChangePercent = parseFloat(data.priceChangePercent) || ethPriceChangePercent;
-    }
-  } catch (e: any) {
-    console.log("[Whale Helper] Live ETH ticker error:", e.message);
-  }
-
-  try {
-    const res = await fetch("https://api.binance.com/api/v3/ticker/24hr?symbol=BNBUSDT");
-    if (res.ok) {
-      const data = await res.json() as any;
-      bnbPrice = parseFloat(data.lastPrice) || bnbPrice;
-      bnbPriceChangePercent = parseFloat(data.priceChangePercent) || bnbPriceChangePercent;
-    }
-  } catch (e: any) {
-    console.log("[Whale Helper] Live BNB ticker error:", e.message);
-  }
-
-  try {
-    const res = await fetch("https://api.binance.com/api/v3/ticker/24hr?symbol=SOLUSDT");
-    if (res.ok) {
-      const data = await res.json() as any;
-      solPrice = parseFloat(data.lastPrice) || solPrice;
-      solPriceChangePercent = parseFloat(data.priceChangePercent) || solPriceChangePercent;
-    }
-  } catch (e: any) {
-    console.log("[Whale Helper] Live SOL ticker error:", e.message);
-  }
-
-  try {
-    const res = await fetch("https://api.binance.com/api/v3/ticker/24hr?symbol=TRXUSDT");
-    if (res.ok) {
-      const data = await res.json() as any;
-      trxPrice = parseFloat(data.lastPrice) || trxPrice;
-      trxPriceChangePercent = parseFloat(data.priceChangePercent) || trxPriceChangePercent;
-    }
-  } catch (e: any) {
-    console.log("[Whale Helper] Live TRX ticker error:", e.message);
-  }
-
-  try {
-    const res = await fetch("https://api.binance.com/api/v3/ticker/24hr?symbol=XRPUSDT");
-    if (res.ok) {
-      const data = await res.json() as any;
-      xrpPrice = parseFloat(data.lastPrice) || xrpPrice;
-      xrpPriceChangePercent = parseFloat(data.priceChangePercent) || xrpPriceChangePercent;
-    }
-  } catch (e: any) {
-    console.log("[Whale Helper] Live XRP ticker error:", e.message);
-  }
-
-  try {
-    // Try Gate.io first for HYPEUSDT
-    const res = await fetch("https://api.gateio.ws/api/v4/spot/tickers?currency_pair=HYPE_USDT");
-    if (res.ok) {
-      const data = await res.json() as any;
-      if (Array.isArray(data) && data.length > 0) {
-        hypePrice = parseFloat(data[0].last) || hypePrice;
-        hypePriceChangePercent = parseFloat(data[0].change_percentage) || hypePriceChangePercent;
+  // FIX-D-9: Parallel price fetches via Promise.allSettled (was 7 sequential awaits —
+  // each blocked the next, making the API response ~7x slower). Each fetcher closes
+  // over the price variables and mutates them on success. Errors are caught per-fetcher
+  // (same as before) so a single exchange outage doesn't break the others.
+  const fetchBtcTicker = async () => {
+    try {
+      const res = await fetch("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT");
+      if (res.ok) {
+        const data = await res.json() as any;
+        btcPrice = parseFloat(data.lastPrice) || btcPrice;
+        btcPriceChangePercent = parseFloat(data.priceChangePercent) || btcPriceChangePercent;
       }
-    } else {
-      // Try Bybit as fallback
+    } catch (e: any) {
+      console.log("[Whale Helper] Live BTC ticker error:", e.message);
+    }
+  };
+
+  const fetchEthTicker = async () => {
+    try {
+      const res = await fetch("https://api.binance.com/api/v3/ticker/24hr?symbol=ETHUSDT");
+      if (res.ok) {
+        const data = await res.json() as any;
+        ethPrice = parseFloat(data.lastPrice) || ethPrice;
+        ethPriceChangePercent = parseFloat(data.priceChangePercent) || ethPriceChangePercent;
+      }
+    } catch (e: any) {
+      console.log("[Whale Helper] Live ETH ticker error:", e.message);
+    }
+  };
+
+  const fetchBnbTicker = async () => {
+    try {
+      const res = await fetch("https://api.binance.com/api/v3/ticker/24hr?symbol=BNBUSDT");
+      if (res.ok) {
+        const data = await res.json() as any;
+        bnbPrice = parseFloat(data.lastPrice) || bnbPrice;
+        bnbPriceChangePercent = parseFloat(data.priceChangePercent) || bnbPriceChangePercent;
+      }
+    } catch (e: any) {
+      console.log("[Whale Helper] Live BNB ticker error:", e.message);
+    }
+  };
+
+  const fetchSolTicker = async () => {
+    try {
+      const res = await fetch("https://api.binance.com/api/v3/ticker/24hr?symbol=SOLUSDT");
+      if (res.ok) {
+        const data = await res.json() as any;
+        solPrice = parseFloat(data.lastPrice) || solPrice;
+        solPriceChangePercent = parseFloat(data.priceChangePercent) || solPriceChangePercent;
+      }
+    } catch (e: any) {
+      console.log("[Whale Helper] Live SOL ticker error:", e.message);
+    }
+  };
+
+  const fetchTrxTicker = async () => {
+    try {
+      const res = await fetch("https://api.binance.com/api/v3/ticker/24hr?symbol=TRXUSDT");
+      if (res.ok) {
+        const data = await res.json() as any;
+        trxPrice = parseFloat(data.lastPrice) || trxPrice;
+        trxPriceChangePercent = parseFloat(data.priceChangePercent) || trxPriceChangePercent;
+      }
+    } catch (e: any) {
+      console.log("[Whale Helper] Live TRX ticker error:", e.message);
+    }
+  };
+
+  const fetchXrpTicker = async () => {
+    try {
+      const res = await fetch("https://api.binance.com/api/v3/ticker/24hr?symbol=XRPUSDT");
+      if (res.ok) {
+        const data = await res.json() as any;
+        xrpPrice = parseFloat(data.lastPrice) || xrpPrice;
+        xrpPriceChangePercent = parseFloat(data.priceChangePercent) || xrpPriceChangePercent;
+      }
+    } catch (e: any) {
+      console.log("[Whale Helper] Live XRP ticker error:", e.message);
+    }
+  };
+
+  const fetchHypeTicker = async () => {
+    try {
+      // Try Gate.io first for HYPEUSDT, fall back to Bybit
+      const res = await fetch("https://api.gateio.ws/api/v4/spot/tickers?currency_pair=HYPE_USDT");
+      if (res.ok) {
+        const data = await res.json() as any;
+        if (Array.isArray(data) && data.length > 0) {
+          hypePrice = parseFloat(data[0].last) || hypePrice;
+          hypePriceChangePercent = parseFloat(data[0].change_percentage) || hypePriceChangePercent;
+          return;
+        }
+      }
+      // Bybit fallback
       const bybitRes = await fetch("https://api.bybit.com/v5/market/tickers?category=spot&symbol=HYPEUSDT");
       if (bybitRes.ok) {
         const bybitData = await bybitRes.json() as any;
@@ -384,10 +401,21 @@ export async function fetchLiveOnChainDataModular() {
           hypePriceChangePercent = parseFloat(item.price24hPcnt) * 100 || hypePriceChangePercent;
         }
       }
+    } catch (e: any) {
+      console.log("[Whale Helper] Live HYPE ticker error:", e.message);
     }
-  } catch (e: any) {
-    console.log("[Whale Helper] Live HYPE ticker error:", e.message);
-  }
+  };
+
+  // Run all 7 ticker fetches in parallel (was sequential — each blocked the next)
+  await Promise.allSettled([
+    fetchBtcTicker(),
+    fetchEthTicker(),
+    fetchBnbTicker(),
+    fetchSolTicker(),
+    fetchTrxTicker(),
+    fetchXrpTicker(),
+    fetchHypeTicker(),
+  ]);
 
   // 2. Fetch Bitcoin block metadata with multiple fallback providers
   let blockHeight = 848500;
@@ -506,292 +534,10 @@ export async function fetchLiveOnChainDataModular() {
     console.log("[Whale Helper Scan] scanAllBlockchains error:", err.message);
   }
 
-  const liveScrapedTxs: any[] = []; // Legacy sink, safely ignored in favor of real on-chain scans
-
-  // Bitcoin scanning is handled by onchainScanner
-
-  // --- 3b. Scan Real Ethereum Mainnet Block for Genuine Whale Transactions ---
-  try {
-    const ETH_RPC = "https://cloudflare-eth.com";
-    const ethBlockRes = await fetch(ETH_RPC, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        method: "eth_getBlockByNumber",
-        params: ["latest", true],
-        id: 1
-      })
-    });
-    if (ethBlockRes.ok) {
-      const ethData = await ethBlockRes.json() as any;
-      const txs = ethData?.result?.transactions;
-      if (Array.isArray(txs)) {
-        txs.forEach((tx: any) => {
-          const toLower = (tx.to || "").toLowerCase();
-          let coin = "ETH";
-          let amt = 0;
-          let usdVal = 0;
-
-          if (toLower === "0xdac17f958d2ee523a2206206994597c13d831ec7") { // ERC20 USDT
-            coin = "USDT";
-            const input = tx.input || "";
-            if (input.startsWith("0xa9059cbb") && input.length >= 138) {
-              try {
-                const valHex = input.substring(74, 138);
-                amt = Number(BigInt("0x" + valHex)) / 1e6;
-                usdVal = amt;
-              } catch {}
-            }
-          } else if (toLower === "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48") { // ERC20 USDC
-            coin = "USDC";
-            const input = tx.input || "";
-            if (input.startsWith("0xa9059cbb") && input.length >= 138) {
-              try {
-                const valHex = input.substring(74, 138);
-                amt = Number(BigInt("0x" + valHex)) / 1e6;
-                usdVal = amt;
-              } catch {}
-            }
-          } else { // Native ETH
-            coin = "ETH";
-            try {
-              amt = Number(BigInt(tx.value || "0x0")) / 1e18;
-              usdVal = amt * ethPrice;
-            } catch {}
-          }
-
-          // Strictly filter for actual, unmanipulated transactions >= $1,000,000 USD
-          if (usdVal >= 1000000 && tx.hash) {
-            liveScrapedTxs.push({
-              txhash: tx.hash,
-              coin,
-              blockchain: "Ethereum",
-              amount: parseFloat(amt.toFixed(4)),
-              usdAmount: parseFloat(usdVal.toFixed(2)),
-              fromAddr: tx.from || "0x" + tx.hash.substring(2, 10),
-              toAddr: tx.to || "0x" + tx.hash.substring(10, 18),
-              vsize: Math.floor(parseInt(tx.gas || "21000", 16) / 4),
-              feeUsd: parseFloat((parseInt(tx.gasPrice || "20000000000", 16) * 1e-18 * 120000 * ethPrice).toFixed(2)) || 5.50,
-              timestamp: new Date().toISOString(),
-              sourceName: "Unknown Wallet",
-              destName: "Unknown Wallet"
-            });
-          }
-        });
-      }
-    }
-  } catch (e: any) {
-    console.log("[Whale Helper ETH Scan] Error:", e.message);
-  }
-
-  // --- 3c. Scan Real BSC Block for Genuine Whale Transactions ---
-  try {
-    const BSC_RPC = "https://bsc-rpc.publicnode.com";
-    const bscBlockRes = await fetch(BSC_RPC, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        method: "eth_getBlockByNumber",
-        params: ["latest", true],
-        id: 1
-      })
-    });
-    if (bscBlockRes.ok) {
-      const bscData = await bscBlockRes.json() as any;
-      const txs = bscData?.result?.transactions;
-      if (Array.isArray(txs)) {
-        txs.forEach((tx: any) => {
-          const toLower = (tx.to || "").toLowerCase();
-          let coin = "BNB";
-          let amt = 0;
-          let usdVal = 0;
-
-          if (toLower === "0x55d398326f99059ff775485246999027b3197955") { // BEP20 USDT
-            coin = "USDT";
-            const input = tx.input || "";
-            if (input.startsWith("0xa9059cbb") && input.length >= 138) {
-              try {
-                const valHex = input.substring(74, 138);
-                amt = Number(BigInt("0x" + valHex)) / 1e18; // BEP20 USDT uses 18 decimals!
-                usdVal = amt;
-              } catch {}
-            }
-          } else if (toLower === "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d") { // BEP20 USDC
-            coin = "USDC";
-            const input = tx.input || "";
-            if (input.startsWith("0xa9059cbb") && input.length >= 138) {
-              try {
-                const valHex = input.substring(74, 138);
-                amt = Number(BigInt("0x" + valHex)) / 1e18;
-                usdVal = amt;
-              } catch {}
-            }
-          } else { // Native BNB
-            coin = "BNB";
-            try {
-              amt = Number(BigInt(tx.value || "0x0")) / 1e18;
-              usdVal = amt * bnbPrice;
-            } catch {}
-          }
-
-          // Strictly filter for actual, unmanipulated transactions >= $1,000,000 USD
-          if (usdVal >= 1000000 && tx.hash) {
-            liveScrapedTxs.push({
-              txhash: tx.hash,
-              coin,
-              blockchain: "BSC",
-              amount: parseFloat(amt.toFixed(4)),
-              usdAmount: parseFloat(usdVal.toFixed(2)),
-              fromAddr: tx.from || "0x" + tx.hash.substring(2, 10),
-              toAddr: tx.to || "0x" + tx.hash.substring(10, 18),
-              vsize: 110,
-              feeUsd: 0.15,
-              timestamp: new Date().toISOString(),
-              sourceName: "Unknown Wallet",
-              destName: "Unknown Wallet"
-            });
-          }
-        });
-      }
-    }
-  } catch (e: any) {
-    console.log("[Whale Helper BSC Scan] Error:", e.message);
-  }
-
-  // --- 3d. Scan Real Tron Mainnet for Genuine TRC20 USDT Whale Transactions ---
-  try {
-    const tronRes = await fetch("https://api.trongrid.io/v1/contracts/TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t/transactions?limit=30");
-    if (tronRes.ok) {
-      const tronData = await tronRes.json() as any;
-      if (tronData && Array.isArray(tronData.data)) {
-        tronData.data.forEach((tx: any) => {
-          let amt = 0;
-          let usdVal = 0;
-          let coin = "USDT";
-
-          const parameter = tx.raw_data?.contract?.[0]?.parameter?.value;
-          const dataHex = parameter?.data || "";
-
-          if (dataHex.startsWith("a9059cbb") && dataHex.length >= 136) {
-            try {
-              const valHex = dataHex.substring(72, 136);
-              amt = parseInt(valHex, 16) / 1e6; // TRC20 USDT has 6 decimals!
-              usdVal = amt;
-            } catch {}
-          } else {
-            // Check if it is a TRX native transfer
-            const valueSun = parameter?.amount || 0;
-            if (valueSun > 0) {
-              coin = "TRX";
-              amt = valueSun / 1e6;
-              usdVal = amt * trxPrice;
-            }
-          }
-
-          // Strictly filter for actual, unmanipulated transactions >= $1,000,000 USD
-          if (usdVal >= 1000000 && tx.txID) {
-            const ownerHex = parameter?.owner_address || "T" + tx.txID.substring(0, 6);
-            const recHex = parameter?.to_address || "T" + tx.txID.substring(6, 12);
-
-            liveScrapedTxs.push({
-              txhash: tx.txID,
-              coin,
-              blockchain: "Tron",
-              amount: parseFloat(amt.toFixed(2)),
-              usdAmount: parseFloat(usdVal.toFixed(2)),
-              fromAddr: ownerHex,
-              toAddr: recHex,
-              vsize: 150,
-              feeUsd: 1.25,
-              timestamp: safeParseDateISO(tx.block_timestamp),
-              sourceName: "Unknown Wallet",
-              destName: "Unknown Wallet"
-            });
-          }
-        });
-      }
-    }
-  } catch (e: any) {
-    console.log("[Whale Helper TRON Scan] Error:", e.message);
-  }
-
-  // --- 3e. Scan Real Solana Mainnet for Genuine USDC Whale Transactions ---
-  try {
-    const solRes = await fetch("https://api.mainnet-beta.solana.com", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "getSignaturesForAddress",
-        params: ["EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", { limit: 10 }]
-      })
-    });
-    if (solRes.ok) {
-      const solData = await solRes.json() as any;
-      const signatures = solData?.result;
-      if (Array.isArray(signatures)) {
-        // Fetch details of the latest signature safely to grab the actual, genuine amount
-        const latestSig = signatures[0]?.signature;
-        if (latestSig) {
-          const detailRes = await fetch("https://api.mainnet-beta.solana.com", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              jsonrpc: "2.0",
-              id: 1,
-              method: "getTransaction",
-              params: [latestSig, { encoding: "json", maxSupportedTransactionVersion: 0 }]
-            })
-          });
-          if (detailRes.ok) {
-            const detailData = await detailRes.json() as any;
-            const meta = detailData?.result?.meta;
-            if (meta) {
-              const preToken = meta.preTokenBalances || [];
-              const postToken = meta.postTokenBalances || [];
-              // Calculate difference to find actual transfer amount
-              let maxDiff = 0;
-              let transferCoin = "USDC";
-
-              postToken.forEach((post: any) => {
-                const pre = preToken.find((p: any) => p.accountIndex === post.accountIndex && p.mint === post.mint);
-                const preAmt = pre ? (pre.uiTokenAmount?.uiAmount || 0) : 0;
-                const postAmt = post.uiTokenAmount?.uiAmount || 0;
-                const diff = Math.abs(postAmt - preAmt);
-                if (diff > maxDiff) {
-                  maxDiff = diff;
-                }
-              });
-
-              const usdVal = maxDiff; // USDC is $1 USD
-              if (usdVal >= 1000000) {
-                liveScrapedTxs.push({
-                  txhash: latestSig,
-                  coin: transferCoin,
-                  blockchain: "Solana",
-                  amount: parseFloat(maxDiff.toFixed(2)),
-                  usdAmount: parseFloat(usdVal.toFixed(2)),
-                  fromAddr: detailData?.result?.transaction?.message?.accountKeys?.[0] || "SolanaWalletA",
-                  toAddr: detailData?.result?.transaction?.message?.accountKeys?.[1] || "SolanaWalletB",
-                  vsize: 500,
-                  feeUsd: 0.01,
-                  timestamp: new Date().toISOString(),
-                  sourceName: "Unknown Wallet",
-                  destName: "Unknown Wallet"
-                });
-              }
-            }
-          }
-        }
-      }
-    }
-  } catch (e: any) {
-    console.log("[Whale Helper Solana Scan] Error:", e.message);
-  }
-
+  // FIX-D-8: Removed duplicate ETH/BSC/Tron/Solana scan blocks (was ~285 lines).
+  // They pushed into `liveScrapedTxs` which was NEVER read in the merge step.
+  // `actualOnChainScrapedTxs` (from scanAllBlockchains() above) is what feeds
+  // `liveProcessed` in the merge below. scanAllBlockchains() already does these scans.
   // 4. MAP TO COMPREHENSIVE Tracker Model for each live transaction scraped
   const liveProcessed = actualOnChainScrapedTxs.map((item: any) => {
     const txHash = item.txhash;

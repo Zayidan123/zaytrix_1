@@ -180,13 +180,23 @@ webauthnRouter.post("/login/begin", async (req: Request, res: Response) => {
   if (!email) return res.status(400).json({ success: false, error: "Email wajib diisi." });
 
   const user = await prisma.user.findUnique({ where: { email: String(email).toLowerCase() } });
-  if (!user) {
-    return res.status(200).json({ success: false, error: "User tidak ditemukan atau belum ada passkey." });
-  }
+  const creds = user ? await prisma.webAuthnCredential.findMany({ where: { userId: user.id } }) : [];
 
-  const creds = await prisma.webAuthnCredential.findMany({ where: { userId: user.id } });
-  if (creds.length === 0) {
-    return res.status(200).json({ success: false, error: "Belum ada passkey terdaftar. Login dengan password." });
+  // FIX-C-4: uniform response prevents email enumeration + never echoes internal userId.
+  // Previously this endpoint returned distinct messages for "user not found" vs "no
+  // passkey registered" AND echoed `userId: user.id` (internal cuid) to the caller —
+  // leaking which emails are registered AND exposing an internal identifier. Now
+  // we always return success with a dummy challenge + empty credentialIds when
+  // the user is unknown or has no passkey. /login/finish will subsequently reject
+  // (no credential found for the (dummy) userId) — the attacker cannot brute-force
+  // userIds because they are cuid-based (high entropy).
+  if (!user || creds.length === 0) {
+    const dummyChallenge = generateChallenge();
+    return res.json({
+      success: true,
+      challenge: dummyChallenge,
+      credentialIds: [], // empty — /login/finish will reject
+    });
   }
 
   const challenge = setChallenge(user.id);

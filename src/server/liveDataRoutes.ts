@@ -18,6 +18,7 @@
 // =============================================================================
 
 import express from "express";
+import rateLimit from "express-rate-limit";
 import * as cheerio from "cheerio";
 import * as zlib from "zlib";
 import { execFile } from "child_process";
@@ -96,7 +97,7 @@ export async function fetchHtmlViaCurl(
       args.push("-H", `${k}: ${v}`);
     }
   }
-  args.push("-w", "\n---HTTP_CODE:%{http_code}---", url);
+  args.push("-w", "\n---HTTP_CODE:%{http_code}---", "--", url); // FIX-B-5: `--` separator prevents option injection when URL starts with `-`.
   const { stdout } = await execFileP("curl", args, {
     maxBuffer: 10 * 1024 * 1024, // 10MB — FIX-ALL M6: was `maxOutput` (wrong option name; execFile uses `maxBuffer`)
   });
@@ -129,6 +130,18 @@ export function cacheGet<T>(key: string): T | undefined {
 export function cacheSet<T>(key: string, data: T, ttlMs: number): void {
   cache.set(key, { data, expiry: Date.now() + ttlMs });
 }
+
+// FIX-B-3: periodic cache sweep every 5 minutes to prevent unbounded memory
+// growth. Previously the cache Map only deleted entries on read-after-expiry,
+// so unused-but-expired entries piled up forever in a long-running process.
+// `.unref()` lets the timer keep the event loop alive only while other handles
+// are running — it won't block graceful shutdown.
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of cache.entries()) {
+    if (entry.expiry < now) cache.delete(key);
+  }
+}, 5 * 60 * 1000).unref();
 
 // ---------------------------------------------------------------------------
 // Date helpers
@@ -207,12 +220,47 @@ const TTL_24H = 24 * 60 * 60 * 1000;
 // ---------------------------------------------------------------------------
 export const liveDataRouter = express.Router();
 
+// FIX-B-2: rate limiter — all 12 live-data endpoints are public (no auth).
+// Without throttling, anonymous abuse hammers Binance/CoinGecko/blockchain.info
+// from the server's egress IP → upstream IP-ban (HTTP 418) → all live-data
+// features dead for legit users. 120 req/min/IP is generous enough for first-page-load
+// (App.tsx fetches ~10 live endpoints on mount) but still blocks bot-style fan-out.
+liveDataRouter.use(
+  rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: 120, // 120 requests per minute per IP (first-load burst + normal usage)
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+      success: false,
+      error: "Terlalu banyak request data live. Coba lagi dalam 1 menit.",
+    },
+  })
+);
+
+// FIX-B-4: validate symbol query params before interpolating them raw into
+// upstream Binance URLs. A payload like `BTCUSDT&limit=99999` previously
+// bypassed the days=90 cap (URL injection). Only allow uppercase alphanumerics
+// of length 3-30 — matches every real Binance symbol (BTCUSDT, ETHUSDT, …).
+function validateSymbol(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const sym = raw.toUpperCase().trim();
+  if (!/^[A-Z0-9]{3,30}$/.test(sym)) return null;
+  return sym;
+}
+
 // ---------------------------------------------------------------------------
 // 1. GET /api/live/long-short-ratio?symbol=BTCUSDT&days=30
 //    Source: Binance Futures (FREE, no key)
 // ---------------------------------------------------------------------------
 liveDataRouter.get("/api/live/long-short-ratio", async (req, res) => {
-  const symbol = (req.query.symbol as string) || "BTCUSDT";
+  // FIX-B-4: validate symbol — prevents URL injection into Binance request.
+  // A payload like `BTCUSDT&limit=99999` previously bypassed the days=90 cap.
+  const validatedSymbol = validateSymbol(req.query.symbol);
+  if (req.query.symbol !== undefined && validatedSymbol === null) {
+    return res.status(400).json({ success: false, error: "Symbol tidak valid." });
+  }
+  const symbol = validatedSymbol || "BTCUSDT";
   const days = Math.min(Math.max(parseInt(String(req.query.days || "30"), 10) || 30, 1), 90);
   const cacheKey = `lsr:${symbol}:${days}`;
   const cached = cacheGet<any>(cacheKey);

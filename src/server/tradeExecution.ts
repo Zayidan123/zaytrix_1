@@ -182,7 +182,7 @@ async function placeKucoinOrder(
 // ─── SIMULATION FALLBACK ─────────────────────────────────────────────
 async function simulateOrder(
   exchange: string, symbol: string, side: string, amount: number
-): Promise<{ success: boolean; orderId: string; executedPrice: number; isSimulation: boolean }> {
+): Promise<{ success: boolean; orderId?: string; executedPrice?: number; isSimulation: boolean; error?: string }> {
   // Fetch live price for realistic simulation
   let livePrice = 0;
   try {
@@ -193,9 +193,22 @@ async function simulateOrder(
     }
   } catch {}
 
-  const executedPrice = livePrice > 0
-    ? parseFloat((livePrice * (1 + (Math.random() * 0.0002 - 0.0001))).toFixed(2))
-    : 0;
+  // FIX-A-5: if the Binance ticker fetch failed (or returned a non-numeric
+  // price), livePrice stays 0. Previously we returned `success: true,
+  // executedPrice: 0` — the UI then displayed "filled at $0", which is
+  // impossible and misleads the user into thinking a $0 fill executed.
+  // Now we return `success: false` with an actionable error so the caller
+  // can surface the failure instead of presenting a fake fill.
+  if (livePrice <= 0) {
+    return {
+      success: false,
+      error: "Gagal mengambil harga live dari Binance. Coba lagi.",
+      executedPrice: 0,
+      isSimulation: true,
+    };
+  }
+
+  const executedPrice = parseFloat((livePrice * (1 + (Math.random() * 0.0002 - 0.0001))).toFixed(2));
   const orderId = "SIM-" + exchange.toUpperCase().substring(0, 3) + "-" + Math.floor(100000 + Math.random() * 900000);
 
   return { success: true, orderId, executedPrice, isSimulation: true };
@@ -273,11 +286,21 @@ tradeExecutionRouter.post("/execute", async (req: Request, res: Response) => {
   });
 
   if (!result.success) {
-    return res.json({
+    // FIX-A-6: real-order failures must return HTTP 400 (not 200) so the
+    // frontend can branch on response status / catch handlers — a 200 with
+    // `success:false` would otherwise be silently swallowed by code that
+    // checks `if (resp.ok)`. Simulation failures (sandbox / no-keys /
+    // unsupported-exchange fallbacks) stay at HTTP 200 because the request
+    // itself was well-formed; the client opted into simulation and should
+    // read `success:false` from the JSON body. `result.isSimulation === false`
+    // distinguishes a real attempt (Binance/Bybit/KuCoin HTTP errors, missing
+    // KuCoin passphrase) from a simulated attempt.
+    const isRealOrderFailure = result.isSimulation === false;
+    return res.status(isRealOrderFailure ? 400 : 200).json({
       success: false,
       exchange, symbol, amount: qty, side,
       error: result.error,
-      isSimulation: false,
+      isSimulation: result.isSimulation,
     });
   }
 
@@ -318,8 +341,8 @@ tradeExecutionRouter.post("/connect", async (req: Request, res: Response) => {
       console.log(`[trade/connect] ticker fetch for ${exchange}: ${e.message}`);
     }
 
-    let balance = 0;
-    let balanceSource: "live" | "sandbox" | "estimated" = "estimated";
+    let balance: number | null = 0;
+    let balanceSource: "live" | "sandbox" | "unavailable" | "estimated" = "unavailable";
 
     if (useSandbox) {
       balance = 15000.00;
@@ -389,9 +412,13 @@ tradeExecutionRouter.post("/connect", async (req: Request, res: Response) => {
         }
       }
 
+      // FIX-B-7: previously returned a hardcoded fake balance ($4250.75) when
+      // the real balance fetch failed, with `balanceSource: "estimated"`. For a
+      // trading terminal that misleads the user into thinking they have funds
+      // they don't. Now we honestly report the balance as unavailable.
       if (balance === 0) {
-        balance = 4250.75;
-        balanceSource = "estimated";
+        balance = null;
+        balanceSource = "unavailable";
       }
     }
 
@@ -402,7 +429,7 @@ tradeExecutionRouter.post("/connect", async (req: Request, res: Response) => {
       exchange,
       useSandbox,
       tickerPrice,
-      balance: parseFloat(balance.toFixed(2)),
+      balance: balance === null ? null : parseFloat(balance.toFixed(2)),
       balanceSource,
       hasE2EEncountered: !!hasE2E,
       timestamp: new Date().toISOString(),

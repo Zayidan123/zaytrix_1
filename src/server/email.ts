@@ -35,8 +35,14 @@ function getFrom(): string {
   return process.env.EMAIL_FROM || "noreply@zaytrix.com";
 }
 
+// FIX-C-3: default to false (fail-closed). Explicit "true" required for dev mode.
+// Previously isDevMode() returned true unless EMAIL_DEV_MODE was explicitly "false",
+// so an unset env var in production silently logged verification / reset emails to
+// stdout WITHOUT sending them — users could not verify their email or reset their
+// password. Now production deployments must explicitly set EMAIL_DEV_MODE=true to
+// opt into the no-op jsonTransport; absence means "real SMTP".
 function isDevMode(): boolean {
-  return String(process.env.EMAIL_DEV_MODE || "true").toLowerCase() === "true";
+  return process.env.EMAIL_DEV_MODE === "true";
 }
 
 export function getTransporter(): Transporter {

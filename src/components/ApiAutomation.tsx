@@ -373,14 +373,20 @@ export default function ApiAutomation() {
         setConnectionStatus("connected");
         setStatusDetails(`Sah Terhubung (${latency}ms)`);
         // Honest balance-source labeling per IMPL-S server contract.
+        // FIX-B-7: balance may be null with `balanceSource: "unavailable"` when
+        // the real-balance fetch fails — we no longer fabricate $4250.75.
         const balanceSourceLabel =
           reply.balanceSource === "live" ? "live" :
-          reply.balanceSource === "estimated" ? "estimasi" :
-          reply.balanceSource === "sandbox" ? "sandbox" : "estimasi";
+          reply.balanceSource === "sandbox" ? "sandbox" :
+          reply.balanceSource === "unavailable" ? "tidak tersedia" :
+          reply.balanceSource === "estimated" ? "estimasi" : "estimasi";
+        const balanceStr = reply.balance === null || reply.balance === undefined
+          ? "N/A"
+          : `$${Number(reply.balance).toLocaleString()}`;
         setExecutionLogs(prev => [
           ...prev,
           `[STATUS] KONEKSI ONLINE: Berhasil sinkronisasi status bursa ${selectedExchange}.`,
-          `[SYSTEM] Real Order Book Price: $${reply.tickerPrice.toLocaleString()} - Saldo Portofolio Terkait: $${reply.balance.toLocaleString()} USDT [sumber: ${balanceSourceLabel}].`,
+          `[SYSTEM] Real Order Book Price: $${reply.tickerPrice.toLocaleString()} - Saldo Portofolio Terkait: ${balanceStr} USDT [sumber: ${balanceSourceLabel}].`,
           `[SECURITY] Enkripsi end-to-end terverifikasi aman antara browser dan bursa ${selectedExchange} (${reply.hasE2EEncountered ? 'E2EE' : 'Plain-Secured'}).`
         ]);
       } else {

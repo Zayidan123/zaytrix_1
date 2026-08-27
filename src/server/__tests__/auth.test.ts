@@ -43,13 +43,20 @@ describe("Auth API", () => {
     expect(cookie).toBeTruthy();
   });
 
-  it("should reject duplicate registration", async () => {
+  it("should not reveal whether email is already registered (FIX-C-1 enumeration guard)", async () => {
+    // FIX-C-1: duplicate registration now returns the same 201 + success:true
+    // shape as a genuine registration, with a redacted user + a hint message.
+    // Previously it returned a distinct 409 "Email sudah terdaftar." which let
+    // an attacker enumerate which emails were registered.
     const { status, data } = await api("/api/auth/register", {
       method: "POST",
       body: JSON.stringify({ email: testEmail, password: testPassword, displayName: testName }),
     });
-    expect(status).toBe(409);
-    expect(data.success).toBe(false);
+    expect(status).toBe(201);
+    expect(data.success).toBe(true);
+    // User must be redacted — never echo back the registered email.
+    expect(data.user?.email).toBe("[REDACTED]");
+    expect(data.user?.displayName).toBe("[REDACTED]");
   });
 
   it("should reject short password", async () => {

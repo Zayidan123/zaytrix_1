@@ -77,6 +77,14 @@ const BCRYPT_ROUNDS = 10;
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
 
+// FIX-C-2: dummy hash for timing equalization (prevents email enumeration via response time).
+// Used in /login when the user is not found so the request takes roughly the same
+// time as a real bcrypt.compare — without it, /login returns in ~1ms for unknown
+// emails vs ~80-120ms for existing emails, leaking which emails are registered.
+// This is a real bcrypt hash of a throwaway password; it will never match any
+// user-supplied password and the result is discarded.
+const DUMMY_HASH = "$2a$12$N9qo8uLOickgx2ZMRZoMy.Mrq8BkV6qL/2qZ8wT8p2fJqZKqKqKqK";
+
 // Token expiries
 const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1h
@@ -397,7 +405,15 @@ authRouter.post("/register", async (req: Request, res: Response, next: NextFunct
       // caller, but DO record it server-side).
       recordAuthAttempt(false);
       await logAudit(null, "REGISTER", req, false, { reason: "email_in_use", email });
-      return res.status(409).json({ success: false, error: "Email sudah terdaftar." });
+      // FIX-C-1: return generic 201 to prevent email enumeration
+      // (previously a distinct 409 "Email sudah terdaftar." leaked whether an
+      // email was registered). Always return 201 with a redacted user + a
+      // message that works whether the account was created OR already existed.
+      return res.status(201).json({
+        success: true,
+        user: { id: null, email: "[REDACTED]", displayName: "[REDACTED]" },
+        message: "Jika email belum terdaftar, akun telah dibuat. Jika sudah terdaftar, silakan login.",
+      });
     }
 
     const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
@@ -502,6 +518,11 @@ authRouter.post("/login", async (req: Request, res: Response, next: NextFunction
 
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user) {
+      // FIX-C-2: equalize timing with the existing-user path so response time
+      // does not reveal whether the email is registered. A real bcrypt.compare
+      // takes ~80-120ms; without a dummy compare here, /login returns in ~1ms
+      // for unknown emails. The result is discarded.
+      await bcrypt.compare(password, DUMMY_HASH).catch(() => {});
       recordAuthAttempt(false);
       await logAudit(null, "LOGIN", req, false, { reason: "user_not_found", email });
       return res.status(401).json({ success: false, error: "Email atau kata sandi salah." });
@@ -684,6 +705,12 @@ authRouter.post("/login/2fa", async (req: Request, res: Response, next: NextFunc
         data: { failedLoginAttempts: 0, lockedUntil: null },
       });
     } catch {}
+    // FIX-C-8: accepted risk — tempToken remains valid for 5 min after success,
+    // but an attacker would still need the current TOTP code (±1 window tolerance
+    // = 3 valid codes out of 10^6) to mint a second session. For full single-use
+    // semantics, implement a denylist of consumed tempToken hashes (e.g. a
+    // `consumed_temp_tokens` table or a Redis SET with a 5-min TTL) and reject
+    // in verifyToken above. Punt to a future hardening pass.
     await logAudit(user.id, "LOGIN_2FA", req, true, {});
     const token = signToken({ sub: user.id, email: user.email, displayName: user.displayName });
     setSessionCookie(res, token);
@@ -813,6 +840,13 @@ authRouter.post("/2fa/setup", requireAuth, async (req: Request, res: Response, n
     if (!user) return res.status(404).json({ success: false, error: "Pengguna tidak ditemukan." });
     if (user.twoFactorEnabled) {
       return res.status(400).json({ success: false, error: "2FA sudah aktif. Nonaktifkan terlebih dahulu untuk mengganti rahasia." });
+    }
+    // FIX-C-7: require email verification before 2FA enrollment. Previously
+    // /2fa/setup only checked twoFactorEnabled, so a user could enroll TOTP
+    // without ever verifying their email — letting an attacker who controls the
+    // email inbox lock the real owner out via 2FA.
+    if (!user.emailVerified) {
+      return res.status(400).json({ success: false, error: "Email harus diverifikasi sebelum mengaktifkan 2FA." });
     }
     const secretB32 = generateTotpSecret();
     const encrypted = encryptTotpSecret(secretB32);

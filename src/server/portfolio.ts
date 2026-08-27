@@ -3,12 +3,60 @@
 // The frontend store (store.ts) syncs to these endpoints on login and on change.
 
 import { Router, Request, Response } from "express";
+import { z } from "zod";
 import { prisma } from "./db";
 import { requireAuth } from "./auth";
 import { logAudit } from "./audit";
 
 export const portfolioRouter = Router();
 portfolioRouter.use(requireAuth);
+
+// ─── FIX-B-1: Zod input schemas (reject NaN + negatives + oversized strings) ───
+// Previously these POST endpoints used bare parseFloat() with only "not null"
+// checks, which silently accepted NaN and NEGATIVE values. Now we validate every
+// inbound body before it touches Prisma.
+const holdingSchema = z.object({
+  symbol: z.string().min(1).max(20),
+  category: z.string().min(1).max(30),
+  purchasePrice: z.number().positive().finite(),
+  quantity: z.number().positive().finite(),
+  notes: z.string().max(2000).optional(),
+  id: z.string().max(100).optional(),
+});
+
+const ledgerTxSchema = z.object({
+  type: z.string().min(1).max(20),
+  symbol: z.string().min(1).max(20),
+  quantity: z.number().positive().finite(),
+  price: z.number().nonnegative().finite(),
+  totalAmount: z.number().nonnegative().finite().optional(),
+  feePaidUsd: z.number().nonnegative().finite().optional(),
+  notes: z.string().max(2000).optional(),
+  timestamp: z.string().max(60).optional(),
+  id: z.string().max(100).optional(),
+});
+
+const conversionSchema = z.object({
+  fromSymbol: z.string().min(1).max(20),
+  fromAmount: z.number().positive().finite(),
+  toSymbol: z.string().min(1).max(20),
+  toAmount: z.number().positive().finite(),
+  rate: z.number().positive().finite(),
+  timestamp: z.string().max(60).optional(),
+});
+
+const alertSchema = z.object({
+  symbol: z.string().min(1).max(20),
+  condition: z.string().min(1).max(20),
+  targetPrice: z.number().positive().finite(),
+  createdAt: z.string().max(60).optional(),
+  id: z.string().max(100).optional(),
+});
+
+/** FIX-B-1: tiny helper — parse + flatten zod error into a single message string. */
+function zodError(err: z.ZodError): string {
+  return err.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
+}
 
 // ─── PORTFOLIO HOLDINGS ──────────────────────────────────────────────
 
@@ -28,17 +76,19 @@ portfolioRouter.get("/holdings", async (req: Request, res: Response) => {
 // POST /api/portfolio/holdings — create a holding (replaces addHolding)
 portfolioRouter.post("/holdings", async (req: Request, res: Response) => {
   try {
-    const { symbol, category, purchasePrice, quantity, notes, id } = req.body;
-    if (!symbol || !category || purchasePrice == null || quantity == null) {
-      return res.status(400).json({ success: false, error: "Field tidak lengkap." });
+    // FIX-B-1: validate body with zod — rejects NaN/negative/oversized values.
+    const parsed = holdingSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ success: false, error: "Input tidak valid: " + zodError(parsed.error) });
     }
+    const { symbol, category, purchasePrice, quantity, notes, id } = parsed.data;
     const holding = await prisma.portfolioHolding.create({
       data: {
         id: id || undefined,
         userId: req.user!.sub,
         symbol, category,
-        purchasePrice: parseFloat(purchasePrice),
-        quantity: parseFloat(quantity),
+        purchasePrice,
+        quantity,
         notes: notes || null,
       },
     });
@@ -105,20 +155,22 @@ portfolioRouter.get("/ledger", async (req: Request, res: Response) => {
 
 portfolioRouter.post("/ledger", async (req: Request, res: Response) => {
   try {
-    const { id, timestamp, type, symbol, quantity, price, totalAmount, feePaidUsd, notes } = req.body;
-    if (!type || !symbol || quantity == null || price == null) {
-      return res.status(400).json({ success: false, error: "Field tidak lengkap." });
+    // FIX-B-1: validate body with zod — rejects NaN/negative/oversized values.
+    const parsed = ledgerTxSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ success: false, error: "Input tidak valid: " + zodError(parsed.error) });
     }
+    const { id, timestamp, type, symbol, quantity, price, totalAmount, feePaidUsd, notes } = parsed.data;
     const tx = await prisma.ledgerTransaction.create({
       data: {
         id: id || undefined,
         userId: req.user!.sub,
         timestamp: timestamp || new Date().toISOString(),
         type, symbol,
-        quantity: parseFloat(quantity),
-        price: parseFloat(price),
-        totalAmount: parseFloat(totalAmount) || parseFloat(quantity) * parseFloat(price),
-        feePaidUsd: parseFloat(feePaidUsd) || 0,
+        quantity,
+        price,
+        totalAmount: totalAmount ?? quantity * price,
+        feePaidUsd: feePaidUsd ?? 0,
         notes: notes || null,
       },
     });
@@ -1044,16 +1096,21 @@ portfolioRouter.get("/conversions", async (req: Request, res: Response) => {
 
 portfolioRouter.post("/conversions", async (req: Request, res: Response) => {
   try {
-    const c = req.body;
+    // FIX-B-1: validate body with zod — rejects NaN/negative/oversized values.
+    const parsed = conversionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ success: false, error: "Input tidak valid: " + zodError(parsed.error) });
+    }
+    const c = parsed.data;
     const conv = await prisma.conversionTransaction.create({
       data: {
         userId: req.user!.sub,
-        fromSymbol: String(c.fromSymbol || ""),
-        fromAmount: parseFloat(c.fromAmount) || 0,
-        toSymbol: String(c.toSymbol || ""),
-        toAmount: parseFloat(c.toAmount) || 0,
-        rate: parseFloat(c.rate) || 0,
-        timestamp: String(c.timestamp || new Date().toISOString()),
+        fromSymbol: c.fromSymbol,
+        fromAmount: c.fromAmount,
+        toSymbol: c.toSymbol,
+        toAmount: c.toAmount,
+        rate: c.rate,
+        timestamp: c.timestamp || new Date().toISOString(),
       },
     });
     res.json({ success: true, conversion: conv });
@@ -1104,18 +1161,20 @@ portfolioRouter.get("/alerts", async (req: Request, res: Response) => {
 
 portfolioRouter.post("/alerts", async (req: Request, res: Response) => {
   try {
-    const { symbol, condition, targetPrice, createdAt, id } = req.body;
-    if (!symbol || !condition || targetPrice == null) {
-      return res.status(400).json({ success: false, error: "Field tidak lengkap." });
+    // FIX-B-1: validate body with zod — rejects NaN/negative/oversized values.
+    const parsed = alertSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ success: false, error: "Input tidak valid: " + zodError(parsed.error) });
     }
+    const { symbol, condition, targetPrice, createdAt, id } = parsed.data;
     const alert = await prisma.alertConfig.create({
       data: {
         id: id || undefined,
         userId: req.user!.sub,
-        symbol: String(symbol),
-        condition: String(condition),
-        targetPrice: parseFloat(targetPrice),
-        createdAt: String(createdAt || new Date().toISOString().split("T")[0]),
+        symbol,
+        condition,
+        targetPrice,
+        createdAt: createdAt || new Date().toISOString().split("T")[0],
       },
     });
     res.json({ success: true, alert });

@@ -90,7 +90,13 @@ async function call9Router(req: AIRequest): Promise<AIResponse> {
 
     if (!res.ok) {
       const errText = await res.text().catch(() => "Unknown error");
-      throw new Error(`9router HTTP ${res.status}: ${errText.substring(0, 200)}`);
+      // FIX-B-6: sanitize upstream error text — if 9router echoes the
+      // Authorization header back in its 4xx response body, the raw Bearer
+      // token would otherwise leak to the client via `result.error`.
+      const sanitizedErr = errText
+        .substring(0, 200)
+        .replace(/Bearer\s+[A-Za-z0-9\-_\.]+/gi, "Bearer [REDACTED]");
+      throw new Error(`9router HTTP ${res.status}: ${sanitizedErr}`);
     }
 
     const data = await res.json() as any;

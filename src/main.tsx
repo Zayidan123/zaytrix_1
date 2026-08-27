@@ -119,9 +119,13 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      refetchOnWindowFocus: true,
+      // FIX-D-7: staleTime was 5s + refetchOnWindowFocus was true → combined with
+      // per-component polls (Dashboard 8s/60s/600s, OnChainData 8s, App assets 2s)
+      // this caused excessive API calls on every tab switch. Bumped to 30s and
+      // disabled window-focus refetch (override per-query when genuinely needed).
+      refetchOnWindowFocus: false,
       retry: 2,
-      staleTime: 5 * 1000,
+      staleTime: 30 * 1000,
     },
   },
 });
