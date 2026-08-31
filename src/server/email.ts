@@ -114,7 +114,12 @@ function emailShell(title: string, bodyHtml: string): string {
 // developer can read / copy the verification or reset link from the log.
 // ---------------------------------------------------------------------------
 function logDevEmail(to: string, subject: string, html: string): void {
-  if (!isDevMode()) return;
+  // SEC-19: raw verification/reset TOKENS appear in this log line. Gate on
+  // BOTH EMAIL_DEV_MODE=true AND non-production — previously a production
+  // deployment that opted into EMAIL_DEV_MODE (the "log instead of send" mode)
+  // would print live reset links to stdout, where they can be scraped from
+  // logs and used to take over accounts.
+  if (!isDevMode() || process.env.NODE_ENV === "production") return;
   // Pull the first http(s) URL out of the rendered HTML — that's the link the
   // user would normally click. Helps QA flow through the dev log.
   const linkMatch = html.match(/https?:\/\/[^\s"'<>]+/i);

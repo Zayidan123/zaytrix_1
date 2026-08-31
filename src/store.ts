@@ -197,32 +197,43 @@ export const useGlobalStore = create<GlobalStore>((set) => ({
     safeLocalStorage.setItem("financara_settings", JSON.stringify(defaultSettings));
     return { settings: defaultSettings };
   }),
+  // DATA-21: boot logs must be HONEST. The previous entries claimed
+  // "Koneksi Mirae Asset & Stockbit Sandbox: Tersinkronisasi Sukses" — a
+  // fabricated success for broker integrations that are NOT connected. The
+  // broker-sandbox line now states the real state (manual mode / not
+  // connected), and the price-feed line says we are waiting for live data.
   executionLogs: [
     "[SYSTEM] Otentikasi Workspace Terintegrasi. Inisialisasi Terminal API...",
     "[SYSTEM] Deteksi sandboxed credentials. Menggunakan Kunci Simulasi Tanpa API Key Fisik.",
-    "[STATUS] Koneksi Mirae Asset & Stockbit Sandbox: Tersinkronisasi Sukses.",
-    "[STATUS] Sinkronisasi Portofolio Real-time dengan Server: Sinkronisasi Terpenuhi."
+    "[STATUS] Menunggu koneksi data pasar…",
+    "[STATUS] Sistem broker sandbox: tidak terhubung (mode manual)."
   ],
   backtestHistory: [],
   conversionHistory: getInitialConversionHistory(),
   ledgerHistory: getInitialLedgerHistory(),
   notificationConfig: getInitialNotificationConfig(),
   
-  // Real-time market streaming default values
-  liveBtcPrice: 68412.50,
-  liveEthPrice: 3824.10,
-  liveBnbPrice: 612.00,
-  liveXrpPrice: 2.50,
-  liveSolPrice: 168.00,
-  liveTrxPrice: 0.142,
-  liveHypePrice: 18.50,
-  btcPriceChangePercent: 1.42,
-  ethPriceChangePercent: -0.85,
-  bnbPriceChangePercent: 0.50,
-  xrpPriceChangePercent: 1.20,
-  solPriceChangePercent: 2.10,
-  trxPriceChangePercent: -0.15,
-  hypePriceChangePercent: 5.60,
+  // Real-time market streaming default values (DATA-21: previously seeded
+  // with hardcoded fake prices — BTC 68412.50, ETH 3824.10, change %s etc.
+  // — which rendered as "live" data before the first Binance WS tick
+  // arrived). Now initialized to 0 / neutral so consumers treat 0 as
+  // "not yet available" and render "—" (see App.tsx liveAssets override,
+  // OnChainData header, Dashboard metric cards). Real values arrive from
+  // the Binance WebSocket stream / HTTP poller in App.tsx.
+  liveBtcPrice: 0,
+  liveEthPrice: 0,
+  liveBnbPrice: 0,
+  liveXrpPrice: 0,
+  liveSolPrice: 0,
+  liveTrxPrice: 0,
+  liveHypePrice: 0,
+  btcPriceChangePercent: 0,
+  ethPriceChangePercent: 0,
+  bnbPriceChangePercent: 0,
+  xrpPriceChangePercent: 0,
+  solPriceChangePercent: 0,
+  trxPriceChangePercent: 0,
+  hypePriceChangePercent: 0,
   btcPriceDirection: "flat",
   ethPriceDirection: "flat",
   bnbPriceDirection: "flat",
@@ -230,7 +241,11 @@ export const useGlobalStore = create<GlobalStore>((set) => ({
   solPriceDirection: "flat",
   trxPriceDirection: "flat",
   hypePriceDirection: "flat",
-  tickerSource: "Local Simulation",
+  // DATA-21: "Local Simulation" no longer exists (the synthetic jitter
+  // generator was removed). The WS fallback HTTP poller starts on mount, so
+  // "HTTP Polling" is the honest initial label; flips to "WebSocket" on the
+  // first successful ws.onopen.
+  tickerSource: "HTTP Polling",
 
   setPortfolio: (portfolio) => set(() => {
     safeLocalStorage.setItem("financara_portfolio", JSON.stringify(portfolio));

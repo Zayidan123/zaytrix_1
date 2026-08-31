@@ -113,6 +113,8 @@ export default function TechnicalTerminal({
 
   const [history, setHistory] = useState<{ date: string; close: number }[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  // DATA-2: pesan jujur saat /api/history 503 (sumber real gagal — tidak ada data sintetis lagi)
+  const [historyError, setHistoryError] = useState<string | null>(null);
 
   // Dynamic history retrieval on instrument switch
   useEffect(() => {
@@ -125,10 +127,24 @@ export default function TechnicalTerminal({
           const payload = await res.json();
           if (active) {
             setHistory(payload.history || []);
+            setHistoryError(null);
           }
+        } else if (active) {
+          // 503: sumber real tidak tersedia — jangan render data sintetis.
+          let srvMsg = "Data historis real tidak tersedia dari sumber (Binance/Yahoo).";
+          try {
+            const errJson = await res.json();
+            if (errJson?.error) srvMsg = errJson.error;
+          } catch {}
+          setHistory([]);
+          setHistoryError(srvMsg);
         }
       } catch (err) {
         console.error("Gagal memuat riwayat harga untuk terminal:", err);
+        if (active) {
+          setHistory([]);
+          setHistoryError("Gagal memuat riwayat harga: " + (err as any)?.message);
+        }
       } finally {
         if (active) {
           setIsLoadingHistory(false);
@@ -645,6 +661,9 @@ export default function TechnicalTerminal({
           <div className="h-72 flex flex-col items-center justify-center bg-slate-950/20 border border-slate-800/40 rounded-xl">
             <span className="text-2xl text-slate-600 mb-2">📊</span>
             <p className="text-xs text-slate-500">Tidak ada data historis yang tersedia untuk {selectedSymbol}.</p>
+            {historyError && (
+              <p className="text-[10px] text-amber-400 font-mono mt-2 px-4 text-center leading-relaxed">{historyError}</p>
+            )}
           </div>
         ) : (
           <div className="space-y-4">

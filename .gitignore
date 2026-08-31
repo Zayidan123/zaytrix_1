@@ -23,3 +23,9 @@ postcss.config.mjs
 # FIX-D-11: vendored ClawHub skill catalogs (unrelated to ZAYTRIX app, ~MBs of bloat).
 # Files kept on disk for the skill system but untracked from git.
 skills/
+
+# SEC-1: user databases are NEVER tracked (db/custom.db contained real
+# credentials + PII and was committed once — purged 2026, rotate all secrets).
+# FUNC-13: dead artifacts removed from tracking
+mini-services/
+# runtime artifacts

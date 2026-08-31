@@ -7,20 +7,34 @@ import { Router, Request, Response } from "express";
 import crypto from "crypto";
 import { prisma } from "./db";
 import { logAudit } from "./audit";
-import jwt from "jsonwebtoken";
 
 // Lazy imports to avoid circular dependency (auth.ts imports webauthnRouter)
 let _requireAuth: any = null;
 let _getSessionSecret: any = null;
 let _TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60;
+let _recordSession: any = null;
+let _signSessionToken: any = null;
+let _setSessionCookie: any = null;
 async function getAuth() {
   if (!_requireAuth) {
     const auth = await import("./auth");
     _requireAuth = auth.requireAuth;
     _getSessionSecret = auth.getSessionSecret;
     _TOKEN_TTL_SECONDS = auth.TOKEN_TTL_SECONDS;
+    // SEC-5b / SEC-13: reuse auth.ts helpers so passkey sessions are recorded
+    // in the Session table (revocable) and carry identical JWT claims.
+    _recordSession = auth.recordSession;
+    _signSessionToken = auth.signSessionToken;
+    _setSessionCookie = auth.setSessionCookie;
   }
-  return { requireAuth: _requireAuth, getSessionSecret: _getSessionSecret, TOKEN_TTL_SECONDS: _TOKEN_TTL_SECONDS };
+  return {
+    requireAuth: _requireAuth,
+    getSessionSecret: _getSessionSecret,
+    TOKEN_TTL_SECONDS: _TOKEN_TTL_SECONDS,
+    recordSession: _recordSession,
+    signSessionToken: _signSessionToken,
+    setSessionCookie: _setSessionCookie,
+  };
 }
 
 // Middleware wrapper for lazy requireAuth
@@ -37,7 +51,23 @@ async function authMiddleware(req: Request, res: Response): Promise<boolean> {
 export const webauthnRouter = Router();
 
 // Temporary challenge store (in-memory, 5-min expiry)
+// REGISTRATION challenges stay keyed by userId (register/begin is authed and
+// the user identity is already established by requireAuth).
 const challenges = new Map<string, { challenge: string; expires: number }>();
+
+// SEC-10: LOGIN challenges are keyed by an opaque random `loginId`
+// (crypto.randomUUID) instead of userId. The client only ever sees
+// { loginId, challenge } — the server keeps userId + the allowed credential
+// IDs server-side. Previously /login/begin returned `userId` (internal cuid)
+// AND the raw credential ID list, leaking which emails have passkeys and
+// giving an attacker the allowList needed to craft assertions.
+interface LoginChallengeEntry {
+  challenge: string;
+  userId: string;
+  allowedCredentialIds: string[];
+  expires: number;
+}
+const loginChallenges = new Map<string, LoginChallengeEntry>();
 
 function generateChallenge(): string {
   return crypto.randomBytes(32).toString("base64url");
@@ -182,39 +212,61 @@ webauthnRouter.post("/login/begin", async (req: Request, res: Response) => {
   const user = await prisma.user.findUnique({ where: { email: String(email).toLowerCase() } });
   const creds = user ? await prisma.webAuthnCredential.findMany({ where: { userId: user.id } }) : [];
 
-  // FIX-C-4: uniform response prevents email enumeration + never echoes internal userId.
-  // Previously this endpoint returned distinct messages for "user not found" vs "no
-  // passkey registered" AND echoed `userId: user.id` (internal cuid) to the caller —
-  // leaking which emails are registered AND exposing an internal identifier. Now
-  // we always return success with a dummy challenge + empty credentialIds when
-  // the user is unknown or has no passkey. /login/finish will subsequently reject
-  // (no credential found for the (dummy) userId) — the attacker cannot brute-force
-  // userIds because they are cuid-based (high entropy).
+  // SEC-10 + anti-enumeration: the response shape is IDENTICAL whether the
+  // user exists, has no passkey, or has passkeys — always { loginId, challenge }.
+  // For an unknown user / no passkey we return a freshly-generated random
+  // loginId + a FAKE challenge that is never stored, so /login/finish will
+  // reject with the same "challenge expired" error as any other unknown
+  // loginId. No userId, no credential list, no timing-observable difference.
   if (!user || creds.length === 0) {
+    const dummyLoginId = crypto.randomUUID();
     const dummyChallenge = generateChallenge();
     return res.json({
       success: true,
+      loginId: dummyLoginId,
       challenge: dummyChallenge,
-      credentialIds: [], // empty — /login/finish will reject
     });
   }
 
-  const challenge = setChallenge(user.id);
-  res.json({
-    success: true,
+  // Real flow: store the challenge + allowed credentials under an opaque
+  // loginId. The client sends { loginId, assertion } to /login/finish; the
+  // server resolves userId + allowList internally.
+  const loginId = crypto.randomUUID();
+  const challenge = generateChallenge();
+  loginChallenges.set(loginId, {
     challenge,
     userId: user.id,
-    credentialIds: creds.map(c => c.credentialId),
+    allowedCredentialIds: creds.map((c) => c.credentialId),
+    expires: Date.now() + 5 * 60 * 1000,
+  });
+  res.json({
+    success: true,
+    loginId,
+    challenge,
   });
 });
 
 webauthnRouter.post("/login/finish", async (req: Request, res: Response) => {
-  const { userId, credentialId, signature, authenticatorData, clientDataJSON } = req.body;
-  const expectedChallenge = getChallenge(userId);
-  clearChallenge(userId);
+  // SEC-10: the client sends the opaque loginId (NOT userId). userId + the
+  // allowed credential list live only in the server-side challenge entry.
+  const { loginId, credentialId, signature, authenticatorData, clientDataJSON } = req.body;
 
-  if (!expectedChallenge) {
+  const entry = typeof loginId === "string" ? loginChallenges.get(loginId) : undefined;
+  if (entry) loginChallenges.delete(loginId); // single-use challenge
+
+  if (!entry || Date.now() > entry.expires) {
+    // Covers: unknown loginId (fake begin for unknown user), expired, or
+    // replayed loginId. Same generic error for all → no information leak.
     return res.status(400).json({ success: false, error: "Challenge kedaluwarsa." });
+  }
+  const userId = entry.userId;
+  const expectedChallenge = entry.challenge;
+
+  // The presented credential MUST be one of the credentials bound to this
+  // login attempt (the allowList never left the server — SEC-10).
+  if (!credentialId || !entry.allowedCredentialIds.includes(String(credentialId))) {
+    await logAudit(userId, "WEBAUTHN_LOGIN", req, false, { reason: "credential_not_allowed" });
+    return res.status(400).json({ success: false, error: "Kredensial tidak valid." });
   }
 
   try {
@@ -302,21 +354,21 @@ webauthnRouter.post("/login/finish", async (req: Request, res: Response) => {
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) return res.status(400).json({ success: false, error: "User tidak ditemukan." });
 
+    // SEC-13 + SEC-5b: issue the session via the SAME auth.ts helpers used by
+    // password/2FA/OAuth login — identical JWT claims (HS256 pinned, iss/aud)
+    // and, critically, a Session row so the passkey session is LISTED in
+    // /api/auth/sessions and can be REVOKED (previously passkey JWTs were
+    // invisible to the revocation system — SEC-5b). requireAuth is fail-closed
+    // (SEC-5), so without recordSession the cookie would be rejected on the
+    // very next request.
     const auth = await getAuth();
-    const token = jwt.sign(
-      { sub: user.id, email: user.email, displayName: user.displayName },
-      auth.getSessionSecret(),
-      { expiresIn: auth.TOKEN_TTL_SECONDS }
-    );
-
-    const isProd = process.env.NODE_ENV === "production";
-    res.cookie("zaytrix_session", token, {
-      httpOnly: true,
-      secure: isProd,
-      sameSite: "lax",
-      maxAge: auth.TOKEN_TTL_SECONDS * 1000,
-      path: "/",
+    const token = auth.signSessionToken({
+      sub: user.id,
+      email: user.email,
+      displayName: user.displayName,
     });
+    auth.setSessionCookie(res, token);
+    await auth.recordSession(req, user.id, token);
 
     await logAudit(user.id, "WEBAUTHN_LOGIN", req, true);
     res.json({

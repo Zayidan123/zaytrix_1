@@ -39,7 +39,7 @@ import { motion, AnimatePresence } from "motion/react";
 // OPT-7: Firebase removed — server-side JWT+Prisma (/api/auth/me) is the sole
 // auth source. The previous `auth` import from "./lib/firebase" is deleted.
 import { fetchCurrentUser } from "./lib/auth";
-import { fetchPortfolioFromServer, schedulePortfolioSync } from "./lib/portfolioSync";
+import { fetchPortfolioFromServer, schedulePortfolioSync, markAlertSynced } from "./lib/portfolioSync";
 import AuthScreen from "./components/AuthScreen";
 import SplashScreen from "./components/SplashScreen";
 
@@ -487,13 +487,21 @@ export default function App() {
     let hypePollingTimer: NodeJS.Timeout | null = null;
     let isWsActive = false;
 
+    // DATA-21: fetch the live HYPE price from public exchange APIs. The old
+    // `|| 18.50` / `|| 5.60` fallbacks fabricated a price + change% when the
+    // API failed — removed. On failure the store keeps its previous real
+    // value (or 0 = "—" on cold start); no fake price is ever written.
     const fetchHypePrice = async () => {
       try {
         const res = await fetch("https://api.gateio.ws/api/v4/spot/tickers?currency_pair=HYPE_USDT");
         if (res.ok) {
           const data = await res.json() as any;
           if (Array.isArray(data) && data.length > 0) {
-            updateHypePrice(parseFloat(data[0].last) || 18.50, parseFloat(data[0].change_percentage) || 5.60);
+            const price = parseFloat(data[0].last);
+            const change = parseFloat(data[0].change_percentage);
+            if (!isNaN(price) && price > 0) {
+              updateHypePrice(price, isNaN(change) ? undefined : change);
+            }
           }
         } else {
           const bybitRes = await fetch("https://api.bybit.com/v5/market/tickers?category=spot&symbol=HYPEUSDT");
@@ -501,7 +509,11 @@ export default function App() {
             const bybitData = await bybitRes.json() as any;
             const item = bybitData?.result?.list?.[0];
             if (item) {
-              updateHypePrice(parseFloat(item.lastPrice) || 18.50, parseFloat(item.price24hPcnt) * 100 || 5.60);
+              const price = parseFloat(item.lastPrice);
+              const change = parseFloat(item.price24hPcnt) * 100;
+              if (!isNaN(price) && price > 0) {
+                updateHypePrice(price, isNaN(change) ? undefined : change);
+              }
             }
           }
         }
@@ -674,60 +686,66 @@ export default function App() {
     createdAt: number;
   }[]>([]);
 
-  // Offline/Resilience fallback preloaded assets to guarantee smooth view and zero "Failed to fetch" crashes
-  const FALLBACK_LIVE_ASSETS: Asset[] = [
-    { id: "3", symbol: "BTC", name: "Bitcoin", category: "crypto", price: 68420, change24h: 4.5, volume24h: 28000000000, marketCap: 1300000000000 },
-    { id: "4", symbol: "ETH", name: "Ethereum", category: "crypto", price: 3540, change24h: 2.1, volume24h: 15000000000, marketCap: 420000000000 },
-    { id: "5", symbol: "SOL", name: "Solana", category: "crypto", price: 165.5, change24h: 8.4, volume24h: 4500000000, marketCap: 75000000000 },
-    { id: "6", symbol: "BNB", name: "Binance Coin", category: "crypto", price: 595.2, change24h: -1.5, volume24h: 1800000000, marketCap: 92000000000 }
-  ];
-
-  // Fetch real-time live fluctuating assets with React-Query standard caching and background refetching
-  const { data: serverAssets } = useQuery<Asset[]>({
+  // DATA-20 (FALLBACK_LIVE_ASSETS removed): the previous code shipped a
+  // hardcoded array of fake prices (BTC $68,420 / ETH $3,540 / SOL $165.5 /
+  // BNB $595.2 …) shown whenever /api/assets failed — fabricating "live"
+  // market data during an outage. Now:
+  //   • queryFn THROWS on failure (no fake return) → React Query keeps the
+  //     last successful `data` in cache → we render the last-known REAL prices
+  //     with a visible amber "OFFLINE" badge.
+  //   • if no successful response was ever received (cold start offline), the
+  //     ticker shows an honest "Koneksi data pasar terputus" message instead
+  //     of fabricated prices.
+  const { data: serverAssets, isError: assetsRequestFailed, isLoading: assetsLoading } = useQuery<Asset[]>({
     queryKey: ['assets'],
     queryFn: async () => {
-      try {
-        const res = await fetch("/api/assets");
-        if (!res.ok) throw new Error("Gagal mengambil data pasar.");
-        const contentType = res.headers.get("content-type");
-        if (!contentType || !contentType.includes("application/json")) {
-          throw new Error("Respon bukan JSON yang valid.");
-        }
-        return await res.json();
-      } catch (err) {
-        console.log("Mulai fallback lokal untuk live assets:", err);
-        return FALLBACK_LIVE_ASSETS;
+      const res = await fetch("/api/assets");
+      if (!res.ok) throw new Error(`Gagal mengambil data pasar (HTTP ${res.status}).`);
+      const contentType = res.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        throw new Error("Respon bukan JSON yang valid.");
       }
+      const payload = await res.json();
+      if (Array.isArray(payload) && payload.length > 0) {
+        return payload as Asset[];
+      }
+      // success:false or empty payload — treat as an outage, keep last-known cache.
+      throw new Error(payload?.error || "Data pasar kosong dari server.");
     },
-    refetchInterval: 2000, // 2-second real-time background polling
+    refetchInterval: 5000, // FUNC-7: relaxed from 2000ms to 5000ms — halves the request volume against the server rate limiter while still feeling live.
     refetchOnWindowFocus: false,
   });
 
-  const rawLiveAssets = serverAssets && serverAssets.length > 0 ? serverAssets : FALLBACK_LIVE_ASSETS;
+  // Last-known REAL assets (React Query preserves `data` across errors).
+  const rawLiveAssets = serverAssets && serverAssets.length > 0 ? serverAssets : [];
+  // True when the latest poll failed — drives the OFFLINE badge / disconnect banner.
+  const assetsOffline = assetsRequestFailed || (!assetsLoading && rawLiveAssets.length === 0);
 
   // Intercept raw asset values and override them with active centralized high-frequency prices.
-  // All 7 streamed/polled coins (BTC, ETH, BNB, XRP, SOL, TRX, HYPE) are overridden with live
+  // The 7 streamed/polled coins (BTC, ETH, BNB, XRP, SOL, TRX, HYPE) are overridden with live
   // Zustand store values so the ticker marquee and quick-action modals never display stale
   // /api/assets prices when a fresh live value is already available in the store.
+  // DATA-21: store prices initialize to 0 (no fake seeds) — a 0 value means
+  // "WS not connected yet", so we only override when the store value is > 0.
   const liveAssets = React.useMemo(() => {
     return rawLiveAssets.map((asset) => {
       // Case-insensitive symbol matching so "btc"/"Btc"/"BTC" all resolve to the same override.
       const symbolUpper = (asset.symbol || "").toUpperCase();
       switch (symbolUpper) {
         case "BTC":
-          return { ...asset, price: liveBtcPrice, change24h: btcPriceChangePercent };
+          return { ...asset, price: liveBtcPrice > 0 ? liveBtcPrice : asset.price, change24h: liveBtcPrice > 0 ? btcPriceChangePercent : asset.change24h };
         case "ETH":
-          return { ...asset, price: liveEthPrice, change24h: ethPriceChangePercent };
+          return { ...asset, price: liveEthPrice > 0 ? liveEthPrice : asset.price, change24h: liveEthPrice > 0 ? ethPriceChangePercent : asset.change24h };
         case "BNB":
-          return { ...asset, price: liveBnbPrice, change24h: bnbPriceChangePercent };
+          return { ...asset, price: liveBnbPrice > 0 ? liveBnbPrice : asset.price, change24h: liveBnbPrice > 0 ? bnbPriceChangePercent : asset.change24h };
         case "XRP":
-          return { ...asset, price: liveXrpPrice, change24h: xrpPriceChangePercent };
+          return { ...asset, price: liveXrpPrice > 0 ? liveXrpPrice : asset.price, change24h: liveXrpPrice > 0 ? xrpPriceChangePercent : asset.change24h };
         case "SOL":
-          return { ...asset, price: liveSolPrice, change24h: solPriceChangePercent };
+          return { ...asset, price: liveSolPrice > 0 ? liveSolPrice : asset.price, change24h: liveSolPrice > 0 ? solPriceChangePercent : asset.change24h };
         case "TRX":
-          return { ...asset, price: liveTrxPrice, change24h: trxPriceChangePercent };
+          return { ...asset, price: liveTrxPrice > 0 ? liveTrxPrice : asset.price, change24h: liveTrxPrice > 0 ? trxPriceChangePercent : asset.change24h };
         case "HYPE":
-          return { ...asset, price: liveHypePrice, change24h: hypePriceChangePercent };
+          return { ...asset, price: liveHypePrice > 0 ? liveHypePrice : asset.price, change24h: liveHypePrice > 0 ? hypePriceChangePercent : asset.change24h };
         default:
           return asset;
       }
@@ -835,20 +853,59 @@ export default function App() {
     }
   };
 
-  // Alarms
-  const handleAddAlert = (alert: Omit<AlertConfig, 'id' | 'createdAt'>) => {
+  // FUNC-8 (alert persistence): create an alert locally AND on the server
+  // (POST /api/portfolio/alerts — same body shape as PriceAlertsWidget.tsx:
+  // { symbol, condition: "above"|"below", targetPrice, createdAt } plus our
+  // locally generated `id` so server + local ids match and DELETE works).
+  // The server is the source of truth; on success the server-returned row is
+  // stored (which may add `triggered` state). On failure the alert is still
+  // created locally and will be pushed by portfolioSync on the next sync.
+  const handleAddAlert = async (alert: Omit<AlertConfig, 'id' | 'createdAt'>) => {
     const id = `a_${Math.random().toString(36).substring(2, 9)}`;
+    const createdAt = new Date().toISOString().split('T')[0];
     const newAlert: AlertConfig = {
       id,
       ...alert,
-      createdAt: new Date().toISOString().split('T')[0]
+      createdAt
     };
     setAlerts([newAlert, ...alerts]);
     triggerSystemNotification(`Alarm target harga ${alert.symbol} di pasang sukses.`);
+
+    // Server-side persistence (fire-and-forget, non-blocking UI).
+    try {
+      const res = await fetch("/api/portfolio/alerts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          id,
+          symbol: alert.symbol.toUpperCase(),
+          condition: (alert.condition || "").toLowerCase(), // server expects "above"/"below"
+          targetPrice: alert.targetPrice,
+          createdAt: new Date().toISOString()
+        })
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.success && data.alert) {
+        // Replace the optimistic local row with the canonical server row.
+        const canonicalId = data.alert.id || id;
+        setAlerts([ { ...newAlert, id: canonicalId }, ...alerts ]);
+        markAlertSynced(canonicalId);
+      }
+    } catch (e) {
+      console.log("[App] Gagal menyimpan alert ke server (akan dicoba lagi saat sinkronisasi):", e);
+    }
   };
 
+  // FUNC-8: remove locally + DELETE /api/portfolio/alerts/:id server-side
+  // (best-effort — offline removal still applies locally and the sync layer
+  // handles the residue).
   const handleRemoveAlert = (id: string) => {
     setAlerts(alerts.filter(a => a.id !== id));
+    fetch(`/api/portfolio/alerts/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      credentials: "include"
+    }).catch((e) => console.log("[App] Gagal menghapus alert dari server:", e));
   };
 
   // Auth gate — three possible states:
@@ -858,6 +915,19 @@ export default function App() {
   //                          flips true). This is NOT the old splash-user bypass.
   //   2. authReady && !user → no session cookie → show real AuthScreen.
   //   3. authReady && user  → authenticated → render the dashboard.
+  // FUNC-8 (alert persistence): after any successful login (password, 2FA,
+  // backup code, OAuth, register), pull the server-persisted portfolio data
+  // (holdings/ledger/conversions/alerts) into the store. Previously this only
+  // happened when a session cookie already existed at page load, so a fresh
+  // login never fetched the server-side alerts → alerts "disappeared" after
+  // re-login until the local sync pushed them again.
+  const handleAuthSuccess = (u: any) => {
+    // Map id → uid for legacy components (Profile.tsx, Dashboard.tsx)
+    // that read user.uid.
+    setUser({ ...u, uid: u.id });
+    fetchPortfolioFromServer();
+  };
+
   if (!authReady) {
     return <SplashScreen onComplete={() => { /* no-op while auth check in-flight */ }} />;
   }
@@ -865,11 +935,7 @@ export default function App() {
   if (!user) {
     return (
       <AuthScreen
-        onAuthSuccess={(u) => {
-          // Map id → uid for legacy components (Profile.tsx, Dashboard.tsx)
-          // that read user.uid.
-          setUser({ ...u, uid: u.id });
-        }}
+        onAuthSuccess={handleAuthSuccess}
       />
     );
   }
@@ -901,7 +967,7 @@ export default function App() {
       {/* Mobile Drawer Backdrop overlay */}
       {isMobileSidebarOpen && (
         <div 
-          className="fixed inset-0 bg-black/70 z-35 transition-opacity duration-300 md:hidden animate-fade-in"
+          className="fixed inset-0 bg-black/70 z-30 transition-opacity duration-300 md:hidden animate-fade-in"
           onClick={() => setIsMobileSidebarOpen(false)}
         />
       )}
@@ -932,7 +998,7 @@ export default function App() {
               className="md:hidden p-1.5 text-slate-400 hover:text-slate-100 focus:outline-none rounded hover:bg-slate-800 shrink-0 cursor-pointer"
               title="Menu Utama"
             >
-              <Menu className="w-5.5 h-5.5" />
+              <Menu className="w-5 h-5" />
             </button>
             <button 
               onClick={toggleSidebarCollapsed}
@@ -940,13 +1006,19 @@ export default function App() {
               className="hidden md:flex p-1.5 text-slate-400 hover:text-slate-100 focus:outline-none rounded hover:bg-slate-800 shrink-0 cursor-pointer border border-[#1E293B] bg-slate-900/60"
               title={isSidebarCollapsed ? "Buka Sidebar" : "Tutup Sidebar"}
             >
-              <Menu className="w-4.5 h-4.5" />
+              <Menu className="w-4 h-4" />
             </button>
             <div className="hidden sm:flex items-center space-x-2 border-r border-[#1E293B] pr-4 select-none shrink-0 z-20 bg-[#0F172A]">
               <span className="text-[10px] font-mono font-bold text-amber-500 flex items-center">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse inline-block mr-1.5"></span>
-                <span>BINANCE LIVE:</span>
+                <span className={`w-1.5 h-1.5 rounded-full ${assetsOffline ? "bg-rose-500" : "bg-emerald-500"} animate-pulse inline-block mr-1.5`}></span>
+                <span>{assetsOffline ? "PASAR:" : "BINANCE LIVE:"}</span>
               </span>
+              {/* DATA-20: visible OFFLINE badge when /api/assets is unreachable. */}
+              {assetsOffline && (
+                <span className="text-[9px] font-mono font-bold bg-amber-500/15 text-amber-400 border border-amber-500/40 px-1.5 py-0.5 rounded" title="Permintaan data pasar terakhir gagal — menampilkan data terakhir yang diketahui.">
+                  OFFLINE
+                </span>
+              )}
             </div>
             <div className="relative flex-1 overflow-hidden select-none pointer-events-auto" style={{ maskImage: 'linear-gradient(to right, transparent, #000 10%, #000 90%, transparent)', WebkitMaskImage: 'linear-gradient(to right, transparent, #000 10%, #000 90%, transparent)' }}>
               <div className="inline-flex whitespace-nowrap animate-marquee py-1 hover:[animation-play-state:paused] pointer-events-auto">
@@ -995,7 +1067,7 @@ export default function App() {
                           </span>
 
                           {/* Interactive Quick Action Buttons directly in ticker stream */}
-                          <div className="flex items-center gap-1 pl-1.5 border-l border-slate-850">
+                          <div className="flex items-center gap-1 pl-1.5 border-l border-slate-800">
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -1021,7 +1093,7 @@ export default function App() {
                                 e.stopPropagation();
                                 handleQuickAction(asset, "details");
                               }}
-                              className="text-[9px] font-mono font-bold px-1.5 py-0.5 bg-slate-800 hover:bg-slate-705 text-slate-300 border border-slate-700 rounded transition-colors cursor-pointer"
+                              className="text-[9px] font-mono font-bold px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded transition-colors cursor-pointer"
                               title={`Detail Aset ${asset.symbol}`}
                             >
                               Detail
@@ -1031,8 +1103,14 @@ export default function App() {
                       );
                     });
                   })()
+                ) : assetsOffline ? (
+                  // DATA-20: honest disconnect message — no fake prices, no crash.
+                  <span className="text-xs font-mono text-rose-400 px-4 flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
+                    Koneksi data pasar terputus
+                  </span>
                 ) : (
-                  <span className="text-xs font-mono text-slate-600 px-4">Initializing Binance WebStream...</span>
+                  <span className="text-xs font-mono text-slate-600 px-4">Menghubungkan ke data pasar…</span>
                 )}
               </div>
             </div>
@@ -1264,7 +1342,7 @@ export default function App() {
                         />
                       </div>
 
-                      <div className="bg-slate-950 border border-slate-850 p-3 rounded-lg flex justify-between items-center text-xs">
+                      <div className="bg-slate-950 border border-slate-800 p-3 rounded-lg flex justify-between items-center text-xs">
                         <span className="text-slate-400">Total Biaya Pembelian:</span>
                         <span className="text-sm font-mono font-bold text-emerald-400">
                           ${((parseFloat(quickQuantity) || 0) * (parseFloat(quickPrice) || 0)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
@@ -1313,7 +1391,7 @@ export default function App() {
                       </div>
 
                       <div className="space-y-3">
-                        <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-850 flex justify-between items-center text-xs">
+                        <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800 flex justify-between items-center text-xs">
                           <span className="text-slate-400">Kepemilikan Aktif:</span>
                           <span className="text-slate-200 font-mono font-semibold">
                             {ownedQty} {selectedQuickAsset.symbol}
@@ -1361,7 +1439,7 @@ export default function App() {
                           />
                         </div>
 
-                        <div className="bg-slate-950 border border-slate-850 p-3 rounded-lg flex justify-between items-center text-xs">
+                        <div className="bg-slate-950 border border-slate-800 p-3 rounded-lg flex justify-between items-center text-xs">
                           <span className="text-slate-400">Total Penerimaan:</span>
                           <span className="text-sm font-mono font-bold text-rose-400">
                             ${((parseFloat(quickQuantity) || 0) * (parseFloat(quickPrice) || 0)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
@@ -1416,31 +1494,31 @@ export default function App() {
                       </div>
 
                       <div className="grid grid-cols-2 gap-3 text-xs">
-                        <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-850">
+                        <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
                           <span className="block text-[9px] uppercase font-mono text-slate-500 font-bold mb-0.5">Kategori</span>
                           <span className="text-slate-300 font-semibold uppercase">{selectedQuickAsset.category}</span>
                         </div>
 
-                        <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-850">
+                        <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
                           <span className="block text-[9px] uppercase font-mono text-slate-500 font-bold mb-0.5">Kepemilikan Anda</span>
                           <span className="text-slate-300 font-mono font-semibold">{ownedQty} Unit</span>
                         </div>
 
-                        <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-850">
+                        <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
                           <span className="block text-[9px] uppercase font-mono text-slate-500 font-bold mb-0.5">Harga Terkini</span>
                           <span className="text-slate-200 font-mono font-bold">
                             ${price < 0.01 ? price.toFixed(6) : price.toLocaleString()}
                           </span>
                         </div>
 
-                        <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-850">
+                        <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
                           <span className="block text-[9px] uppercase font-mono text-slate-500 font-bold mb-0.5">Perubahan 24 Jam</span>
                           <span className={`font-mono font-bold ${isPriceUp ? "text-emerald-400" : "text-rose-500"}`}>
                             {isPriceUp ? "+" : ""}{change}%
                           </span>
                         </div>
 
-                        <div className="col-span-2 bg-slate-950 p-2.5 rounded-lg border border-slate-850 space-y-1">
+                        <div className="col-span-2 bg-slate-950 p-2.5 rounded-lg border border-slate-800 space-y-1">
                           <div className="flex justify-between">
                             <span className="text-[9px] uppercase font-mono text-slate-500 font-bold">Kapitalisasi Pasar</span>
                             <span className="text-slate-300 font-mono font-medium">${(selectedQuickAsset.marketCap ?? 0).toLocaleString()} USD</span>
@@ -1452,7 +1530,7 @@ export default function App() {
                         </div>
                       </div>
 
-                      <div className="p-3 bg-slate-950/80 rounded-lg ring-1 ring-slate-850 text-[11px] leading-relaxed text-slate-400">
+                      <div className="p-3 bg-slate-950/80 rounded-lg ring-1 ring-slate-800 text-[11px] leading-relaxed text-slate-400">
                         <span className="font-semibold text-slate-200 flex items-center gap-1.5 mb-1 text-xs">
                           <Sparkles className="w-3.5 h-3.5 text-amber-400" /> Sentiment AI Core: {(selectedQuickAsset.symbol && assetSentiments[selectedQuickAsset.symbol]) === "bullish" ? "BULLISH" : "BEARISH"}
                         </span>
@@ -1547,7 +1625,7 @@ export default function App() {
                       </div>
 
                       <div className="space-y-3">
-                        <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-850 flex justify-between items-center text-xs">
+                        <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800 flex justify-between items-center text-xs">
                           <span className="text-slate-400">Kepemilikan Aktif:</span>
                           <span className="text-slate-200 font-mono font-semibold">
                             {ownedQty} {selectedQuickAsset.symbol}
@@ -1642,7 +1720,7 @@ export default function App() {
                           const targetQtyReceived = (initialTargetQty - feePaidTarget) * (1 - (slippageTolerance / 100));
 
                           return (
-                            <div className="bg-slate-950 border border-slate-855 p-3 rounded-lg space-y-2 text-xs">
+                            <div className="bg-slate-950 border border-slate-800 p-3 rounded-lg space-y-2 text-xs">
                               <div className="flex justify-between text-slate-400">
                                 <span>Harga {selectedQuickAsset.symbol}:</span>
                                 <span className="font-mono text-slate-200">${sourcePrice < 0.01 ? sourcePrice.toFixed(6) : sourcePrice.toLocaleString()}</span>
@@ -1695,7 +1773,7 @@ export default function App() {
         </AnimatePresence>
 
         {/* Status Bar/Footer with live parameters */}
-        <footer className="h-8 bg-[#0F172A] border-t border-slate-800 px-4 sm:px-6 flex items-center justify-between z-15 text-[10px] text-slate-500 shrink-0 select-none">
+        <footer className="h-8 bg-[#0F172A] border-t border-slate-800 px-4 sm:px-6 flex items-center justify-between z-10 text-[10px] text-slate-500 shrink-0 select-none">
           <div className="flex items-center space-x-2 sm:space-x-4">
             <div className="flex items-center space-x-1.5">
               <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />

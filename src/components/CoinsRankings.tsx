@@ -27,12 +27,12 @@ interface CoinData {
   name: string;
   price: number;
   change24h: number;
-  change7d: number;
+  change7d: number | null; // DATA-11: null = sumber real tidak menyediakan data 7 hari
   marketCap: number;
   volume24h: number;
   circulatingSupply: number;
   sector: "L1/L2" | "DeFi" | "Stablecoin" | "AI" | "Meme" | "Infrastructure";
-  sparkline: number[];
+  sparkline: number[] | null; // DATA-11: null = sembunyikan sparkline (tidak ada data real)
 }
 
 // NOTE: The previous `generate100Coins()` function (30 hardcoded stale coins
@@ -79,7 +79,7 @@ export default function CoinsRankings() {
                 const newPrice = live.price;
                 const scaleRatio = oldPrice > 0 ? newPrice / oldPrice : 1;
                 // Scale historical sparkline values to match the current real price seamlessly
-                const updatedSparkline = coin.sparkline.map((val) => val * scaleRatio);
+                const updatedSparkline = coin.sparkline ? coin.sparkline.map((val) => val * scaleRatio) : null;
 
                 return {
                   ...coin,
@@ -214,7 +214,7 @@ export default function CoinsRankings() {
       // Binance new-listings endpoint available, so we derive "new" from the
       // LIVE gainers list as a transparent proxy: highest 7-day movers
       // (fresh momentum). No hardcoded symbol list — purely data-driven.
-      list.sort((a, b) => b.change7d - a.change7d);
+      list.sort((a, b) => (b.change7d ?? -Infinity) - (a.change7d ?? -Infinity));
     }
 
     return list;
@@ -492,7 +492,8 @@ export default function CoinsRankings() {
                 <tbody className="divide-y divide-slate-850 text-xs font-semibold">
                   {paginatedCoins.map((coin) => {
                     const isBullish24h = coin.change24h >= 0;
-                    const isBullish7d = coin.change7d >= 0;
+                    const change7dVal = typeof coin.change7d === "number" ? coin.change7d : null;
+                    const isBullish7d = change7dVal !== null ? change7dVal >= 0 : coin.change24h >= 0;
                     return (
                       <tr key={coin.id} className="hover:bg-slate-900/50 transition-colors">
                         <td className="py-4 px-5 font-mono text-slate-400 font-bold">
@@ -518,8 +519,8 @@ export default function CoinsRankings() {
                         <td className={`py-4 px-4 text-right font-mono font-bold ${isBullish24h ? "text-emerald-400" : "text-rose-500"}`}>
                           {isBullish24h ? "+" : ""}{coin.change24h.toFixed(2)}%
                         </td>
-                        <td className={`py-4 px-4 text-right font-mono font-bold ${isBullish7d ? "text-emerald-400" : "text-rose-500"}`}>
-                          {isBullish7d ? "+" : ""}{coin.change7d.toFixed(2)}%
+                        <td className={`py-4 px-4 text-right font-mono font-bold ${change7dVal === null ? "text-slate-600" : (isBullish7d ? "text-emerald-400" : "text-rose-500")}`}>
+                          {change7dVal === null ? "—" : `${isBullish7d ? "+" : ""}${change7dVal.toFixed(2)}%`}
                         </td>
                         <td className="py-4 px-4 text-right font-mono text-slate-300">
                           ${coin.marketCap.toLocaleString()}
@@ -531,26 +532,30 @@ export default function CoinsRankings() {
                           {coin.circulatingSupply.toLocaleString(undefined, { maximumFractionDigits: 0 })} <span className="text-[10px] text-slate-500 font-bold">{coin.symbol}</span>
                         </td>
                         <td className="py-4 px-5">
-                          {/* Beautiful svg mini sparkline */}
-                          <div className="w-16 h-8 flex items-center justify-center mx-auto">
-                            <svg className="w-full h-full" viewBox="0 0 100 40">
-                              <polyline
-                                fill="none"
-                                stroke={isBullish24h ? "#34d399" : "#f43f5e"}
-                                strokeWidth="1.8"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                points={coin.sparkline.map((val, idx) => {
-                                  const min = Math.min(...coin.sparkline);
-                                  const max = Math.max(...coin.sparkline);
-                                  const range = max - min || 1;
-                                  const x = (idx / (coin.sparkline.length - 1)) * 95 + 2.5;
-                                  const y = 38 - ((val - min) / range) * 32;
-                                  return `${x},${y}`;
-                                }).join(" ")}
-                              />
-                            </svg>
-                          </div>
+                          {/* DATA-11: sparkline hanya dirender bila data real tersedia */}
+                          {coin.sparkline && coin.sparkline.length > 1 ? (
+                            <div className="w-16 h-8 flex items-center justify-center mx-auto">
+                              <svg className="w-full h-full" viewBox="0 0 100 40">
+                                <polyline
+                                  fill="none"
+                                  stroke={isBullish24h ? "#34d399" : "#f43f5e"}
+                                  strokeWidth="1.8"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  points={coin.sparkline.map((val, idx) => {
+                                    const min = Math.min(...coin.sparkline);
+                                    const max = Math.max(...coin.sparkline);
+                                    const range = max - min || 1;
+                                    const x = (idx / (coin.sparkline.length - 1)) * 95 + 2.5;
+                                    const y = 38 - ((val - min) / range) * 32;
+                                    return `${x},${y}`;
+                                  }).join(" ")}
+                                />
+                              </svg>
+                            </div>
+                          ) : (
+                            <div className="w-16 h-8 flex items-center justify-center mx-auto text-slate-600 text-[10px] font-mono">—</div>
+                          )}
                         </td>
                       </tr>
                     );

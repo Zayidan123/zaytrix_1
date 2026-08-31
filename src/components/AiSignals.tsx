@@ -228,9 +228,6 @@ export default function AiSignals({ assets }: AiSignalsProps) {
       const headers: Record<string, string> = {
         "Content-Type": "application/json"
       };
-      if (settings.geminiKey) {
-        headers["X-Gemini-Key"] = settings.geminiKey;
-      }
 
       const res = await fetch("/api/gemini/trading-signals/analyze", {
         method: "POST",

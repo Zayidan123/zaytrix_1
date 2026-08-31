@@ -1,18 +1,12 @@
 import React, { useState, useEffect } from "react";
-import { safeLocalStorage } from "../utils/safeStorage";
 import { useGlobalStore } from "../store";
 import { sendAlertSecurely } from "../services/webhookService";
-import { 
-  Cpu, 
-  Check, 
-  X, 
-  HelpCircle, 
-  Power, 
-  Key, 
-  Terminal, 
-  RefreshCw, 
-  Zap, 
-  Play,
+import {
+  Cpu,
+  Key,
+  Terminal,
+  RefreshCw,
+  Zap,
   Lock,
   Eye,
   EyeOff,
@@ -27,12 +21,9 @@ import {
 export default function ApiAutomation() {
   const [useSandbox, setUseSandbox] = useState(true);
   const [selectedExchange, setSelectedExchange] = useState("Binance");
-  const [apiKey, setApiKey] = useState("SANDBOX_MOCK_PROX_KEY_FIN_9958");
+  const [apiKey, setApiKey] = useState("");
   const [apiSecret, setApiSecret] = useState("");
   const [exchangePassphrase, setExchangePassphrase] = useState("");
-  // Default Master PIN is intentionally empty — user must enter their own PIN to derive the AES key.
-  // Previously hardcoded "ZAYTRIX-ACCESS-2026" was a publicly-known default that anyone with source code could use to decrypt stored keys.
-  const [masterPin, setMasterPin] = useState("");
   const [webHookUrl, setWebHookUrl] = useState("https://api.zaytrix.co/v1/webhook");
 
   // User-configurable trade parameters (previously hardcoded BTC 0.05).
@@ -41,8 +32,13 @@ export default function ApiAutomation() {
   const [tradeSide, setTradeSide] = useState<"buy" | "sell">("buy");
   
   const [showSecretField, setShowSecretField] = useState(false);
-  const [isEncrypted, setIsEncrypted] = useState(false);
-  const [encrypting, setEncrypting] = useState(false);
+  // FUNC-4: server-side encrypted key store (AES-256-GCM via /api/user/api-keys).
+  // The old client-side "E2EE" localStorage flow was removed — it never fed
+  // the trade executor (server only reads DB-stored keys), and its marketing
+  // claims ("terenkripsi mutlak di browser") were false since keys were
+  // decrypted in the browser and sent as plaintext JSON.
+  const [storedKeys, setStoredKeys] = useState<Array<{ id: string; exchange: string; label: string; keyMasked: string; hasPassphrase: boolean; createdAt: string }>>([]);
+  const [savingKeys, setSavingKeys] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isExecuting, setIsExecuting] = useState(false);
   
@@ -120,208 +116,114 @@ export default function ApiAutomation() {
   
   const [executionLogs, setExecutionLogs] = useState<string[]>([
     `[SYSTEM] Otentikasi Workspace Terintegrasi. Inisialisasi Terminal API Tanggal: ${new Date().toISOString()}`,
-    "[SECURITY] Enkripsi End-To-End (E2EE) AES-GCM 256-bit tersedia — belum aktif sampai Anda memasukkan Master PIN dan mengenkripsi kredensial.",
+    "[SECURITY] API key bursa disimpan terenkripsi AES-256-GCM di server (ENCRYPTION_KEY) — hanya dipakai untuk menandatangani order Anda.",
     "[STATUS] Pemantauan Gateway Bursa: Menggunakan Mode Sandboxing Utama.",
-    "[STATUS] Kredensial bursa tersimpan plaintext di memori sampai Anda mengekripsi (Master PIN wajib diisi)."
+    "[STATUS] Kunci tersimpan tampil ter-masked (••••) dan dapat dihapus kapan saja."
   ]);
 
-  // Load E2E encrypted key states from local storage if existing
+  const appendLog = (line: string) => setExecutionLogs(prev => [...prev, line]);
+
+  // FUNC-4: load the server-side encrypted key store (masked list) on mount
+  // and whenever the selected exchange changes.
+  const loadStoredKeys = async () => {
+    try {
+      const res = await fetch("/api/user/api-keys", { credentials: "include" });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.success && Array.isArray(data.keys)) {
+        setStoredKeys(data.keys);
+        const mine = data.keys.find((k: any) => k.exchange.toLowerCase() === selectedExchange.toLowerCase() && k.label === "default");
+        if (mine) {
+          appendLog(`[SECURITY] Kunci ${selectedExchange} (label "default", tampil ${mine.keyMasked}) ditemukan terenkripsi di server — order real AKTIF.`);
+        }
+      }
+    } catch {
+      // Non-fatal — key store unavailable; sandbox still works.
+    }
+  };
+
   useEffect(() => {
     // Reset connection status on configuration change for authentic real-time validation
     setConnectionStatus("not_tested");
     setStatusDetails("");
     setLastCheckLatency(null);
+    loadStoredKeys();
+  }, [selectedExchange, useSandbox]);
 
-    const savedCipher = safeLocalStorage.getItem(`zaytrix_e2ee_${selectedExchange}_key`);
-    if (savedCipher) {
-      setApiKey("••••••••••••••••••••••••••••••••");
-      setApiSecret("••••••••••••••••••••••••••••••••");
-      setExchangePassphrase("••••••••••••");
-      setIsEncrypted(true);
-      setExecutionLogs(prev => [
-        ...prev,
-        `[SECURITY] Terdeteksi kunci sandi E2EE terdaftar untuk ${selectedExchange} di penyimpanan lokal browser.`
-      ]);
-    } else {
-      if (useSandbox) {
-        setApiKey("SANDBOX_MOCK_PROX_KEY_FIN_9958");
-        setApiSecret("SANDBOX_SECRET_KEY_PROX_74482");
-        setExchangePassphrase("");
-      } else {
+  // FUNC-4: save exchange keys to the SERVER-side encrypted store
+  // (POST /api/user/api-keys with label "default" — this is what the trade
+  // executor actually reads). Keys are AES-256-GCM encrypted server-side.
+  const handleSaveKeysToServer = async () => {
+    if (!apiKey || !apiSecret) {
+      appendLog("[!] ERROR: Isikan API Key & Secret Key sebelum menyimpan ke vault server.");
+      return;
+    }
+    setSavingKeys(true);
+    appendLog(`[SECURITY] Mengenkripsi kunci ${selectedExchange} (AES-256-GCM) dan menyimpan ke vault server...`);
+    try {
+      const res = await fetch("/api/user/api-keys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          exchange: selectedExchange,
+          apiKey: apiKey.trim(),
+          apiSecret: apiSecret.trim(),
+          passphrase: exchangePassphrase.trim() || undefined,
+          label: "default"
+        })
+      });
+      const reply = await res.json().catch(() => null);
+      if (res.ok && reply?.success) {
+        appendLog(`[SECURITY] SUCCESS: Kunci ${selectedExchange} tersimpan terenkripsi di server (tampil: ${reply.key?.keyMasked || "••••"}). Order real kini AKTIF.`);
         setApiKey("");
         setApiSecret("");
         setExchangePassphrase("");
+        await loadStoredKeys();
+      } else {
+        appendLog(`[!] ERROR: ${reply?.error || "Gagal menyimpan kunci ke server."}`);
       }
-      setIsEncrypted(false);
-    }
-  }, [selectedExchange, useSandbox]);
-
-  // Client-Side PBKDF2 + AES-GCM 256 Key Deriver and Encrypter
-  const handleClientSideEncryptKeys = async () => {
-    if (!masterPin) {
-      setExecutionLogs(prev => [...prev, "[!] ERROR: Sandi Master PIN diperlukan untuk melahirkan hash enkripsi client-side."]);
-      return;
-    }
-    if (!apiKey || !apiSecret) {
-      setExecutionLogs(prev => [...prev, "[!] ERROR: Isikan API Key & Secret Key sebelum melakukan registrasi E2EE."]);
-      return;
-    }
-
-    setEncrypting(true);
-    try {
-      const encoder = new TextEncoder();
-      const payloadString = JSON.stringify({
-        key: apiKey,
-        secret: apiSecret,
-        passphrase: exchangePassphrase
-      });
-
-      const rawPin = encoder.encode(masterPin);
-      const baseKey = await window.crypto.subtle.importKey(
-        "raw",
-        rawPin,
-        "PBKDF2",
-        false,
-        ["deriveKey"]
-      );
-
-      const salt = encoder.encode(`zaytrix_e2ee_api_${selectedExchange}_salt`);
-      const derivedKey = await window.crypto.subtle.deriveKey(
-        {
-          name: "PBKDF2",
-          salt: salt,
-          iterations: 100000,
-          hash: "SHA-256"
-        },
-        baseKey,
-        { name: "AES-GCM", length: 256 },
-        false,
-        ["encrypt"]
-      );
-
-      const iv = window.crypto.getRandomValues(new Uint8Array(12));
-      const encryptedBuffer = await window.crypto.subtle.encrypt(
-        {
-          name: "AES-GCM",
-          iv: iv
-        },
-        derivedKey,
-        encoder.encode(payloadString)
-      );
-
-      const encryptedBytes = new Uint8Array(encryptedBuffer);
-      const combined = new Uint8Array(iv.length + encryptedBytes.length);
-      combined.set(iv, 0);
-      combined.set(encryptedBytes, iv.length);
-
-      let binary = "";
-      for (let i = 0; i < combined.byteLength; i++) {
-        binary += String.fromCharCode(combined[i]);
-      }
-      const cipherText = btoa(binary);
-
-      // Save secure payload locally
-      safeLocalStorage.setItem(`zaytrix_e2ee_${selectedExchange}_key`, cipherText);
-      setIsEncrypted(true);
-      
-      setExecutionLogs(prev => [
-        ...prev,
-        `[SECURITY] SUCCESS: API Key & Secret rahasia untuk bursa ${selectedExchange} berhasil dienkripsi lokal!`,
-        `[DEC] Master PIN melahirkan hash 256-bit AES. Ciphertext tersimpan aman: ${cipherText.substring(0, 32)}...`
-      ]);
     } catch (err: any) {
-      setExecutionLogs(prev => [...prev, `[!] FATAL ENCRYPTION FAULT: ${err.message}`]);
+      appendLog(`[!] ERROR JARINGAN: ${err?.message || err}`);
     } finally {
-      setEncrypting(false);
+      setSavingKeys(false);
     }
   };
 
-  // Delete saved keys
-  const handleClearSavedKeys = () => {
-    safeLocalStorage.removeItem(`zaytrix_e2ee_${selectedExchange}_key`);
-    setApiKey("");
-    setApiSecret("");
-    setExchangePassphrase("");
-    setIsEncrypted(false);
-    setExecutionLogs(prev => [
-      ...prev,
-      `[SECURITY] Menghapus kredensial terenkripsi bursa ${selectedExchange} dari memori lokal.`
-    ]);
-  };
-
-  // Helper to extract decrypted plaintext keys to transmit over secure HTTPS TLS channel
-  const getDecryptedPlaintextKeys = async (): Promise<{ key: string, secret: string, passphrase?: string } | null> => {
-    if (useSandbox) {
-      return { key: "SANDBOX_MOCK_PROX_KEY_FIN_9958", secret: "SANDBOX_SECRET_KEY_PROX_74482", passphrase: "" };
-    }
-    if (!isEncrypted) {
-      return { key: apiKey, secret: apiSecret, passphrase: exchangePassphrase };
-    }
-    
-    // Decrypt on demand
-    const savedCipher = safeLocalStorage.getItem(`zaytrix_e2ee_${selectedExchange}_key`);
-    if (!savedCipher) return null;
-    
+  // FUNC-4: delete a stored key from the server-side vault
+  const handleDeleteServerKey = async (id: string, exchange: string) => {
     try {
-      const encoder = new TextEncoder();
-      const rawPin = encoder.encode(masterPin);
-      if (!masterPin) {
-        throw new Error("Sandi Master PIN kosong. PIN Anda diperlukan untuk membongkar berkas kunci.");
+      const res = await fetch(`/api/user/api-keys/${id}`, {
+        method: "DELETE",
+        credentials: "include"
+      });
+      const reply = await res.json().catch(() => null);
+      if (res.ok && reply?.success) {
+        appendLog(`[SECURITY] Kunci ${exchange} dihapus dari vault server — order untuk bursa ini kembali ke mode simulasi.`);
+        await loadStoredKeys();
+      } else {
+        appendLog(`[!] ERROR: ${reply?.error || "Gagal menghapus kunci."}`);
       }
-      
-      const baseKey = await window.crypto.subtle.importKey(
-        "raw",
-        rawPin,
-        "PBKDF2",
-        false,
-        ["deriveKey"]
-      );
+    } catch (err: any) {
+      appendLog(`[!] ERROR JARINGAN: ${err?.message || err}`);
+    }
+  };
 
-      const salt = encoder.encode(`zaytrix_e2ee_api_${selectedExchange}_salt`);
-      const derivedKey = await window.crypto.subtle.deriveKey(
-        {
-          name: "PBKDF2",
-          salt: salt,
-          iterations: 100000,
-          hash: "SHA-256"
-        },
-        baseKey,
-        { name: "AES-GCM", length: 256 },
-        false,
-        ["decrypt"]
-      );
-
-      const binaryString = atob(savedCipher);
-      const combined = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        combined[i] = binaryString.charCodeAt(i);
+  // FUNC-4: probe a stored key via the server (decrypt + real exchange auth test)
+  const handleTestServerKey = async (id: string, exchange: string) => {
+    appendLog(`[PING] Menguji otentikasi kunci ${exchange} (id ${id}) ke bursa...`);
+    try {
+      const res = await fetch(`/api/user/api-keys/${id}/test`, {
+        method: "POST",
+        credentials: "include"
+      });
+      const reply = await res.json().catch(() => null);
+      if (res.ok && reply?.success && reply.probe?.ok) {
+        appendLog(`[STATUS] Kunci ${exchange} VALID — bursa menerima otentikasi (${reply.probe.detail || "OK"}).`);
+      } else {
+        appendLog(`[!] Kunci ${exchange} ditolak bursa: ${reply?.probe?.error || reply?.error || "tidak diketahui"}. Kunci tetap tersimpan terenkripsi.`);
       }
-      
-      if (combined.length < 12) {
-        throw new Error("Ciphertext rusak.");
-      }
-      
-      const iv = combined.slice(0, 12);
-      const ciphertextBytes = combined.slice(12);
-      
-      const plainBuffer = await window.crypto.subtle.decrypt(
-        {
-          name: "AES-GCM",
-          iv: iv
-        },
-        derivedKey,
-        ciphertextBytes
-      );
-      
-      const decoder = new TextDecoder();
-      const decodedPayload = JSON.parse(decoder.decode(plainBuffer));
-      return {
-        key: decodedPayload.key,
-        secret: decodedPayload.secret,
-        passphrase: decodedPayload.passphrase
-      };
-    } catch (e: any) {
-      throw new Error(`Master PIN salah atau dekripsi gagal! (${e.message})`);
+    } catch (err: any) {
+      appendLog(`[!] ERROR JARINGAN: ${err?.message || err}`);
     }
   };
 
@@ -338,24 +240,17 @@ export default function ApiAutomation() {
     ]);
 
     try {
-      // Direct in-memory secure payload extraction
-      const decryptedKeys = await getDecryptedPlaintextKeys();
-      if (!decryptedKeys && !useSandbox) {
-        throw new Error("Kredensial API bursa tidak ditemukan atau belum dienkripsi.");
-      }
-
+      // FUNC-4: the server resolves keys from its own encrypted vault
+      // (label "default") — the browser never ships plaintext secrets here.
       const payloadBody = {
         exchange: selectedExchange,
-        useSandbox,
-        apiKey: decryptedKeys?.key || "SANDBOX",
-        apiSecret: decryptedKeys?.secret || "",
-        passphrase: decryptedKeys?.passphrase || "",
-        hasE2E: isEncrypted
+        useSandbox
       };
 
       const res = await fetch("/api/trade/connect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify(payloadBody)
       });
 
@@ -387,7 +282,7 @@ export default function ApiAutomation() {
           ...prev,
           `[STATUS] KONEKSI ONLINE: Berhasil sinkronisasi status bursa ${selectedExchange}.`,
           `[SYSTEM] Real Order Book Price: $${reply.tickerPrice.toLocaleString()} - Saldo Portofolio Terkait: ${balanceStr} USDT [sumber: ${balanceSourceLabel}].`,
-          `[SECURITY] Enkripsi end-to-end terverifikasi aman antara browser dan bursa ${selectedExchange} (${reply.hasE2EEncountered ? 'E2EE' : 'Plain-Secured'}).`
+          `[SECURITY] Kunci diambil dari vault terenkripsi server (AES-256-GCM) untuk bursa ${selectedExchange} — browser tidak menyimpan kunci plaintext.`
         ]);
       } else {
         setConnectionStatus("failed");
@@ -427,22 +322,18 @@ export default function ApiAutomation() {
     ]);
 
     try {
-      const decryptedKeys = await getDecryptedPlaintextKeys();
-      if (!decryptedKeys && !useSandbox) {
-        throw new Error("Kredensial API bursa tidak ditemukan atau belum dienkripsi.");
-      }
-
+      // FUNC-4: keys are resolved server-side from the encrypted vault.
+      // Sandbox mode = simulation; with stored keys = REAL signed order.
       const res = await fetch("/api/trade/execute", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           exchange: selectedExchange,
           symbol: tradeSymbol.trim() || "BTC",
           amount: parseFloat(tradeAmount) || 0,
           side: tradeSide,
-          useSandbox,
-          apiKey: decryptedKeys?.key || "",
-          apiSecret: decryptedKeys?.secret || ""
+          useSandbox
         })
       });
 
@@ -456,7 +347,7 @@ export default function ApiAutomation() {
           : "Order terisi");
         setExecutionLogs(prev => [
           ...prev,
-          `[AES] Transmisi pesan order terenkripsi E2E berhasil dilewati bursa.`,
+          `[SECURITY] Order ditandatangani HMAC server-side dengan kunci terenkripsi dari vault ${selectedExchange}.`,
           isSim
             ? `[ORDER] SIMULASI: ${tradeSide.toUpperCase()} ${tradeAmount} ${tradeSymbol.toUpperCase()} diproses pada harga live (TIDAK dieksekusi di bursa sungguhan).`
             : `[ORDER] SUCCESS: Real order ${tradeSide.toUpperCase()} ${tradeAmount} ${tradeSymbol.toUpperCase()} terisi secara aman!`,
@@ -488,7 +379,7 @@ export default function ApiAutomation() {
           <Cpu className="w-5 h-5 text-blue-500" /> Integrasi API Bursa Saham & Kripto Riil
         </h2>
         <p className="text-xs sm:text-sm text-slate-400 mt-1 leading-relaxed">
-          Hubungkan portofolio trading Anda langsung dengan bursa kripto global terkemuka (**Binance, KuCoin, Bybit, BingX, MEXC**) atau pasar modal indonesia (**Mirae Sekuritas, Stockbit**). Dilengkapi dengan protokol keamanan **E2E Client-Side AES-GCM 256-bit** sehingga kunci API Anda terenkripsi mutlak di browser sebelum dikirimkan ke server.
+          Hubungkan portofolio trading Anda langsung dengan bursa kripto global terkemuka (**Binance, KuCoin, Bybit**). Kunci API Anda disimpan di server dengan enkripsi **AES-256-GCM** (ENCRYPTION_KEY) dan hanya digunakan untuk menandatangani order — browser tidak pernah menyimpan kunci plaintext.
         </p>
       </div>
 
@@ -506,14 +397,14 @@ export default function ApiAutomation() {
           </div>
 
           {/* Real-Time Visual Connection-Status Badge & Reachability Indicator Panel */}
-          <div className="bg-slate-950 p-4 rounded-xl border border-slate-850 space-y-2.5">
+          <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2.5">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold text-slate-300 font-sans tracking-wide">Status Jangkauan Kunci API</span>
               
               {/* Status Badge */}
               {connectionStatus === "not_tested" && (
                 <div id="status-badge-not-tested" className="flex items-center gap-1.5 bg-slate-900 border border-slate-800 px-2.5 py-1 rounded-full text-[10px] text-slate-400 font-mono font-medium">
-                  <span className="w-1.5 h-1.5 rounded-full bg-slate-650 animate-pulse" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-slate-600 animate-pulse" />
                   BELUM DIUJI
                 </div>
               )}
@@ -538,7 +429,7 @@ export default function ApiAutomation() {
             </div>
 
             {/* Dynamic diagnostic feed */}
-            <div className="flex items-start gap-2.5 bg-[#0F172A]/85 p-3 rounded-lg border border-slate-850/80">
+            <div className="flex items-start gap-2.5 bg-[#0F172A]/85 p-3 rounded-lg border border-slate-800/80">
               <div className="mt-0.5 shrink-0 select-none">
                 {connectionStatus === "not_tested" && <WifiOff className="w-4 h-4 text-slate-500" />}
                 {connectionStatus === "checking" && <RefreshCw className="w-4 h-4 text-blue-400 animate-spin" />}
@@ -563,7 +454,7 @@ export default function ApiAutomation() {
           </div>
 
           {/* Sandbox Toggle */}
-          <div className="bg-slate-950 p-4 rounded-xl border border-slate-850 space-y-3.5">
+          <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3.5">
             <div className="flex items-center justify-between">
               <div>
                 <span className="text-xs font-bold text-slate-200 block">Jalankan Portfolio Simulasi (Sandbox Mode)</span>
@@ -611,22 +502,46 @@ export default function ApiAutomation() {
 
             {!useSandbox && (
               <>
-                {/* Security Password Encrypter PIN */}
-                <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800 space-y-3.5">
+                {/* FUNC-4: server vault status */}
+                <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800 space-y-3">
                   <div className="flex items-center gap-1.5 text-xs font-bold text-blue-400 font-mono uppercase">
                     <Lock className="w-3.5 h-3.5 text-blue-400" />
-                    Master Pin Proteksi Client (E2EE)
+                    Vault Kunci Terenkripsi Server (AES-256-GCM)
                   </div>
-                  <div>
-                    <span className="text-[10px] text-slate-400 block mb-1">Passphrase ini digunakan sebagai sandi pembangkit kunci AES bursa rahasia Anda:</span>
-                    <input
-                      type="password"
-                      value={masterPin}
-                      onChange={(e) => setMasterPin(e.target.value)}
-                      placeholder="Masukkan Master PIN Anda..."
-                      className="w-full bg-slate-950 border border-slate-800 text-xs text-slate-200 rounded-lg p-2 focus:outline-none focus:border-blue-500 font-mono"
-                    />
-                  </div>
+                  {storedKeys.filter(k => k.exchange.toLowerCase() === selectedExchange.toLowerCase()).length === 0 ? (
+                    <p className="text-[10px] text-slate-400 leading-relaxed">
+                      Belum ada kunci {selectedExchange} yang tersimpan. Simpan kunci di bawah agar order real aktif — tanpa kunci, semua order berjalan dalam mode simulasi harga live.
+                    </p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {storedKeys.filter(k => k.exchange.toLowerCase() === selectedExchange.toLowerCase()).map(k => (
+                        <div key={k.id} className="flex items-center justify-between bg-slate-950 border border-slate-800 rounded-lg px-3 py-2">
+                          <div className="text-[10px] font-mono text-slate-300">
+                            <span className="text-emerald-400 font-bold">{k.exchange}</span>
+                            <span className="text-slate-500"> • {k.label} • </span>
+                            <span className="text-slate-400">{k.keyMasked}</span>
+                            <span className="text-slate-600"> • {new Date(k.createdAt).toLocaleDateString("id-ID")}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleTestServerKey(k.id, k.exchange)}
+                              className="text-[9px] font-mono uppercase bg-sky-500/10 border border-sky-500/25 text-sky-400 px-2 py-1 rounded hover:bg-sky-500/20 cursor-pointer"
+                            >
+                              Uji Kunci
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteServerKey(k.id, k.exchange)}
+                              className="text-[9px] font-mono uppercase bg-rose-500/10 border border-rose-500/25 text-rose-400 px-2 py-1 rounded hover:bg-rose-500/20 cursor-pointer"
+                            >
+                              Hapus
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -636,11 +551,11 @@ export default function ApiAutomation() {
                     <input
                       type="text"
                       placeholder="Masukkan Kode API Key bursa terdaftar..."
-                      disabled={isEncrypted}
                       value={apiKey}
                       onChange={(e) => setApiKey(e.target.value)}
                       id="api-key-input"
-                      className="bg-slate-950 border border-slate-800 text-xs text-slate-300 rounded-lg pl-10 pr-4 py-2.5 w-full focus:outline-none focus:border-blue-500 disabled:opacity-60 font-mono"
+                      autoComplete="off"
+                      className="bg-slate-950 border border-slate-800 text-xs text-slate-300 rounded-lg pl-10 pr-4 py-2.5 w-full focus:outline-none focus:border-blue-500 font-mono"
                     />
                   </div>
                 </div>
@@ -652,10 +567,10 @@ export default function ApiAutomation() {
                       <input
                         type={showSecretField ? "text" : "password"}
                         placeholder="Masukkan API Secret..."
-                        disabled={isEncrypted}
+                        autoComplete="off"
                         value={apiSecret}
                         onChange={(e) => setApiSecret(e.target.value)}
-                        className="bg-slate-950 border border-slate-800 text-xs text-slate-300 rounded-lg px-4 py-2.5 w-full focus:outline-none focus:border-blue-500 disabled:opacity-60 font-mono text-justify"
+                        className="bg-slate-950 border border-slate-800 text-xs text-slate-300 rounded-lg px-4 py-2.5 w-full focus:outline-none focus:border-blue-500 font-mono text-justify"
                       />
                       <button 
                         type="button" 
@@ -668,48 +583,30 @@ export default function ApiAutomation() {
                   </div>
 
                   <div>
-                    <label className="block text-xs text-slate-400 font-semibold uppercase font-mono mb-1.5">Passphrase / PIN (Kucoin/Bybit)</label>
+                    <label className="block text-xs text-slate-400 font-semibold uppercase font-mono mb-1.5">Passphrase (wajib untuk KuCoin)</label>
                     <input
                       type="text"
-                      placeholder="Opsional pin bursa..."
-                      disabled={isEncrypted}
+                      placeholder="Passphrase KuCoin..."
+                      autoComplete="off"
                       value={exchangePassphrase}
                       onChange={(e) => setExchangePassphrase(e.target.value)}
-                      className="bg-slate-950 border border-slate-800 text-xs text-slate-300 rounded-lg px-4 py-2.5 w-full focus:outline-none focus:border-blue-500 disabled:opacity-60 font-mono"
+                      className="bg-slate-950 border border-slate-800 text-xs text-slate-300 rounded-lg px-4 py-2.5 w-full focus:outline-none focus:border-blue-500 font-mono"
                     />
                   </div>
                 </div>
 
-                {isEncrypted ? (
-                  <div className="flex gap-2 items-center justify-between bg-emerald-500/10 border border-emerald-500/20 p-3 rounded-lg">
-                    <span className="text-[10px] text-emerald-400 font-mono font-medium flex items-center gap-1.5">
-                      <Check className="w-4 h-4 text-emerald-400 shrink-0 border border-emerald-500/35 rounded-full p-0.5" />
-                      Kredensial Anda Terkunci Enkripsi AES-GCM (Aman).
-                    </span>
-                    <button
-                      type="button"
-                      onClick={handleClearSavedKeys}
-                      className="text-[10px] font-mono hover:underline bg-rose-500/10 border border-rose-500/25 px-2 py-0.5 rounded text-rose-400 hover:bg-rose-500/20 cursor-pointer"
-                    >
-                      Buka gembok
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={handleClientSideEncryptKeys}
-                    disabled={encrypting || masterPin.length === 0}
-                    className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold p-2.5 rounded-lg text-xs transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-blue-900/10 disabled:opacity-45 disabled:cursor-not-allowed"
-                  >
-                    {encrypting ? <RefreshCw className="w-3.5 h-3.5 animate-spin text-white" /> : <Lock className="w-3.5 h-3.5 text-white" />}
-                    <span>Enkripsi Riil & Simpan Kredensial (Client AES)</span>
-                  </button>
-                )}
-                {masterPin.length === 0 && !isEncrypted && !useSandbox && (
-                  <p className="text-[9.5px] text-amber-400 font-mono leading-snug">
-                    ⚠ Master PIN wajib diisi sebelum dapat mengenkripsi kredensial. Jangan gunakan PIN default publik.
-                  </p>
-                )}
+                <button
+                  type="button"
+                  onClick={handleSaveKeysToServer}
+                  disabled={savingKeys || apiKey.length === 0 || apiSecret.length === 0}
+                  className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold p-2.5 rounded-lg text-xs transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-blue-900/10 disabled:opacity-45 disabled:cursor-not-allowed"
+                >
+                  {savingKeys ? <RefreshCw className="w-3.5 h-3.5 animate-spin text-white" /> : <Lock className="w-3.5 h-3.5 text-white" />}
+                  <span>Simpan & Enkripsi Kredensial di Vault Server</span>
+                </button>
+                <p className="text-[9.5px] text-slate-500 font-mono leading-snug">
+                  Kunci dikirim sekali via HTTPS, dienkripsi AES-256-GCM di server, lalu field di atas dikosongkan. Order real otomatis aktif untuk bursa ini.
+                </p>
               </>
             )}
 
@@ -725,7 +622,7 @@ export default function ApiAutomation() {
             </div>
 
             {/* Telegram Bot Automation Panel */}
-            <div className="bg-slate-950 p-4 rounded-xl border border-slate-850 space-y-3">
+            <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
               <div className="flex items-center gap-1.5 text-xs font-bold text-sky-400 font-mono uppercase">
                 <MessageSquare className="w-3.5 h-3.5" />
                 INTEGRASI TELEGRAM BOT & SINYAL
@@ -754,7 +651,7 @@ export default function ApiAutomation() {
               </div>
 
               {/* Panduan Mengatasi Chat Not Found */}
-              <div className="bg-amber-950/20 border border-amber-900/30 p-2 text-[9px] space-y-1 text-amber-350 font-mono">
+              <div className="bg-amber-950/20 border border-amber-900/30 p-2 text-[9px] space-y-1 text-amber-300 font-mono">
                 <div className="font-bold text-amber-400 uppercase">💡 INFO TELEGRAM &quot;CHAT NOT FOUND&quot;:</div>
                 <div className="text-slate-300 leading-relaxed">
                   Harap buka bot Anda di Telegram dan ketik/klik <strong className="text-amber-300">/start</strong> agar bot diizinkan mengirim pesan ke Anda. Jika Anda belum menyapa bot Anda terlebih dahulu di Telegram, Telegram API akan menolak pengiriman dengan pesan error tersebut.
@@ -788,10 +685,16 @@ export default function ApiAutomation() {
           </div>
 
           {/* Trade configuration inputs — previously hardcoded BTC 0.05 (AUDIT-3 high-severity bug). */}
-          <div className="bg-slate-950 p-4 rounded-xl border border-slate-850 space-y-3">
+          <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold text-slate-300 font-sans tracking-wide">Konfigurasi Eksekusi Order</span>
-              <span className="text-[9px] text-amber-400 font-mono">SIMULASI (server tidak menembak order bursa)</span>
+              <span className={`text-[9px] font-mono ${useSandbox ? "text-amber-400" : "text-emerald-400"}`}>
+                {useSandbox
+                  ? "MODE SANDBOX (simulasi harga live)"
+                  : storedKeys.some(k => k.exchange.toLowerCase() === selectedExchange.toLowerCase() && k.label === "default")
+                    ? "MODE LIVE (order real ditandatangani & dikirim)"
+                    : "TANPA KUNCI (order akan disimulasikan)"}
+              </span>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
               <div>
@@ -831,7 +734,7 @@ export default function ApiAutomation() {
               </div>
             </div>
             <p className="text-[9.5px] text-slate-500 leading-snug">
-              Catatan: endpoint <span className="font-mono text-slate-400">/api/trade/execute</span> di server hanya mengambil harga live dari bursa — order TIDAK diteruskan ke bursa. Hasil eksekusi selalu berupa simulasi.
+              Mode Sandbox = simulasi harga live (order tidak diteruskan). Dengan kunci tersimpan di vault server = order REAL ditandatangani HMAC dan dikirim ke bursa (dibatasi MAX_ORDER_NOTIONAL_USD).
             </p>
           </div>
 
@@ -840,7 +743,7 @@ export default function ApiAutomation() {
               onClick={handleTriggerSync}
               id="sync-portfolio-btn"
               disabled={isSyncing}
-              className="flex-1 bg-slate-800 hover:bg-slate-750 text-slate-100 font-bold px-4 py-2.5 rounded-lg text-xs border border-slate-700 transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-100 font-bold px-4 py-2.5 rounded-lg text-xs border border-slate-700 transition-colors flex items-center justify-center gap-2 cursor-pointer"
             >
               <RefreshCw className={`w-3.5 h-3.5 text-blue-400 ${isSyncing ? 'animate-spin' : ''}`} />
               <span>Verifikasi & Ambil Saldo Riil</span>
@@ -873,7 +776,7 @@ export default function ApiAutomation() {
               </button>
             </div>
 
-            <div className="bg-slate-950 p-4 rounded-xl border border-slate-850 h-[380px] overflow-y-auto font-mono text-[10.5px] leading-relaxed text-slate-300 space-y-2.5">
+            <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 h-[380px] overflow-y-auto font-mono text-[10.5px] leading-relaxed text-slate-300 space-y-2.5">
               {executionLogs.map((log, idx) => {
                 let colorClass = "text-slate-400";
                 if (log.includes("[STATUS]")) colorClass = "text-emerald-400 font-semibold";
@@ -892,14 +795,16 @@ export default function ApiAutomation() {
             </div>
           </div>
 
-          <div className="mt-4 border-t border-slate-850/85 pt-4 flex flex-col sm:flex-row justify-between items-start sm:items-center text-[10px] font-mono text-slate-500 gap-2">
+          <div className="mt-4 border-t border-slate-800/85 pt-4 flex flex-col sm:flex-row justify-between items-start sm:items-center text-[10px] font-mono text-slate-500 gap-2">
             <div>
-              Status: <span className={`font-bold ${isEncrypted ? "text-emerald-400" : "text-amber-400"}`}>
-                {isEncrypted ? "AES-256 E2EE LOCKED" : "TIDAK TERENKRIPSI"}
+              Vault: <span className={`font-bold ${storedKeys.length > 0 ? "text-emerald-400" : "text-amber-400"}`}>
+                {storedKeys.length > 0 ? `${storedKeys.length} kunci terenkripsi AES-256-GCM` : "belum ada kunci tersimpan"}
               </span>
             </div>
             <div>
-              Trade Mode: <span className="text-amber-400 font-bold">SIMULASI HARGA LIVE</span>
+              Trade Mode: <span className={`font-bold ${useSandbox ? "text-amber-400" : "text-emerald-400"}`}>
+                {useSandbox ? "SANDBOX (SIMULASI)" : "LIVE (ORDER REAL)"}
+              </span>
             </div>
           </div>
         </div>

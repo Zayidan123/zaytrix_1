@@ -14,9 +14,12 @@ export default defineConfig(() => {
     server: {
       hmr: process.env.DISABLE_HMR !== 'true',
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
-      // Allow all hosts so the sandbox preview proxy (and any preview host)
-      // can reach the dev server without "Blocked request" errors.
-      allowedHosts: true,
+      // SEC-22: restrict accepted Host headers outside development to prevent
+      // DNS-rebinding / cache poisoning via arbitrary Host headers. In dev
+      // (and in the sandbox preview environment) we keep `true` so preview
+      // proxies can reach the dev server; production builds serve via the
+      // Express static handler (dist/), not this dev server.
+      allowedHosts: process.env.NODE_ENV === 'production' ? ['localhost', '127.0.0.1'] : true,
       // Bind to all interfaces so the gateway/Caddy reverse proxy can connect.
       host: '0.0.0.0',
     },

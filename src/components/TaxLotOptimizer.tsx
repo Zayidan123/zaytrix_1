@@ -58,7 +58,7 @@ interface TaxLotResult {
   remainingLots: any[];
   totalRemainingQuantity: number;
   totalRemainingCostBasis: number;
-  estimatedTaxIdr: number;
+  estimatedTaxIdr: number | null; // null = kurs USD/IDR tidak tersedia (DATA-24)
   notes: string[];
 }
 
@@ -324,7 +324,7 @@ export default function TaxLotOptimizer() {
             />
             <SummaryCard
               label="PMK-68 Tax"
-              value={formatIDR(result.estimatedTaxIdr)}
+              value={result.estimatedTaxIdr !== null && result.estimatedTaxIdr !== undefined ? formatIDR(result.estimatedTaxIdr) : "kurs tidak tersedia"}
               icon={<Percent className="w-3 h-3" />}
               color="#f97316"
             />

@@ -14,6 +14,75 @@ import './index.css';
 // The error swallowers for ResizeObserver / "script error" noise are kept
 // because they are genuinely safe to mute (browser noise unrelated to app logic).
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CSRF double-submit helper (SEC2-AUTH, contract with src/server/security.ts).
+// The server sets a JS-readable cookie `zaytrix_csrf` (via GET /api/auth/csrf-token)
+// and its middleware enforces the `X-CSRF-Token` header on same-origin mutating
+// requests (POST/PUT/PATCH/DELETE) whenever that cookie is present. This one-time
+// monkey-patch of window.fetch transparently attaches the header so every fetch
+// call-site in the app (React Query, portfolio sync, widgets, …) is covered
+// without touching each call individually.
+// Rules (mirrors the server policy):
+//   • only same-origin requests (absolute http(s) URLs to other hosts are left alone)
+//   • only mutating methods (POST/PUT/PATCH/DELETE)
+//   • only when the `zaytrix_csrf` cookie exists
+//   • only when the caller hasn't already set an X-CSRF-Token header
+//   • Request objects are cloned (never mutate the caller's Request instance)
+// Runs at module top-level BEFORE the app renders, guarded for SSR/ Workers.
+// ─────────────────────────────────────────────────────────────────────────────
+if (typeof window !== "undefined" && typeof window.fetch === "function") {
+  const originalFetch = window.fetch.bind(window);
+  const readCsrfCookie = (): string | null => {
+    try {
+      const match = document.cookie
+        .split(";")
+        .map((c) => c.trim())
+        .find((c) => c.startsWith("zaytrix_csrf="));
+      return match ? decodeURIComponent(match.slice("zaytrix_csrf=".length)) : null;
+    } catch {
+      return null;
+    }
+  };
+  const isSameOrigin = (url: string): boolean => {
+    try {
+      // Relative URLs ("/api/...") are always same-origin.
+      if (!/^https?:\/\//i.test(url)) return true;
+      return new URL(url, window.location.href).origin === window.location.origin;
+    } catch {
+      return false;
+    }
+  };
+
+  window.fetch = function csrfAwareFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    try {
+      const method = (
+        init?.method ||
+        (input instanceof Request ? input.method : "GET")
+      ).toUpperCase();
+      const mutating = method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE";
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+
+      if (mutating && isSameOrigin(url)) {
+        const csrfToken = readCsrfCookie();
+        if (csrfToken) {
+          const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
+          if (!headers.has("X-CSRF-Token")) {
+            headers.set("X-CSRF-Token", csrfToken);
+            if (input instanceof Request) {
+              // Clone the Request with the extra header — do NOT mutate the caller's object.
+              return originalFetch(new Request(input, { headers }));
+            }
+            return originalFetch(url, { ...init, headers });
+          }
+        }
+      }
+    } catch {
+      // Any failure in the wrapper must never break the original request.
+    }
+    return originalFetch(input as any, init);
+  };
+}
+
 if (typeof window !== "undefined") {
   window.onerror = function (message, _source, _lineno, _colno, _error) {
     const msg = String(message || "").toLowerCase();
@@ -120,11 +189,18 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       // FIX-D-7: staleTime was 5s + refetchOnWindowFocus was true → combined with
-      // per-component polls (Dashboard 8s/60s/600s, OnChainData 8s, App assets 2s)
+      // per-component polls (Dashboard 8s/60s/600s, OnChainData 8s, App assets 5s)
       // this caused excessive API calls on every tab switch. Bumped to 30s and
       // disabled window-focus refetch (override per-query when genuinely needed).
       refetchOnWindowFocus: false,
-      retry: 2,
+      // FUNC-7 (defense in depth): only retry on 5xx / network errors. Retrying
+      // 4xx (401/403/429/503-with-success:false bodies) just amplifies load
+      // against the rate limiter and never succeeds. Two attempts max.
+      retry: (failureCount: number, error: any) => {
+        const status = typeof error?.status === "number" ? error.status : 0;
+        const isServerError = status >= 500 || status === 0; // status 0/undefined ≈ network failure
+        return isServerError && failureCount < 2;
+      },
       staleTime: 30 * 1000,
     },
   },

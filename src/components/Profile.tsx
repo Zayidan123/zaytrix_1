@@ -323,7 +323,7 @@ export default function Profile() {
     try {
       localStorage.setItem(`z_profile_${user.uid}`, JSON.stringify(updatedProfile));
       setSaveStatus("success");
-      addExecutionLog(`[PROFILE] Dokumen profil berhasil diperbarui secara permanen.`);
+      addExecutionLog(`[PROFILE] Profil tersimpan ke penyimpanan lokal browser (z_profile_<uid>).`);
       alert("Profil berhasil disimpan dengan aman!");
     } catch (err) {
       setSaveStatus("error");
@@ -453,7 +453,7 @@ export default function Profile() {
       <div className="flex items-center justify-center p-20 bg-slate-950/40 rounded-xl border border-slate-800" id="profile-loading">
         <div className="text-center space-y-3">
           <div className="w-10 h-10 border-4 border-amber-500 border-t-transparent rounded-full animate-spin mx-auto" />
-          <p className="text-xs text-slate-400 font-mono">Sinkronisasi Firestore Sandbox Database...</p>
+          <p className="text-xs text-slate-400 font-mono">Memuat profil dari penyimpanan lokal...</p>
         </div>
       </div>
     );
@@ -901,24 +901,24 @@ export default function Profile() {
               {saving ? (
                 <>
                   <div className="w-3.5 h-3.5 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
-                  Mendeposit data...
+                  Menyimpan...
                 </>
               ) : (
                 <>
                   <CheckCircle className="w-4 h-4 text-slate-950" />
-                  Simpan Profil (Firestore)
+                  Simpan Profil (Lokal di Browser)
                 </>
               )}
             </button>
 
             {saveStatus === "success" && (
               <div className="p-2 bg-emerald-500/10 border border-emerald-500/20 rounded text-[10.5px] font-semibold text-emerald-400 text-center font-mono animate-pulse">
-                SUKSES: Sinkronisasi Firestore Ok!
+                SUKSES: Profil tersimpan di browser Anda.
               </div>
             )}
             {saveStatus === "error" && (
               <div className="p-2 bg-rose-500/10 border border-rose-500/20 rounded text-[10.5px] font-semibold text-rose-400 text-center font-mono">
-                GAGAL: Otoritas rules diblokir!
+                GAGAL: Penyimpanan lokal browser ditolak (private mode?).
               </div>
             )}
           </div>

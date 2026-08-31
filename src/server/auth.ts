@@ -20,9 +20,9 @@
 //   - Lockout: 5 consecutive failed password checks → lockedUntil = now+15min.
 //   - Session tracking: every successful login inserts a Session row keyed by
 //     sha256(jwt). /sessions + /sessions/:id + logout all touch this table.
-//   - requireAuth is GRACEFUL about missing Session rows (existing tokens
-//     issued before SEC2-AUTH deployed, or Sessions table empty) — see comment
-//     in requireAuth below.
+//   - requireAuth is FAIL-CLOSED (SEC-5): a valid JWT must match an existing
+//     Session row (tokenHash). No Session row → 401 (revoked / pre-SEC2 token);
+//     DB read error → 401 (logged). See validateSession below.
 
 import { Router, Request, Response, NextFunction, RequestHandler } from "express";
 import jwt from "jsonwebtoken";
@@ -71,6 +71,20 @@ const TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days
 export { TOKEN_TTL_SECONDS };
 const TOKEN_TTL_MS = TOKEN_TTL_SECONDS * 1000;
 const TEMP_TOKEN_TTL_SECONDS = 5 * 60; // 5 minutes for 2FA temp token
+
+// SEC-13 (JWT hardening): pin the algorithm (HS256) + issuer/audience claims.
+// Previously `jwt.verify` accepted ANY algorithm the library supports — an
+// attacker able to control the `alg` header (e.g. "none" confusion or RS/HS
+// key-confusion in other stacks) had a wider attack surface, and tokens had
+// no iss/aud binding (a token signed for another purpose/audience would be
+// accepted here). TTL stays 7 days (unchanged — changing it breaks UX).
+const JWT_ISSUER = "zaytrix";
+const JWT_AUDIENCE = "zaytrix-app";
+const JWT_VERIFY_OPTIONS: jwt.VerifyOptions = {
+  algorithms: ["HS256"],
+  issuer: JWT_ISSUER,
+  audience: JWT_AUDIENCE,
+};
 const BCRYPT_ROUNDS = 10;
 
 // Lockout policy: 5 consecutive failures → 15 minute lockout.
@@ -102,7 +116,7 @@ export function getSessionSecret(): string {
 // ---------------------------------------------------------------------------
 // Cookie helpers
 // ---------------------------------------------------------------------------
-function setSessionCookie(res: Response, token: string): void {
+export function setSessionCookie(res: Response, token: string): void {
   res.cookie(COOKIE_NAME, token, {
     httpOnly: true,
     sameSite: "lax",
@@ -116,21 +130,33 @@ function clearSessionCookie(res: Response): void {
   res.clearCookie(COOKIE_NAME, { path: "/" });
 }
 
-function signToken(payload: ZCapitalJwtPayload): string {
-  return jwt.sign(payload, getSessionSecret(), { expiresIn: TOKEN_TTL_SECONDS });
+// Exported so webauthn.ts / oauth.ts issue tokens with IDENTICAL claims (SEC-13).
+export function signToken(payload: ZCapitalJwtPayload): string {
+  return jwt.sign(payload, getSessionSecret(), {
+    expiresIn: TOKEN_TTL_SECONDS,
+    issuer: JWT_ISSUER,
+    audience: JWT_AUDIENCE,
+  });
 }
+
+// Alias used by other modules (webauthn.ts lazy-imports this).
+export const signSessionToken = signToken;
 
 function signTempToken(payload: ZCapitalJwtPayload): string {
   // The 2FA temp-token has a short TTL and a twoFactorPending flag. It is ONLY
   // valid for the /api/auth/login/2fa endpoint — see requireAuth reject.
   return jwt.sign({ ...payload, twoFactorPending: true }, getSessionSecret(), {
     expiresIn: TEMP_TOKEN_TTL_SECONDS,
+    issuer: JWT_ISSUER,
+    audience: JWT_AUDIENCE,
   });
 }
 
 function verifyToken(token: string): ZCapitalJwtPayload | null {
   try {
-    const decoded = jwt.verify(token, getSessionSecret()) as any;
+    // SEC-13: algorithms pinned to HS256 + iss/aud required — jwt.verify throws
+    // (→ null) on any mismatch.
+    const decoded = jwt.verify(token, getSessionSecret(), JWT_VERIFY_OPTIONS) as any;
     if (!decoded || typeof decoded !== "object") return null;
     if (typeof decoded.sub !== "string" || typeof decoded.email !== "string") return null;
     return {
@@ -152,6 +178,36 @@ function hashToken(token: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// SEC-21 (2FA tempToken replay): single-use semantics for 2FA temp tokens.
+// A successful /login/2fa (or OAuth /google/2fa) marks the token's sha256 as
+// consumed for the remainder of its 5-minute TTL. Reuse → 401. In-memory Map
+// keyed by hash (the raw token is never stored), pruned opportunistically.
+// ---------------------------------------------------------------------------
+const consumedTempTokens = new Map<string, number>(); // sha256(token) → expiry epoch ms
+
+export function isTempTokenConsumed(token: string): boolean {
+  const hash = hashToken(token);
+  const expiry = consumedTempTokens.get(hash);
+  if (expiry === undefined) return false;
+  if (Date.now() > expiry) {
+    consumedTempTokens.delete(hash);
+    return false;
+  }
+  return true;
+}
+
+export function markTempTokenConsumed(token: string): void {
+  consumedTempTokens.set(hashToken(token), Date.now() + TEMP_TOKEN_TTL_SECONDS * 1000);
+  // Opportunistic pruning so the Map can never grow unbounded.
+  if (consumedTempTokens.size > 1024) {
+    const now = Date.now();
+    for (const [k, exp] of consumedTempTokens) {
+      if (exp < now) consumedTempTokens.delete(k);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Random token generators (cuid-style entropy — 32 hex chars from randomBytes)
 // ---------------------------------------------------------------------------
 function randomTokenString(byteLen = 32): string {
@@ -159,9 +215,13 @@ function randomTokenString(byteLen = 32): string {
 }
 
 // ---------------------------------------------------------------------------
-// Session record helpers (SEC2-AUTH)
+// Session record helpers (SEC2-AUTH + SEC-5b)
+// Exported so webauthn.ts (passkey login) records Session rows too — without
+// this, passkey-issued JWTs were invisible to /api/auth/sessions and could
+// NOT be revoked (SEC-5b). requireAuth is fail-closed (SEC-5): a JWT without
+// a matching Session row is rejected, so EVERY login path MUST call this.
 // ---------------------------------------------------------------------------
-async function recordSession(req: Request, userId: string, token: string): Promise<void> {
+export async function recordSession(req: Request, userId: string, token: string): Promise<void> {
   try {
     await prisma.session.create({
       data: {
@@ -173,10 +233,10 @@ async function recordSession(req: Request, userId: string, token: string): Promi
       },
     });
   } catch (e: any) {
-    // Session tracking is best-effort — a DB error here must not break login.
-    // The user can still operate with just the JWT cookie (requireAuth falls
-    // back gracefully if the Session row is missing — see below).
-    console.error("[auth] recordSession failed:", e?.message || e);
+    // Best-effort for the login response itself, but note: requireAuth is now
+    // FAIL-CLOSED — if this insert failed, the very next request with this
+    // cookie will be 401'd. Log loudly so ops can see why sessions die.
+    console.error("[auth] recordSession failed (session will be rejected by requireAuth):", e?.message || e);
   }
 }
 
@@ -192,15 +252,14 @@ async function revokeSessionByToken(token: string): Promise<void> {
 // Middleware: requireAuth — 401 if no valid session cookie.
 //
 // SEC2-AUTH (FIX-ALL H2): we AWAIT a server-side session validation check.
-// Enforcement rules:
-//   1. If the Session row for THIS tokenHash exists AND is expired → 401.
-//   2. If the user has ANY Session row (i.e. the Session table has been
-//      populated for this user) but NOT one for this tokenHash → the session
-//      was revoked via DELETE /sessions/:id or /sessions/logout-others → 401.
-//   3. If the user has NO Session rows at all (legacy token issued before
-//      SEC2-AUTH deployed, or Sessions table empty) → ALLOW (graceful
-//      backward-compat — the JWT signature remains the primary auth check).
-//   4. The session row's lastSeen is updated opportunistically; a failure
+// Enforcement rules (SEC-5 — FAIL-CLOSED, no "grace legacy" bypass):
+//   1. The Session row for THIS tokenHash must EXIST, belong to the same
+//      user, and be unexpired. Otherwise → 401.
+//   2. A DB read error → 401 (fail-closed, error logged). Previously a DB
+//      error (or a user with zero Session rows) allowed the JWT through —
+//      meaning logout / "revoke all sessions" did NOT actually kill stolen
+//      cookies: any pre-revocation JWT kept working forever.
+//   3. The session row's lastSeen is updated opportunistically; a failure
 //      there does not block the request.
 // This actually enforces session revocation: a stolen JWT is rejected as
 // soon as the legitimate user logs out / revokes that session row.
@@ -220,9 +279,9 @@ export const requireAuth: RequestHandler = async (req: Request, res: Response, n
   }
 
   // Enforce server-side session revocation. We AWAIT so a revoked token is
-  // rejected before the route handler runs. Failure of the DB lookup is
-  // treated as "allow" (graceful — same as legacy) so a transient DB outage
-  // does not lock every user out.
+  // rejected before the route handler runs. SEC-5: DB errors and missing
+  // Session rows now REJECT — a transient DB outage logs in ops but never
+  // silently re-validates possibly-revoked tokens.
   const sessionOk = await validateSession(token, payload.sub);
   if (!sessionOk) {
     return res.status(401).json({ success: false, error: "Sesi telah dicabut atau kedaluwarsa. Silakan login kembali." });
@@ -233,50 +292,41 @@ export const requireAuth: RequestHandler = async (req: Request, res: Response, n
 };
 
 /**
- * Validate the server-side Session row for `token`.
+ * Validate the server-side Session row for `token`. (SEC-5 — fail-closed.)
  *
- * Returns true if the request should be ALLOWED:
- *   - Session row for this tokenHash exists + is not expired + matches userId.
- *   - User has NO Session rows at all (legacy / pre-SEC2-AUTH) → graceful allow.
+ * Returns true ONLY when the Session row for this exact tokenHash exists,
+ * belongs to `userId`, and is not expired.
  *
- * Returns false if the request should be REJECTED (revoked or expired):
- *   - Session row exists but expiresAt < now.
- *   - Session row exists but userId mismatch.
- *   - User has Session rows but none for this tokenHash (revoked).
- *
- * Any DB error returns true (graceful — we don't lock users out on a DB hiccup).
+ * Returns false (reject, 401) when:
+ *   - No Session row for this tokenHash (revoked, logged-out, or a token
+ *     issued before session tracking existed — those legacy JWTs must
+ *     re-login; one-time cost for real revocation).
+ *   - The row's userId mismatches (token belongs to a different user).
+ *   - The row is expired.
+ *   - The DB lookup itself errors (fail-closed; logged server-side).
  */
 async function validateSession(token: string, userId: string): Promise<boolean> {
   try {
     const tokenHash = hashToken(token);
-    // Look up the row for THIS token first (cheap unique index hit).
     const row = await prisma.session.findUnique({ where: { tokenHash } });
-    if (row) {
-      if (row.userId !== userId) return false; // token belongs to a different user
-      if (row.expiresAt.getTime() < Date.now()) return false; // expired
-      // Update lastSeen (best-effort — never blocks the request).
-      await prisma.session
-        .update({ where: { id: row.id }, data: { lastSeen: new Date() } })
-        .catch(() => {});
-      return true;
+    if (!row) {
+      // No row for this token → it was revoked (logout / /sessions/:id /
+      // logout-others / password reset) or never tracked. Reject.
+      return false;
     }
-    // No row for this token. Was the session revoked? Only enforce revocation
-    // if the user has at least one other active session — otherwise this is a
-    // legacy token issued before SEC2-AUTH (Sessions table was empty) and we
-    // allow it for backward compat.
-    const userSessionCount = await prisma.session.count({
-      where: { userId, expiresAt: { gt: new Date() } },
-    });
-    if (userSessionCount === 0) {
-      // Legacy: user has no sessions on file — allow (graceful).
-      return true;
-    }
-    // User has active sessions but none for this token → revoked.
-    return false;
-  } catch (e: any) {
-    // Graceful on DB error — the JWT signature is still the primary auth check.
-    console.error("[auth] validateSession error:", e?.message || e);
+    if (row.userId !== userId) return false; // token belongs to a different user
+    if (row.expiresAt.getTime() < Date.now()) return false; // expired
+    // Update lastSeen (best-effort — never blocks the request).
+    await prisma.session
+      .update({ where: { id: row.id }, data: { lastSeen: new Date() } })
+      .catch(() => {});
     return true;
+  } catch (e: any) {
+    // SEC-5: fail-closed on DB error. A DB outage is visible in logs and ops
+    // dashboards; silently honoring un-verifiable JWTs is NOT an option when
+    // the whole point of the Session table is revocation.
+    console.error("[auth] validateSession error (rejecting request fail-closed):", e?.message || e);
+    return false;
   }
 }
 
@@ -637,6 +687,15 @@ authRouter.post("/login/2fa", async (req: Request, res: Response, next: NextFunc
       recordAuthAttempt(false);
       return res.status(401).json({ success: false, error: "Token 2FA sementara tidak valid atau telah kedaluwarsa." });
     }
+    // SEC-21: reject REPLAYED temp tokens. A tempToken stays valid for 5 min
+    // after a successful login; previously it could be used again (an attacker
+    // who captured it plus a still-valid TOTP window could mint a second
+    // session). Now it is single-use.
+    if (isTempTokenConsumed(tempToken)) {
+      recordAuthAttempt(false);
+      await logAudit(payload.sub, "LOGIN_2FA", req, false, { reason: "temp_token_replayed" });
+      return res.status(401).json({ success: false, error: "Token 2FA sementara sudah digunakan. Login ulang dari awal." });
+    }
     const user = await prisma.user.findUnique({ where: { id: payload.sub } });
     if (!user || !user.twoFactorEnabled || !user.twoFactorSecret) {
       recordAuthAttempt(false);
@@ -705,12 +764,9 @@ authRouter.post("/login/2fa", async (req: Request, res: Response, next: NextFunc
         data: { failedLoginAttempts: 0, lockedUntil: null },
       });
     } catch {}
-    // FIX-C-8: accepted risk — tempToken remains valid for 5 min after success,
-    // but an attacker would still need the current TOTP code (±1 window tolerance
-    // = 3 valid codes out of 10^6) to mint a second session. For full single-use
-    // semantics, implement a denylist of consumed tempToken hashes (e.g. a
-    // `consumed_temp_tokens` table or a Redis SET with a 5-min TTL) and reject
-    // in verifyToken above. Punt to a future hardening pass.
+    // SEC-21: consume the tempToken NOW — any replay (even within its 5-min
+    // JWT TTL) is rejected above. Replaces the old FIX-C-8 "accepted risk".
+    markTempTokenConsumed(tempToken);
     await logAudit(user.id, "LOGIN_2FA", req, true, {});
     const token = signToken({ sub: user.id, email: user.email, displayName: user.displayName });
     setSessionCookie(res, token);
@@ -762,6 +818,21 @@ authRouter.post("/2fa/backup-login", async (req: Request, res: Response, next: N
       // OPT-5c: don't reveal whether the email exists — generic 400.
       return res.status(400).json({ success: false, error: "2FA tidak aktif untuk akun ini." });
     }
+    // SEC-26: respect the SAME lockout policy as password login. Previously
+    // this endpoint ignored lockedUntil entirely and never incremented
+    // failedLoginAttempts — a locked-out account (5 bad passwords) could
+    // still be entered by brute-forcing backup codes without limit (the
+    // authLimiter is per-IP only, so a distributed attacker had no cap).
+    if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
+      const ms = user.lockedUntil.getTime() - Date.now();
+      const mins = Math.ceil(ms / 60000);
+      recordAuthAttempt(false);
+      await logAudit(user.id, "BACKUP_CODE_LOGIN", req, false, { reason: "locked", lockedUntil: user.lockedUntil });
+      return res.status(423).json({
+        success: false,
+        error: `Akun terkunci sementara karena terlalu banyak percobaan gagal. Coba lagi dalam ${mins} menit.`,
+      });
+    }
     // Parse backup codes from the totpSecret JSON envelope (plaintext JSON,
     // not encrypted — only sha256 hashes are stored).
     let secretData: { backupCodes?: string[] };
@@ -779,16 +850,54 @@ authRouter.post("/2fa/backup-login", async (req: Request, res: Response, next: N
     const matchIndex = secretData.backupCodes.indexOf(hashedInput);
     if (matchIndex === -1) {
       recordAuthAttempt(false);
-      await logAudit(user.id, "BACKUP_CODE_LOGIN", req, false, { reason: "invalid_or_used" });
-      return res.status(401).json({ success: false, error: "Kode backup tidak valid atau sudah digunakan." });
+      // SEC-26: increment failedLoginAttempts with the SAME policy as
+      // password login (5 fails → 15-min lockout), so backup-code brute force
+      // locks the account instead of running forever.
+      let newCount = (user.failedLoginAttempts || 0) + 1;
+      let shouldLock = newCount >= MAX_FAILED_ATTEMPTS;
+      try {
+        await prisma.user.update({
+          where: { id: user.id },
+          data: {
+            failedLoginAttempts: newCount,
+            lockedUntil: shouldLock ? new Date(Date.now() + LOCKOUT_DURATION_MS) : user.lockedUntil,
+          },
+        });
+      } catch (e: any) {
+        console.error("[auth] backup-login failedLoginAttempts update failed:", e?.message || e);
+        newCount = user.failedLoginAttempts || 0;
+        shouldLock = false;
+      }
+      await logAudit(user.id, "BACKUP_CODE_LOGIN", req, false, {
+        reason: "invalid_or_used",
+        attempts: newCount,
+        locked: shouldLock,
+      });
+      const baseMsg = "Kode backup tidak valid atau sudah digunakan.";
+      if (shouldLock) {
+        return res.status(423).json({
+          success: false,
+          error: baseMsg + ` Akun terkunci selama 15 menit karena ${MAX_FAILED_ATTEMPTS} percobaan gagal berturut-turut.`,
+        });
+      }
+      return res.status(401).json({
+        success: false,
+        error: baseMsg + ` Percobaan gagal ${newCount}/${MAX_FAILED_ATTEMPTS}.`,
+      });
     }
     // Mark the code as used by REMOVING it from the stored array. The existing
     // storage format is a plain string[] (not {hash, used} objects), so removal
     // is the cleanest one-time-use semantics — the hash can never match again.
+    // SEC-26: also reset the failed-attempt counter + lockout, exactly like a
+    // successful password login does.
     secretData.backupCodes.splice(matchIndex, 1);
     await prisma.user.update({
       where: { id: user.id },
-      data: { totpSecret: JSON.stringify(secretData) },
+      data: {
+        totpSecret: JSON.stringify(secretData),
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+      },
     });
     // Issue session — mirrors the /login/2fa success path (signToken +
     // setSessionCookie + recordSession).
@@ -1126,6 +1235,28 @@ authRouter.post("/forgot-password", async (req: Request, res: Response, next: Ne
       // (though we can't generate a token without it).
       return res.json({ success: true, message: "Jika email terdaftar, tautan atur ulang telah dikirim." });
     }
+    // FUNC-10 (email honesty):
+    //  - Global server state (no per-user info) — safe to expose.
+    //  - In NON-production with no SMTP configured and EMAIL_DEV_MODE unset,
+    //    auto-enable dev mode so the reset token is logged to stdout instead of
+    //    the send silently throwing. Dev users were previously stuck: the flow
+    //    said "email sent" but nothing was sent OR logged.
+    const smtpConfigured = !!(
+      process.env.SMTP_HOST &&
+      process.env.SMTP_USER &&
+      process.env.SMTP_PASS
+    );
+    if (
+      !smtpConfigured &&
+      process.env.NODE_ENV !== "production" &&
+      !process.env.EMAIL_DEV_MODE
+    ) {
+      process.env.EMAIL_DEV_MODE = "true";
+      console.warn(
+        "[auth] FUNC-10: SMTP not configured in non-production — auto-enabling EMAIL_DEV_MODE. " +
+          "Reset token akan dicetak ke log server, bukan dikirim."
+      );
+    }
     const user = await prisma.user.findUnique({ where: { email } });
     if (user) {
       // FIX-P1-A: store hash of reset token, send raw token via email.
@@ -1137,6 +1268,8 @@ authRouter.post("/forgot-password", async (req: Request, res: Response, next: Ne
           resetTokenExpiry: new Date(Date.now() + PASSWORD_RESET_TTL_MS),
         },
       });
+      // FUNC-10: failures are logged server-side (not surfaced to the caller —
+      // the response stays anti-enumeration generic).
       sendPasswordResetEmail(user.email, token).catch((e) =>
         console.error("[auth] sendPasswordResetEmail failed:", e?.message || e)
       );
@@ -1145,7 +1278,15 @@ authRouter.post("/forgot-password", async (req: Request, res: Response, next: Ne
       // No user — still audit (without userId) so we can spot abuse patterns.
       await logAudit(null, "PASSWORD_RESET_REQUEST", req, false, { reason: "user_not_found", email });
     }
-    return res.json({ success: true, message: "Jika email terdaftar, tautan atur ulang telah dikirim." });
+    const response: any = { success: true, message: "Jika email terdaftar, tautan atur ulang telah dikirim." };
+    // FUNC-10: in production with NO SMTP configured at all, include the
+    // global emailConfigured:false flag. This leaks no user information (it is
+    // server-wide state) and lets the frontend honestly tell the user email
+    // cannot be delivered instead of pretending a reset link was sent.
+    if (process.env.NODE_ENV === "production" && !smtpConfigured) {
+      response.emailConfigured = false;
+    }
+    return res.json(response);
   } catch (err) {
     next(err);
   }
@@ -1270,11 +1411,15 @@ authRouter.post("/sessions/logout-others", requireAuth, async (req: Request, res
 // the middleware checks they match + the signature is valid.
 function getCsrfSecret(): string {
   const s = process.env.CSRF_SECRET;
-  if (!s) {
-    // Fallback to SESSION_SECRET — better than nothing if CSRF_SECRET unset.
-    return process.env.SESSION_SECRET || "ZAYTRIX_FALLBACK_CSRF_SECRET";
-  }
-  return s;
+  if (s) return s;
+  // SEC-11: NEVER fall back to a public literal. Previously an unset
+  // CSRF_SECRET silently used "ZAYTRIX_FALLBACK_CSRF_SECRET" — a string
+  // committed to the repo, so anyone could forge validly-signed CSRF tokens,
+  // defeating the whole double-submit scheme. Now we derive from
+  // SESSION_SECRET (which getSessionSecret() REFUSES to operate without —
+  // auth.ts throws "[auth] SESSION_SECRET is not set" before any token is
+  // ever issued/verified, i.e. effective startup enforcement).
+  return getSessionSecret();
 }
 
 function makeCsrfToken(): string {
@@ -1311,9 +1456,10 @@ authRouter.get("/csrf-token", (req: Request, res: Response) => {
 });
 
 // Exported for use by the CSRF middleware in security.ts (which needs to
-// verify tokens issued here). We export the verifier — not the issuer — so
-// the security layer can stay focused on policy.
-export { verifyCsrfToken };
+// issue + verify tokens). We export the verifier AND the issuer so security.ts
+// can auto-set the zaytrix_csrf cookie on responses that lack one (SEC-6 full
+// double-submit enforcement).
+export { verifyCsrfToken, makeCsrfToken };
 
 // ============================================================================
 // OAuth router mount (SEC2-AUTH) — see src/server/oauth.ts. We import + mount

@@ -334,31 +334,8 @@ export default function Settings() {
   };
 
   // Temporary local states for API inputs
-  const [localBinanceKey, setLocalBinanceKey] = useState(settings.binanceKey);
-  const [localBinanceSecret, setLocalBinanceSecret] = useState(settings.binanceSecret);
-  const [localKucoinKey, setLocalKucoinKey] = useState(settings.kucoinKey);
-  const [localKucoinSecret, setLocalKucoinSecret] = useState(settings.kucoinSecret);
-  const [localBybitKey, setLocalBybitKey] = useState(settings.bybitKey);
-  const [localBybitSecret, setLocalBybitSecret] = useState(settings.bybitSecret);
-  const [localGeminiKey, setLocalGeminiKey] = useState(settings.geminiKey);
-
-  // Save credentials
-  // NOTE: API keys are stored as plaintext JSON in localStorage (via Zustand
-  // updateSettings -> financara_settings). We honestly tell the user this;
-  // previously the UI falsely claimed "AES-256" protection.
-  const saveApiCredentials = () => {
-    updateSettings({
-      binanceKey: localBinanceKey,
-      binanceSecret: localBinanceSecret,
-      kucoinKey: localKucoinKey,
-      kucoinSecret: localKucoinSecret,
-      bybitKey: localBybitKey,
-      bybitSecret: localBybitSecret,
-      geminiKey: localGeminiKey,
-    });
-    addExecutionLog(`[SYSTEM] Kredensial API disimpan di browser lokal (localStorage). Tidak dienkripsi.`);
-    alert("Kredensial API disimpan di browser (localStorage, plaintext). Gunakan Master PIN di tab Api Automation untuk enkripsi E2EE opsional.");
-  };
+  // FUNC-4/5: local exchange-key states removed — keys belong in the
+  // server-side encrypted vault (Trade Automation tab), not localStorage.
 
   // Connection validation simulation
   const handleTestConnection = async () => {
@@ -367,11 +344,9 @@ export default function Settings() {
     setConnLogs([]);
 
     const steps = [
-      "[DIAGNOSTIK] Memulai verifikasi port komunikasi sandbox...",
-      "[AUTHENTICATION] Melakukan handshake enkripsi kunci API...",
-      "[NETWORK] Melakukan ping ke endpoint " + settings.exchangeFeed.toUpperCase() + " API REST Server...",
-      "[SSL] Melakukan validasi sertifikat SSL SHA-256...",
-      "[RATE_LIMIT] Memeriksa status anti-cyberattack jaring lokal..."
+      "[DIAGNOSTIK] Menyiapkan pengujian konektivitas...",
+      "[NETWORK] Akan melakukan ping ke endpoint " + settings.exchangeFeed.toUpperCase() + " API REST Server...",
+      "[INFO] Catatan: uji ini hanya mengecek jangkauan publik endpoint bursa — bukan validasi kunci API Anda (kunci tersimpan terenkripsi di vault server)."
     ];
 
     for (let i = 0; i < steps.length; i++) {
@@ -518,7 +493,7 @@ export default function Settings() {
                     setActiveSubTab(tab.id);
                     setViewMode("detail");
                   }}
-                  className="group relative bg-[#0A0F1D]/80 border border-slate-850 hover:border-amber-500/50 rounded-xl p-5 text-left transition-all duration-300 hover:shadow-lg hover:shadow-amber-500/10 flex flex-col justify-between h-44 cursor-pointer overflow-hidden"
+                  className="group relative bg-[#0A0F1D]/80 border border-slate-800 hover:border-amber-500/50 rounded-xl p-5 text-left transition-all duration-300 hover:shadow-lg hover:shadow-amber-500/10 flex flex-col justify-between h-44 cursor-pointer overflow-hidden"
                 >
                   {/* Top accent bar */}
                   <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-amber-500/0 via-amber-500/50 to-amber-500/0 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
@@ -549,13 +524,13 @@ export default function Settings() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-            <div className="p-5 bg-[#0F172A]/40 rounded-xl border border-slate-850 text-xs text-slate-400 leading-relaxed space-y-2 animate-fade-in">
+            <div className="p-5 bg-[#0F172A]/40 rounded-xl border border-slate-800 text-xs text-slate-400 leading-relaxed space-y-2 animate-fade-in">
               <span className="font-mono font-bold text-slate-200 uppercase tracking-wider block">INFORMASI SISTEM</span>
               <p>
-                Z-Capital Sandbox v4.16 - Semua data konfigurasi Anda disimpan dengan aman dan tahan lama di basis data Firestore Anda sendiri, menjaga kerahasiaan penuh di luar peramban lokal.
+                Z-Capital Sandbox — data konfigurasi disimpan lokal di browser Anda (localStorage) dan data akun/portofolio di database server (SQLite + Prisma).
               </p>
             </div>
-            <div className="p-5 bg-[#0F172A]/40 rounded-xl border border-slate-850 text-xs text-slate-400 leading-relaxed space-y-2 animate-fade-in">
+            <div className="p-5 bg-[#0F172A]/40 rounded-xl border border-slate-800 text-xs text-slate-400 leading-relaxed space-y-2 animate-fade-in">
               <span className="font-mono font-bold text-slate-200 uppercase tracking-wider block">KONEKTIVITAS WEBHOOK</span>
               <p>
                 Dapatkan notifikasi instan langsung ke bot Telegram, kanal Discord, atau nomor WhatsApp Anda untuk setiap transaksi besar on-chain yang terdeteksi di atas ambang batas $1.000.000.
@@ -566,7 +541,7 @@ export default function Settings() {
       ) : (
         <div className="space-y-6 animate-fade-in">
           {/* Detailed View Title & Back Controls */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#0A0F1D]/80 border border-slate-850 rounded-xl p-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#0A0F1D]/80 border border-slate-800 rounded-xl p-4">
             <div className="flex items-center gap-3">
               <button
                 onClick={() => setViewMode("menu")}
@@ -620,7 +595,7 @@ export default function Settings() {
             <div className="space-y-6 animate-fade-in" id="settings-hub-display">
               
               {/* Theme & Visual parameters */}
-              <div className="p-5 rounded-xl border border-slate-850 bg-[#0A0F1D]/60 space-y-4">
+              <div className="p-5 rounded-xl border border-slate-800 bg-[#0A0F1D]/60 space-y-4">
                 <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
                   <Sliders className="w-4 h-4 text-amber-500" />
                   <h3 className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider">Kustomisasi Antarmuka & Tema Sistem</h3>
@@ -802,7 +777,7 @@ export default function Settings() {
               </div>
 
               {/* AI Analyst & Model Parameters (RESTORED FUNCTIONAL) */}
-              <div className="p-5 rounded-xl border border-slate-850 bg-[#0A0F1D]/60 space-y-4">
+              <div className="p-5 rounded-xl border border-slate-800 bg-[#0A0F1D]/60 space-y-4">
                 <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
                   <Cpu className="w-4 h-4 text-amber-500 animate-pulse" />
                   <h3 className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider">Parameter Model AI (Google Gemini 3.5 Flash)</h3>
@@ -903,7 +878,7 @@ export default function Settings() {
               </div>
 
               {/* Market Data & Sync Protocols */}
-              <div className="p-5 rounded-xl border border-slate-850 bg-[#0A0F1D]/60 space-y-4">
+              <div className="p-5 rounded-xl border border-slate-800 bg-[#0A0F1D]/60 space-y-4">
                 <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
                   <Database className="w-4 h-4 text-amber-500" />
                   <h3 className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider">Protokol Penyelarasan Feed Pasar</h3>
@@ -953,7 +928,7 @@ export default function Settings() {
                     <button
                       onClick={handleTestConnection}
                       disabled={testingConnection}
-                      className="px-2.5 py-1 bg-slate-900 border border-slate-800 hover:bg-slate-850 text-[9px] font-bold uppercase text-slate-300 rounded hover:text-slate-100 cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+                      className="px-2.5 py-1 bg-slate-900 border border-slate-800 hover:bg-slate-900 text-[9px] font-bold uppercase text-slate-300 rounded hover:text-slate-100 cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
                     >
                       <RefreshCw className={`w-3 h-3 ${testingConnection ? "animate-spin" : ""}`} />
                       {testingConnection ? "Menguji..." : "Ping Server"}
@@ -1003,7 +978,7 @@ export default function Settings() {
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 
                 {/* 2-Factor Setup */}
-                <div className="bg-[#0A0F1D]/60 border border-slate-850 rounded-xl p-5 space-y-4">
+                <div className="bg-[#0A0F1D]/60 border border-slate-800 rounded-xl p-5 space-y-4">
                   <div className="flex items-center justify-between border-b border-slate-800 pb-2">
                     <h3 className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
                       <Fingerprint className="w-4 h-4 text-blue-400" />
@@ -1052,7 +1027,7 @@ export default function Settings() {
                 </div>
 
                 {/* E2EE Crypter Simulator */}
-                <div className="bg-[#0A0F1D]/60 border border-slate-850 rounded-xl p-5 space-y-4">
+                <div className="bg-[#0A0F1D]/60 border border-slate-800 rounded-xl p-5 space-y-4">
                   <h3 className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
                     <ShieldCheck className="w-4 h-4 text-emerald-400" />
                     Enkripsi End-to-End (E2EE AES-GCM)
@@ -1079,7 +1054,7 @@ export default function Settings() {
                       <button
                         type="button"
                         onClick={handleRunE2EEncryption}
-                        className="py-1 bg-slate-900 border border-slate-800 text-slate-300 rounded text-[10px] font-bold font-mono uppercase cursor-pointer hover:bg-slate-850"
+                        className="py-1 bg-slate-900 border border-slate-800 text-slate-300 rounded text-[10px] font-bold font-mono uppercase cursor-pointer hover:bg-slate-900"
                       >
                         Enkripsi (AES)
                       </button>
@@ -1102,7 +1077,7 @@ export default function Settings() {
               </div>
 
               {/* Active Sessions Devices List */}
-              <div className="p-5 rounded-xl border border-slate-850 bg-[#0A0F1D]/60 space-y-4">
+              <div className="p-5 rounded-xl border border-slate-800 bg-[#0A0F1D]/60 space-y-4">
                 <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
                   <Smartphone className="w-4 h-4 text-amber-500" />
                   <h3 className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider">
@@ -1112,7 +1087,7 @@ export default function Settings() {
 
                 <div className="space-y-3">
                   {activeDevices.map(device => (
-                    <div key={device.id} className="flex justify-between items-center p-3 rounded-lg bg-slate-950 border border-slate-850">
+                    <div key={device.id} className="flex justify-between items-center p-3 rounded-lg bg-slate-950 border border-slate-800">
                       <div className="space-y-0.5">
                         <span className="text-xs font-bold text-slate-200 block flex items-center gap-1.5">
                           {device.name}
@@ -1147,7 +1122,7 @@ export default function Settings() {
               </div>
 
               {/* Sandbox & CyberShield Controls (RESTORED FUNCTIONAL) */}
-              <div className="p-5 rounded-xl border border-slate-850 bg-[#0A0F1D]/60 space-y-4">
+              <div className="p-5 rounded-xl border border-slate-800 bg-[#0A0F1D]/60 space-y-4">
                 <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
                   <ShieldAlert className="w-4 h-4 text-amber-500 animate-pulse" />
                   <h3 className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider">
@@ -1238,7 +1213,7 @@ export default function Settings() {
             <div className="space-y-6 animate-fade-in" id="settings-hub-notifications">
               
               {/* Notification Rules Configuration */}
-              <div className="p-5 rounded-xl border border-slate-850 bg-[#0A0F1D]/60 space-y-4">
+              <div className="p-5 rounded-xl border border-slate-800 bg-[#0A0F1D]/60 space-y-4">
                 <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
                   <Bell className="w-4 h-4 text-emerald-400" />
                   <h3 className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider">
@@ -1254,7 +1229,7 @@ export default function Settings() {
                   
                   {/* Message Categories */}
                   <div className="space-y-3 bg-slate-950 p-4 rounded-lg border border-slate-900">
-                    <span className="text-[10px] text-slate-400 font-mono font-bold uppercase block border-b border-slate-850 pb-1">Kategori Pesan</span>
+                    <span className="text-[10px] text-slate-400 font-mono font-bold uppercase block border-b border-slate-800 pb-1">Kategori Pesan</span>
                     
                     <div className="flex items-center justify-between">
                       <div className="space-y-0.5">
@@ -1299,7 +1274,7 @@ export default function Settings() {
                   {/* Channel paths */}
                   <div className="space-y-3 bg-slate-950 p-4 rounded-lg border border-slate-900 justify-between flex flex-col">
                     <div>
-                      <span className="text-[10px] text-slate-400 font-mono font-bold uppercase block border-b border-slate-850 pb-1">Saluran Transmisi</span>
+                      <span className="text-[10px] text-slate-400 font-mono font-bold uppercase block border-b border-slate-800 pb-1">Saluran Transmisi</span>
                       <p className="text-[9.5px] text-slate-500 leading-snug mt-1.5">
                         Aktifkan jalur pengantaran sinyal. Jika dicentang, sinyal target harga bursa akan didistribusikan ke media tersebut secara riil.
                       </p>
@@ -1325,7 +1300,7 @@ export default function Settings() {
               </div>
 
               {/* Webhook notification configurations (Telegram, Discord, WhatsApp) */}
-              <div className="p-5 rounded-xl border border-slate-850 bg-[#0A0F1D]/60 space-y-4">
+              <div className="p-5 rounded-xl border border-slate-800 bg-[#0A0F1D]/60 space-y-4">
                 <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                   <div className="flex items-center gap-2">
                     <Cpu className="w-4 h-4 text-amber-500" />
@@ -1487,7 +1462,7 @@ export default function Settings() {
             <div className="space-y-6 animate-fade-in" id="settings-hub-privacy">
               
               {/* Privacy blocklist setup */}
-              <div className="p-5 rounded-xl border border-slate-850 bg-[#0A0F1D]/60 space-y-4">
+              <div className="p-5 rounded-xl border border-slate-800 bg-[#0A0F1D]/60 space-y-4">
                 <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
                   <Eye className="w-4 h-4 text-rose-500" />
                   <h3 className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider">
@@ -1520,7 +1495,7 @@ export default function Settings() {
                     <p className="text-xs text-slate-500 italic">Tidak ada pengguna yang diblokir saat ini.</p>
                   ) : (
                     blocklist.map((blocked) => (
-                      <div key={blocked} className="flex justify-between items-center p-2 rounded bg-slate-950 border border-slate-850 font-mono text-xs text-slate-300">
+                      <div key={blocked} className="flex justify-between items-center p-2 rounded bg-slate-950 border border-slate-800 font-mono text-xs text-slate-300">
                         <span>{blocked}</span>
                         <button
                           type="button"
@@ -1536,7 +1511,7 @@ export default function Settings() {
               </div>
 
               {/* Data sovereignty control panel */}
-              <div className="p-5 rounded-xl border border-slate-850 bg-[#0A0F1D]/60 space-y-4">
+              <div className="p-5 rounded-xl border border-slate-800 bg-[#0A0F1D]/60 space-y-4">
                 <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
                   <Layers className="w-4 h-4 text-amber-500" />
                   <h3 className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider">
@@ -1557,7 +1532,7 @@ export default function Settings() {
                     <button
                       type="button"
                       onClick={handleDownloadArchive}
-                      className="py-1.5 px-3 bg-slate-900 hover:bg-slate-850 border border-slate-800 text-slate-200 rounded text-[10px] font-bold font-mono uppercase cursor-pointer flex items-center gap-1.5"
+                      className="py-1.5 px-3 bg-slate-900 hover:bg-slate-900 border border-slate-800 text-slate-200 rounded text-[10px] font-bold font-mono uppercase cursor-pointer flex items-center gap-1.5"
                     >
                       <Download className="w-3.5 h-3.5 text-blue-400" /> Ekspor Arsip Data (JSON)
                     </button>
@@ -1566,7 +1541,7 @@ export default function Settings() {
                   <div className="p-4 rounded-lg bg-slate-950 border border-slate-900 space-y-2">
                     <span className="text-xs font-bold text-slate-200 block text-rose-400">Penghapusan Hak Lupa (Right to be Forgotten)</span>
                     <p className="text-[10px] text-slate-500 leading-snug">
-                      Instruksikan server siber Z-Capital untuk membakar dan menghapus semua catatan profil, kustomisasi bursa, dan ledger transaksi dari Firestore sandbox secara permanen.
+                      Instruksikan server untuk menghapus permanen semua data akun Anda: profil, kustomisasi, kunci API terenkripsi, dan ledger transaksi dari database server.
                     </p>
                     <button
                       type="button"
@@ -1591,148 +1566,56 @@ export default function Settings() {
           {activeSubTab === "integrasi" && (
             <div className="space-y-6 animate-fade-in" id="settings-hub-integration">
               
-              {/* Connected Apps list */}
-              <div className="p-5 rounded-xl border border-slate-850 bg-[#0A0F1D]/60 space-y-4">
+              {/* FUNC-20: honest integrations panel (old panel showed fake
+                  "Google Cloud / Metamask — Connected" badges — no wallet or
+                  Google-Cloud integration exists in the codebase). */}
+              <div className="p-5 rounded-xl border border-slate-800 bg-[#0A0F1D]/60 space-y-4">
                 <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
                   <Link className="w-4 h-4 text-amber-500" />
                   <h3 className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider">
-                    Daftar Aplikasi Pihak Ketiga Terhubung (Connected Apps)
+                    Status Integrasi Aktif (Nyata)
                   </h3>
                 </div>
-
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div className="p-3 rounded-lg bg-slate-950 border border-slate-900 flex justify-between items-center">
                     <div className="space-y-0.5">
-                      <span className="text-xs font-bold text-slate-300 block">Google Cloud Account</span>
-                      <span className="text-[9px] text-emerald-400 font-mono">Connected</span>
+                      <span className="text-xs font-bold text-slate-300 block">Bursa Kripto (Binance/Bybit/KuCoin)</span>
+                      <span className="text-[9px] text-sky-400 font-mono">via Vault Server — lihat tab Otomasi</span>
                     </div>
-                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                  </div>
-                  <div className="p-3 rounded-lg bg-slate-950 border border-slate-900 flex justify-between items-center opacity-60">
-                    <div className="space-y-0.5">
-                      <span className="text-xs font-bold text-slate-300 block">Apple ID Portal</span>
-                      <span className="text-[9px] text-slate-500 font-mono">Not Connected</span>
-                    </div>
-                    <span className="w-2 h-2 rounded-full bg-slate-850" />
+                    <span className="w-2 h-2 rounded-full bg-sky-500" />
                   </div>
                   <div className="p-3 rounded-lg bg-slate-950 border border-slate-900 flex justify-between items-center">
                     <div className="space-y-0.5">
-                      <span className="text-xs font-bold text-slate-300 block">Metamask / WalletConnect</span>
-                      <span className="text-[9px] text-emerald-400 font-mono">Connected</span>
+                      <span className="text-xs font-bold text-slate-300 block">Google OAuth Login</span>
+                      <span className="text-[9px] text-slate-500 font-mono">aktif jika GOOGLE_CLIENT_ID diset server</span>
                     </div>
-                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                    <span className="w-2 h-2 rounded-full bg-slate-700" />
+                  </div>
+                  <div className="p-3 rounded-lg bg-slate-950 border border-slate-900 flex justify-between items-center">
+                    <div className="space-y-0.5">
+                      <span className="text-xs font-bold text-slate-300 block">Dompet Web3 (Metamask dll.)</span>
+                      <span className="text-[9px] text-slate-500 font-mono">Belum tersedia</span>
+                    </div>
+                    <span className="w-2 h-2 rounded-full bg-slate-700" />
                   </div>
                 </div>
               </div>
 
-              {/* API Credentials Input Store */}
-              <div className="p-5 rounded-xl border border-slate-850 bg-[#0A0F1D]/60 space-y-4">
-                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                  <div className="flex items-center gap-2">
-                    <Key className="w-4 h-4 text-amber-500" />
-                    <h3 className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider">Gudang Penyimpanan API Key (Kredensial Riil)</h3>
-                  </div>
-                  <span className="text-[8px] px-1.5 py-0.5 rounded font-mono font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                    TERSIMPAN DI BROWSER (localStorage)
-                  </span>
+              {/* FUNC-4/5: the plaintext localStorage key store was removed.
+                  Exchange keys now live ONLY in the server-side AES-256-GCM
+                  vault (Trade Automation tab) which the trade executor
+                  actually reads. */}
+              <div className="p-5 rounded-xl border border-slate-800 bg-[#0A0F1D]/60 space-y-4">
+                <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
+                  <Key className="w-4 h-4 text-amber-500" />
+                  <h3 className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider">Penyimpanan Kunci Bursa (Vault Server)</h3>
                 </div>
-
-                <div className="bg-amber-500/5 border border-amber-500/15 rounded p-2.5 text-[9.5px] text-amber-400 font-mono leading-snug">
-                  ⚠ Kredensial API disimpan plaintext di localStorage peramban Anda. Jangan gunakan komputer publik. Untuk penyimpanan terenkripsi, gunakan fitur E2EE AES-GCM di tab Api Automation (dengan Master PIN).
+                <div className="bg-sky-500/5 border border-sky-500/15 rounded p-3 text-[10px] text-sky-300 font-mono leading-relaxed">
+                  Kunci API bursa tidak lagi disimpan plaintext di browser. Buka tab <strong>Otomasi Trade</strong> untuk menyimpan kunci Binance / Bybit / KuCoin ke vault server yang terenkripsi AES-256-GCM — hanya dari vault itulah order real ditandatangani dan dieksekusi.
                 </div>
-
-                <div className="space-y-3">
-                  {/* Binance */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <span className="text-[9px] text-slate-500 font-mono block uppercase">Binance API Key</span>
-                      <input
-                        type="password"
-                        value={localBinanceKey}
-                        onChange={(e) => setLocalBinanceKey(e.target.value)}
-                        placeholder="Kunci API Binance"
-                        className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-amber-500"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <span className="text-[9px] text-slate-500 font-mono block uppercase">Binance Secret Key</span>
-                      <input
-                        type="password"
-                        value={localBinanceSecret}
-                        onChange={(e) => setLocalBinanceSecret(e.target.value)}
-                        placeholder="Secret Key Binance"
-                        className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-amber-500"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Kucoin */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-slate-850">
-                    <div className="space-y-1">
-                      <span className="text-[9px] text-slate-500 font-mono block uppercase">Kucoin API Key</span>
-                      <input
-                        type="password"
-                        value={localKucoinKey}
-                        onChange={(e) => setLocalKucoinKey(e.target.value)}
-                        placeholder="Kunci API Kucoin"
-                        className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-amber-500"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <span className="text-[9px] text-slate-500 font-mono block uppercase">Kucoin Secret Key</span>
-                      <input
-                        type="password"
-                        value={localKucoinSecret}
-                        onChange={(e) => setLocalKucoinSecret(e.target.value)}
-                        placeholder="Secret Key Kucoin"
-                        className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-amber-500"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Bybit */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-slate-850">
-                    <div className="space-y-1">
-                      <span className="text-[9px] text-slate-500 font-mono block uppercase">Bybit API Key</span>
-                      <input
-                        type="password"
-                        value={localBybitKey}
-                        onChange={(e) => setLocalBybitKey(e.target.value)}
-                        placeholder="Kunci API Bybit"
-                        className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-amber-500"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <span className="text-[9px] text-slate-500 font-mono block uppercase">Bybit Secret Key</span>
-                      <input
-                        type="password"
-                        value={localBybitSecret}
-                        onChange={(e) => setLocalBybitSecret(e.target.value)}
-                        placeholder="Secret Key Bybit"
-                        className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-amber-500"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Gemini */}
-                  <div className="space-y-1 pt-2 border-t border-slate-850">
-                    <span className="text-[9px] text-slate-550 font-mono block uppercase">Gemini Personal API Key (Override)</span>
-                    <input
-                      type="password"
-                      value={localGeminiKey}
-                      onChange={(e) => setLocalGeminiKey(e.target.value)}
-                      placeholder="Google Gemini Key (Untuk asisten AI)"
-                      className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-amber-500"
-                    />
-                  </div>
-
-                  <button
-                    onClick={saveApiCredentials}
-                    className="w-full mt-2 py-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 text-xs font-bold uppercase tracking-wider rounded-lg transition-colors cursor-pointer"
-                  >
-                    Simpan & Pasang Kredensial API
-                  </button>
-                </div>
+                <p className="text-[9.5px] text-slate-500 font-mono leading-snug">
+                  FUNC-6: input "Gemini Personal API Key" juga dihapus — server memang mengabaikan header X-Gemini-Key demi keamanan; seluruh analisis AI memakai kunci GEMINI_API_KEY server.
+                </p>
               </div>
 
             </div>
@@ -1743,7 +1626,7 @@ export default function Settings() {
             <div className="space-y-6 animate-fade-in" id="settings-hub-support">
               
               {/* FAQ Accordion Section */}
-              <div className="p-5 rounded-xl border border-slate-850 bg-[#0A0F1D]/60 space-y-4">
+              <div className="p-5 rounded-xl border border-slate-800 bg-[#0A0F1D]/60 space-y-4">
                 <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
                   <HelpCircle className="w-4 h-4 text-blue-400" />
                   <h3 className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider">
@@ -1768,7 +1651,7 @@ export default function Settings() {
                   ].map((faq, idx) => {
                     const isOpen = faqExpanded[idx];
                     return (
-                      <div key={idx} className="border border-slate-850 rounded-lg overflow-hidden bg-slate-950">
+                      <div key={idx} className="border border-slate-800 rounded-lg overflow-hidden bg-slate-950">
                         <button
                           onClick={() => toggleFaq(idx)}
                           className="w-full flex justify-between items-center p-3 text-left hover:bg-slate-900 transition-colors cursor-pointer"
@@ -1777,7 +1660,7 @@ export default function Settings() {
                           {isOpen ? <ChevronUp className="w-4 h-4 text-amber-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
                         </button>
                         {isOpen && (
-                          <div className="p-3.5 border-t border-slate-850 text-xs text-slate-400 leading-relaxed bg-slate-950/50">
+                          <div className="p-3.5 border-t border-slate-800 text-xs text-slate-400 leading-relaxed bg-slate-950/50">
                             {faq.a}
                           </div>
                         )}
@@ -1791,17 +1674,17 @@ export default function Settings() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 
                 {/* Privacy Policy */}
-                <div className="p-5 rounded-xl border border-slate-850 bg-[#0A0F1D]/60 space-y-3">
+                <div className="p-5 rounded-xl border border-slate-800 bg-[#0A0F1D]/60 space-y-3">
                   <span className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider block border-b border-slate-800 pb-2">Kebijakan Privasi (Privacy Policy)</span>
                   <div className="h-44 overflow-y-auto text-[11px] text-slate-500 leading-relaxed font-sans pr-2 space-y-2">
-                    <p><strong>1. Pengumpulan Informasi:</strong> Z-Capital tidak mengumpulkan, menjual, atau mentransfer data kredensial, API key bursa, atau nomor telepon Anda ke pihak luar. Data profil disimpan di Firestore sandbox Anda sendiri; API key disimpan plaintext di localStorage peramban Anda.</p>
+                    <p><strong>1. Pengumpulan Informasi:</strong> Z-Capital tidak mengumpulkan, menjual, atau mentransfer data kredensial, API key bursa, atau nomor telepon Anda ke pihak luar. Data profil disimpan lokal di browser Anda; kunci API bursa disimpan terenkripsi AES-256-GCM di vault server.</p>
                     <p><strong>2. Keamanan Kunci:</strong> API Key disimpan plaintext di peramban lokal (localStorage). Enkripsi E2EE AES-GCM 256-bit tersedia opsional di tab Api Automation dengan Master PIN pengguna.</p>
                     <p><strong>3. Hak Pengguna:</strong> Anda memiliki hak penuh untuk mengekstrak data Anda sendiri atau menghapusnya secara permanen setiap saat sesuai standar GDPR.</p>
                   </div>
                 </div>
 
                 {/* Terms of Service */}
-                <div className="p-5 rounded-xl border border-slate-850 bg-[#0A0F1D]/60 space-y-3">
+                <div className="p-5 rounded-xl border border-slate-800 bg-[#0A0F1D]/60 space-y-3">
                   <span className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider block border-b border-slate-800 pb-2">Syarat & Ketentuan (Terms of Service)</span>
                   <div className="h-44 overflow-y-auto text-[11px] text-slate-500 leading-relaxed font-sans pr-2 space-y-2">
                     <p><strong>1. Penggunaan Sandbox:</strong> Z-Capital merupakan terminal sandbox. Eksekusi margin, analisis target harga, dan pengisian portofolio adalah alat bantu visual murni untuk mengedukasi investor.</p>

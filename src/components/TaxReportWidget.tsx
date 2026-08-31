@@ -50,7 +50,8 @@ interface TaxReport {
   unrealizedGainLossUsd: number;
   realizedGainLossPct: number;
   pmk68TaxUsd: number;
-  pmk68TaxIdr: number;
+  pmk68TaxIdr: number | null; // DATA-24: null = kurs USD/IDR tidak tersedia
+  usdIdrRate?: number | null; // kurs live yang dipakai server (transparansi)
   pmk68TaxRate: number;
   transactionCount: number;
   buyCount: number;
@@ -61,6 +62,16 @@ interface TaxReport {
   generatedAt: string;
   summary: string;
 }
+
+// SEC-4: escape user-controlled values (symbol bisa berasal dari transaksi
+// ledger user) sebelum diinterpolasi ke HTML print-window (document.write).
+const escapeHtml = (v: unknown): string =>
+  String(v ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 
 function formatUSD(n: number): string {
   if (Math.abs(n) >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
@@ -117,7 +128,7 @@ export default function TaxReportWidget() {
     const symbolRows = report.perSymbol
       .map(
         (s) => `<tr>
-          <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; font-weight: bold;">${s.symbol}</td>
+          <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; font-weight: bold;">${escapeHtml(s.symbol)}</td>
           <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; text-align: right;">${s.buyCount}</td>
           <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; text-align: right;">${s.sellCount}</td>
           <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; text-align: right; color: #3b82f6;">${formatUSD(s.proceedsUsd)}</td>
@@ -163,7 +174,7 @@ export default function TaxReportWidget() {
   </div>
 
   <div class="summary">
-    <strong>Ringkasan:</strong> ${report.summary}
+    <strong>Ringkasan:</strong> ${escapeHtml(report.summary)}
   </div>
 
   <div class="stats">
@@ -183,7 +194,7 @@ export default function TaxReportWidget() {
     </div>
     <div class="stat">
       <div class="stat-label">PMK-68 Tax</div>
-      <div class="stat-value" style="color: #f97316;">${formatIDR(report.pmk68TaxIdr)}</div>
+      <div class="stat-value" style="color: #f97316;">${report.pmk68TaxIdr !== null && report.pmk68TaxIdr !== undefined ? formatIDR(report.pmk68TaxIdr) : "—"}</div>
     </div>
   </div>
 
@@ -207,7 +218,7 @@ export default function TaxReportWidget() {
 
   <div class="footer">
     <span>Dibuat: ${new Date(report.generatedAt).toLocaleString("id-ID")}</span>
-    <span>PMK-68 Rate: ${(report.pmk68TaxRate * 100).toFixed(1)}% dari proceeds • USD/IDR: 15.800</span>
+    <span>PMK-68 Rate: ${(report.pmk68TaxRate * 100).toFixed(1)}% dari proceeds • USD/IDR: ${report.usdIdrRate ? report.usdIdrRate.toLocaleString("id-ID", { maximumFractionDigits: 0 }) : "kurs live (tidak tersedia)"}</span>
   </div>
   <script>
     window.onload = () => { setTimeout(() => window.print(), 300); };
@@ -324,7 +335,7 @@ export default function TaxReportWidget() {
             />
             <SummaryCard
               label="PMK-68 Tax"
-              value={formatIDR(report.pmk68TaxIdr)}
+              value={report.pmk68TaxIdr !== null && report.pmk68TaxIdr !== undefined ? formatIDR(report.pmk68TaxIdr) : "kurs tidak tersedia"}
               icon={<Receipt className="w-3 h-3" />}
               color="#f97316"
             />

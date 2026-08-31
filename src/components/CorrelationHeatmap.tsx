@@ -84,11 +84,18 @@ export default function CorrelationHeatmap({ portfolio }: CorrelationHeatmapProp
     const fetchAllHistories = async () => {
       setLoadingHistory(true);
       try {
+        // DATA-2: 503 = sumber real gagal untuk simbol tersebut (server tidak
+        // lagi memfabricate candle acak) — simbol itu dianggap tanpa data.
         const fetches = symbols.map(async (sym) => {
-          const res = await fetch(`/api/history/${sym}`);
-          if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-          const data = await res.json();
-          return { symbol: sym, history: data.history || [] };
+          try {
+            const res = await fetch(`/api/history/${sym}`);
+            if (!res.ok) return { symbol: sym, history: [] as { date: string; close: number }[] };
+            const data = await res.json();
+            if (!data?.success && data?.error) return { symbol: sym, history: [] as { date: string; close: number }[] };
+            return { symbol: sym, history: data.history || [] };
+          } catch {
+            return { symbol: sym, history: [] as { date: string; close: number }[] };
+          }
         });
 
         const results = await Promise.all(fetches);

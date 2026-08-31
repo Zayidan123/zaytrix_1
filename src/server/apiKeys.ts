@@ -314,10 +314,14 @@ apiKeysRouter.post("/:id/test", async (req: Request, res: Response, next: NextFu
     }
 
     const probe = await probeExchangeAuth(existing.exchange, apiKey, apiSecret, passphrase);
+    // SEC-18: the audit log is readable by the user via /api/auth/audit-logs —
+    // previously it stored the raw exchange BALANCE number in metadata. Store
+    // only a boolean probe result; the balance itself is returned in the HTTP
+    // response (to the key owner only) but never persisted in audit metadata.
     await logAudit(userId, "API_KEY_TEST", req, probe.ok, {
       keyId: id,
       exchange: existing.exchange,
-      balance: probe.balance ?? null,
+      balanceOk: probe.ok, // boolean — no raw balance in the audit trail
       source: probe.source ?? null,
       error: probe.error ?? null,
     });

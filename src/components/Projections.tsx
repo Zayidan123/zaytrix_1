@@ -24,6 +24,18 @@ import {
 import { Asset } from "../types";
 import { exportProjectCfaReport } from "../utils/pdfGenerator";
 
+// SEC-4: escape user-controlled values (asset name/symbol can come from
+// /api/assets/register) before interpolating them into print-window HTML —
+// a malicious name like `<img src=x onerror=...>` used to execute in the
+// same-origin about:blank window and could call authenticated APIs.
+const escapeHtml = (v: unknown): string =>
+  String(v ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
 interface ProjectionsProps {
   assets: Asset[];
 }
@@ -184,7 +196,7 @@ export default function Projections({ assets }: ProjectionsProps) {
     const htmlReport = `
       <html>
         <head>
-          <title>Laporan Pemodelan Finansial - ${selectedAsset?.symbol}</title>
+          <title>Laporan Pemodelan Finansial - ${escapeHtml(selectedAsset?.symbol)}</title>
           <style>
             body { font-family: sans-serif; padding: 40px; color: #1e293b; line-height: 1.6; }
             h1 { color: #0d9488; }
@@ -199,7 +211,7 @@ export default function Projections({ assets }: ProjectionsProps) {
         <body>
           <div class="header">
             <h1>FINANCIAL MODELING REPORT</h1>
-            <h3>Aset Terdaftar: ${selectedAsset?.name} (${selectedAsset?.symbol})</h3>
+            <h3>Aset Terdaftar: ${escapeHtml(selectedAsset?.name)} (${escapeHtml(selectedAsset?.symbol)})</h3>
             <p>Tanggal Cetak: ${new Date().toLocaleDateString("id-ID")} | Toleransi Risiko: ${riskScenario}</p>
           </div>
           <div class="stats">
@@ -277,9 +289,6 @@ export default function Projections({ assets }: ProjectionsProps) {
       const headers: Record<string, string> = {
         "Content-Type": "application/json"
       };
-      if (settings.geminiKey) {
-        headers["X-Gemini-Key"] = settings.geminiKey;
-      }
 
       const res = await fetch("/api/gemini/analyze", {
         method: "POST",

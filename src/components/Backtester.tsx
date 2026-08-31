@@ -312,7 +312,13 @@ export default function Backtester({ assets }: BacktesterProps) {
     try {
       const res = await fetch(`/api/history/${targetSymbol}`);
       if (!res.ok) {
-        throw new Error("Gagal mengunduh riwayat historis harga dari server.");
+        // 503 = semua sumber real gagal; server tidak lagi memfabricate data.
+        let srvMsg = "Gagal mengunduh riwayat historis harga dari server.";
+        try {
+          const errJson = await res.json();
+          if (errJson?.error) srvMsg = errJson.error;
+        } catch {}
+        throw new Error(srvMsg + " Backtest dibatalkan — tidak dijalankan pada data sintetis.");
       }
       const contentType = res.headers.get("content-type");
       if (!contentType || !contentType.includes("application/json")) {

@@ -94,6 +94,19 @@ const Sparkline = ({ data, color }: { data: number[]; color: string }) => {
   );
 };
 
+// DATA-22: amber badge marking hardcoded cold-start/fallback values so they
+// are never mistaken for live data.
+function FallbackBadge() {
+  return (
+    <span
+      className="text-[7px] font-mono font-bold bg-amber-500/15 text-amber-400 border border-amber-500/25 px-1 py-0.5 rounded select-none"
+      title="Nilai fallback (cold-start/offline) — bukan data live"
+    >
+      EST
+    </span>
+  );
+}
+
 export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHolding }: DashboardProps) {
   const user = useGlobalStore(state => state.user);
   const [profileData, setProfileData] = useState<any>(null);
@@ -390,6 +403,24 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
   const networkHashrateMetric = liveLatestHash
     || autoAnalysis?.metrics?.networkHashrate
     || 615; // FALLBACK — offline only
+
+  // DATA-22: explicit live-vs-fallback flags — used to dim metric cards and
+  // badge them "EST/OFFLINE" so hardcoded cold-start values are never
+  // mistaken for live data.
+  const metricsUsingFallback = {
+    btcPrice: !liveBtcPrice && !autoAnalysis?.metrics?.price,
+    openInterest: !liveBtcOiUsd && !autoAnalysis?.metrics?.openInterest,
+    fundingRate: (typeof liveBtcFunding !== "number") && !autoAnalysis?.metrics?.fundingRate,
+    longShort: (liveLongShort.length === 0) && !autoAnalysis?.metrics?.longShortRatio,
+    netflow: (liveNetflowUsd === null) && !autoAnalysis?.metrics?.netflow,
+    activeAddresses: (liveActiveAddresses.length === 0) && !autoAnalysis?.metrics?.activeAddresses,
+    hashrate: (liveHashrate.length === 0) && !autoAnalysis?.metrics?.networkHashrate,
+  };
+  const anyMetricFallback = Object.values(metricsUsingFallback).some(Boolean);
+  const sparklinesUsingFallback = (
+    !Array.isArray(liveMetrics?.btcPriceHistory) && liveLongShort.length === 0 &&
+    liveExchangeNetflow.length === 0 && liveActiveAddresses.length === 0 && liveHashrate.length === 0
+  );
 
   // ───────────────────────────────────────────────────────────────────────────
   // SPARKLINE HISTORY DATASETS (7 + 1 chart = 8 total).
@@ -1364,6 +1395,7 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
                   <div className="flex items-center gap-1">
                     <Coins className="w-3.5 h-3.5 text-yellow-500 group-hover:scale-110 transition-transform" />
                     <span className="text-[10px] font-bold text-slate-300">Spot BTC</span>
+                    {metricsUsingFallback.btcPrice && <FallbackBadge />}
                   </div>
                   {/* Live 24h change — prefer Zustand WS percent, then cached AI, then FALLBACK */}
                   <span className={`text-[9px] font-bold font-mono ${
@@ -1387,6 +1419,7 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
                   <div className="flex items-center gap-1">
                     <Activity className="w-3.5 h-3.5 text-blue-400 group-hover:scale-110 transition-transform" />
                     <span className="text-[10px] font-bold text-slate-300">Open Interest</span>
+                    {metricsUsingFallback.openInterest && <FallbackBadge />}
                   </div>
                   <span className="text-[9px] font-mono font-bold text-blue-400">Futures</span>
                 </div>
@@ -1404,6 +1437,7 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
                   <div className="flex items-center gap-1">
                     <Percent className="w-3.5 h-3.5 text-purple-400 group-hover:scale-110 transition-transform" />
                     <span className="text-[10px] font-bold text-slate-300">Funding Rate</span>
+                    {metricsUsingFallback.fundingRate && <FallbackBadge />}
                   </div>
                   <span className="text-[9px] font-mono font-bold text-purple-400">Binance</span>
                 </div>
@@ -1421,6 +1455,7 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
                   <div className="flex items-center gap-1">
                     <HelpCircle className="w-3.5 h-3.5 text-amber-400 group-hover:scale-110 transition-transform" />
                     <span className="text-[10px] font-bold text-slate-300">L/S Ratio</span>
+                    {metricsUsingFallback.longShort && <FallbackBadge />}
                   </div>
                   <span className="text-[9px] font-mono font-bold text-amber-400">Accounts</span>
                 </div>
@@ -1438,6 +1473,7 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
                   <div className="flex items-center gap-1">
                     <RefreshCw className="w-3.5 h-3.5 text-pink-400 group-hover:scale-110 transition-transform" />
                     <span className="text-[10px] font-bold text-slate-300">Exchange Netflow</span>
+                    {metricsUsingFallback.netflow && <FallbackBadge />}
                   </div>
                   <span className="text-[9px] font-mono font-bold text-emerald-400" title={liveExchangeNetflow.length > 0 ? "Exchange netflow REAL dari Santiment (free tier, lag ~30 hari). Positif = inflow ke exchange, negatif = outflow." : "Exchange netflow estimasi (data Santiment belum termuat)."}>{liveExchangeNetflow.length > 0 ? "30D • LIVE" : "30D • EST"}</span>
                 </div>
@@ -1457,8 +1493,12 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
                   <div className="flex items-center gap-1">
                     <User className="w-3.5 h-3.5 text-teal-400 group-hover:scale-110 transition-transform" />
                     <span className="text-[10px] font-bold text-slate-300">Active Addr</span>
+                    {metricsUsingFallback.activeAddresses && <FallbackBadge />}
                   </div>
-                  <span className="text-[9px] font-mono font-bold text-emerald-400">{networkHashrateMetric} EH/s</span>
+                  <span className="text-[9px] font-mono font-bold text-emerald-400 inline-flex items-center gap-1">
+                    {metricsUsingFallback.hashrate && <FallbackBadge />}
+                    {networkHashrateMetric} EH/s
+                  </span>
                 </div>
                 <div className="mt-1">
                   <span className="text-xs font-mono font-black text-white">
@@ -1471,7 +1511,7 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
           </div>
 
           <div className="text-[10px] text-slate-500 mt-4 leading-relaxed bg-slate-950/20 p-2.5 rounded-lg border border-slate-800/40 font-mono">
-            * Data ditarik dan disinkronkan secara real-time langsung dari nodus RPC publik & API bursa berjangka.
+            * Data ditarik real-time dari API publik (Binance/CoinGecko/Santiment/mempool.space). Badge "EST" = nilai fallback cold-start/offline, bukan data live.
           </div>
         </div>
 

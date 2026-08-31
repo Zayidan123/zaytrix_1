@@ -166,9 +166,6 @@ export default function AssetsHub({ assets }: AssetsHubProps) {
       const headers: Record<string, string> = {
         "Content-Type": "application/json"
       };
-      if (settings.geminiKey) {
-        headers["X-Gemini-Key"] = settings.geminiKey;
-      }
 
       const res = await fetch("/api/gemini/analyze", {
         method: "POST",
@@ -280,9 +277,6 @@ export default function AssetsHub({ assets }: AssetsHubProps) {
       const headers: Record<string, string> = {
         "Content-Type": "application/json"
       };
-      if (settings.geminiKey) {
-        headers["X-Gemini-Key"] = settings.geminiKey;
-      }
 
       const res = await fetch("/api/gemini/analyze-pdf", {
         method: "POST",

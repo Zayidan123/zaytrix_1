@@ -2,10 +2,11 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import { motion } from "motion/react";
 import { useGlobalStore } from "../store";
 import Markdown from "react-markdown";
-import {
-  getOnChainMockData,
-  LiquidationLiveEvent
-} from "../utils/onChainMockData";
+// DATA-7 / FUNC-19: `../utils/onChainMockData` (getOnChainMockData +
+// generateLiveLiquidation + Math.random random-walk generators) was DELETED.
+// This component now renders ONLY real server data (/api/onchain/*, /api/live/*)
+// with honest loading skeletons + empty states — no fabricated baseline series.
+
 import { 
   TrendingUp, 
   TrendingDown, 
@@ -52,6 +53,39 @@ import {
 } from "recharts";
 import TokenTerminalExplorer from "./TokenTerminalExplorer";
 
+// Live liquidation event shape returned by /api/onchain/data (mapped below).
+// Previously imported from utils/onChainMockData — moved here when that file
+// was deleted (it is the only consumer).
+export interface LiquidationLiveEvent {
+  id: string;
+  time: string;
+  symbol: string;
+  side: "LONG" | "SHORT";
+  price: number;
+  amount: number;
+  valueUsd: number;
+  exchange: string;
+}
+
+// DATA-7: honest empty/loading state for panels whose live source has not
+// delivered data yet (previously these panels rendered Math.random mock rows).
+// Doubles as a loading skeleton (pulsing icon) while the first fetch is
+// in-flight and as an honest "Data belum tersedia" state when the source has
+// no data. `note` explains which real source we are waiting for.
+const EmptyDatasetNote = ({ note = "Menunggu data dari sumber real…" }: { note?: string }) => (
+  <div className="h-full w-full min-h-[140px] flex flex-col items-center justify-center gap-2 rounded-xl bg-slate-950/40 border border-dashed border-slate-800/60 px-4 py-8 text-center">
+    <Server className="w-5 h-5 text-slate-600 animate-pulse" />
+    <span className="text-[11px] font-mono font-bold text-slate-500 uppercase tracking-widest">
+      Data belum tersedia
+    </span>
+    <span className="text-[10px] text-slate-600 font-mono leading-relaxed">{note}</span>
+  </div>
+);
+
+// DATA-7: dataset guard — `undefined`/`null`/empty arrays all mean "no real
+// data" now that the mock baseline was deleted.
+const hasData = (arr: any): boolean => Array.isArray(arr) && arr.length > 0;
+
 export interface OnChainTx {
   txhash: string;
   timestamp: string;
@@ -79,9 +113,13 @@ type TabType = "derivatives" | "liquidations" | "volume" | "funding" | "orderboo
 
 export default function OnChainData() {
   const [activeTab, setActiveTab] = useState<TabType>("derivatives");
-  const [livePriceBtc, setLivePriceBtc] = useState<number>(64250);
-  const [livePriceEth, setLivePriceEth] = useState<number>(3465);
-  const [fearGreedVal, setFearGreedVal] = useState<number>(72);
+  // DATA-7: initial price states were hardcoded fake values (64250 / 3465 / 72
+  // / 164.50 / 600 / 2 …). Now 0 = "not fetched yet"; the header renders "—"
+  // until the first /api/onchain/data or /api/onchain/metrics response arrives.
+  const [livePriceBtc, setLivePriceBtc] = useState<number>(0);
+  const [livePriceEth, setLivePriceEth] = useState<number>(0);
+  const [fearGreedVal, setFearGreedVal] = useState<number>(0);
+  const [fearGreedLoaded, setFearGreedLoaded] = useState<boolean>(false);
   const [liveLiquidations, setLiveLiquidations] = useState<LiquidationLiveEvent[]>([]);
   const [selectedLiquidation, setSelectedLiquidation] = useState<LiquidationLiveEvent | null>(null);
   
@@ -149,13 +187,13 @@ export default function OnChainData() {
   // Live BTC correlations vs S&P500, Gold, DXY, Nasdaq (Pearson, 30d)
   const [liveCorrelations, setLiveCorrelations] = useState<any[]>([]);
   // Live SOL price + 24h change percents (sourced from /api/onchain/data payload)
-  const [livePriceSol, setLivePriceSol] = useState<number>(164.50);
-  const [liveBtcChange, setLiveBtcChange] = useState<number>(1.4);
-  const [liveEthChange, setLiveEthChange] = useState<number>(0.8);
-  const [liveSolChange, setLiveSolChange] = useState<number>(3.6);
+  const [livePriceSol, setLivePriceSol] = useState<number>(0);
+  const [liveBtcChange, setLiveBtcChange] = useState<number>(0);
+  const [liveEthChange, setLiveEthChange] = useState<number>(0);
+  const [liveSolChange, setLiveSolChange] = useState<number>(0);
   // Live BNB/XRP prices (used for altcoin OI notional conversion)
-  const [livePriceBnb, setLivePriceBnb] = useState<number>(600);
-  const [livePriceXrp, setLivePriceXrp] = useState<number>(2);
+  const [livePriceBnb, setLivePriceBnb] = useState<number>(0);
+  const [livePriceXrp, setLivePriceXrp] = useState<number>(0);
 
   // === LIVE DATA STATE (sourced from /api/live/* endpoints — REAL free public sources) ===
   // These endpoints were added by LIVEDATA agent (see worklog Task ID LIVEDATA) and augmented by
@@ -277,14 +315,14 @@ export default function OnChainData() {
     }
   };
 
-  // === MERGED LIVE + ESTIMATED CHART DATA ===
-  // Base mock data — used as FALLBACK ONLY for datasets that have no free live source (BubbleIndex,
-  // NUPL, New_Addresses, miner outflow UTXO, LTH/STH supply, funding-overview cumulative, M2/Fed
-  // macro, etc.). Per SEC2-SCRAPING all 12 /api/live/* endpoints now return REAL data, so datasets
-  // like stockToFlow, mvrvRatio, mvrvZScore, drawdownAth, minerData (revenue), addressMetrics
-  // (active), btcSpotFlows, cmeBtcOI, etfOverview are COMPLETELY REPLACED with live values when
-  // available — see `data` useMemo below. Charts that retain mock fallback are flagged "• EST".
-  const mockData = useMemo(() => getOnChainMockData(), []);
+  // === MERGED LIVE CHART DATA (DATA-7: mock baseline REMOVED) ===
+  // Previously every dataset started from `getOnChainMockData()` (random-walk
+  // fabrication) and live values were merged on top as an override. Now the
+  // base is an EMPTY object — a chart only renders when its real live source
+  // has delivered data; otherwise the JSX below renders an honest empty state
+  // ("Data belum tersedia" / "Menunggu data dari sumber real…"). Datasets with
+  // no free live source at all simply stay empty. Server-estimated fields
+  // (miner outflow, S2F model line) keep their "• EST" badges.
 
   // Helper: derive human-readable label for a Pearson correlation coefficient.
   const corrLabel = (corr: number): string => {
@@ -383,12 +421,14 @@ export default function OnChainData() {
     });
   }, [liveOiRaw, livePriceBtc, livePriceEth, livePriceSol]);
 
-  // Merged chart data: when live data IS available for a dataset, it COMPLETELY replaces the
-  // mock baseline (not just an overlay). Datasets with NO free live source (BubbleIndex, NUPL,
-  // New_Addresses, miner outflow UTXO, LTH/STH supply, M2/Fed macro, funding-overview cumulative,
-  // aggregated liquidity delta over time) fall back to mockData with inline "• EST" badges.
+  // Merged chart data (DATA-7): each dataset renders ONLY when its real live
+  // source delivered data; mock fallback was removed. Datasets with no free
+  // live source (BubbleIndex, NUPL, New_Addresses, LTH/STH supply, M2/Fed
+  // macro, funding-overview cumulative, aggregated liquidity delta over time)
+  // stay empty and their charts render an honest empty state.
   const data = useMemo(() => {
-    const merged: any = { ...mockData };
+    // DATA-7: empty base — no mock fallback. Live sources populate below.
+    const merged: any = {};
     // Live 30-day funding rates (Binance/ETH/SOL) from /api/onchain/metrics
     if (liveMetrics?.fundingRates) merged.fundingRates = liveMetrics.fundingRates;
     // Live 30-day OI history (BTC/ETH/SOL) merged + USD-notionalized
@@ -495,20 +535,16 @@ export default function OnChainData() {
       }));
     }
 
-    // Bubble Index & NVT Ratio: REAL NVT from blockchain.info (market cap ÷ tx volume). The
-    // BubbleIndex + NUPL fields have no free live source — they stay as the mock values at the
-    // matching date index. Chart shape: {date, BubbleIndex, NVTRatio, NUPL}. The "• EST" badge stays
-    // (BubbleIndex + NUPL remain estimated; NVTRatio is now REAL).
-    if (liveNvt.length > 0 && Array.isArray(mockData.bubbleAndNvt)) {
-      merged.bubbleAndNvt = mockData.bubbleAndNvt.map((b: any, i: number) => {
-        const live = liveNvt[liveNvt.length - 1 - i] || liveNvt[i] || {};
-        return {
-          date: b.date,
-          BubbleIndex: b.BubbleIndex,        // mock (no free live source)
-          NVTRatio: Math.round(Number(live.nvt) || b.NVTRatio),  // REAL NVT
-          NUPL: b.NUPL                        // mock (no free live source)
-        };
-      });
+    // Bubble Index & NVT Ratio: REAL NVT from blockchain.info (market cap ÷ tx
+    // volume). DATA-7: the BubbleIndex + NUPL mock series were REMOVED (no free
+    // live source exists — fabricated values are worse than an honest empty
+    // chart). Chart shape: {date, NVTRatio} — the NVT line is real; the
+    // Bubble/NUPL lines simply don't render until a real source exists.
+    if (liveNvt.length > 0) {
+      merged.bubbleAndNvt = liveNvt.slice().reverse().map((n: any) => ({
+        date: n.date,
+        NVTRatio: Math.round(Number(n.nvt) || 0)   // REAL NVT (blockchain.info)
+      }));
     }
 
     // Miner Data: REAL revenue (blockchain.info, $M) + REAL top pools (mempool.space). Outflow is
@@ -524,18 +560,14 @@ export default function OnChainData() {
       }));
     }
 
-    // Address Metrics: REAL active addresses from Coinmetrics community API. New_Addresses has no
-    // free live source — stays as the mock value at the matching date index. Chart shape:
-    // {date, Active_Addresses, New_Addresses}. The "• EST" badge stays (New_Addresses still mock).
-    if (liveActiveAddresses.length > 0 && Array.isArray(mockData.addressMetrics)) {
-      merged.addressMetrics = mockData.addressMetrics.map((a: any, i: number) => {
-        const live = liveActiveAddresses[liveActiveAddresses.length - 1 - i] || liveActiveAddresses[i] || {};
-        return {
-          date: a.date,
-          Active_Addresses: Math.round(Number(live.activeAddresses) || a.Active_Addresses),  // REAL
-          New_Addresses: a.New_Addresses    // mock (no free live source)
-        };
-      });
+    // Address Metrics: REAL active addresses from Coinmetrics community API.
+    // DATA-7: the New_Addresses mock series was REMOVED (no free live source
+    // exists). Chart shape: {date, Active_Addresses} — real only.
+    if (liveActiveAddresses.length > 0) {
+      merged.addressMetrics = liveActiveAddresses.slice().reverse().map((a: any) => ({
+        date: a.date,
+        Active_Addresses: Math.round(Number(a.activeAddresses) || 0)   // REAL
+      }));
     }
 
     // CME BTC Open Interest: REAL from CFTC CoT weekly report (SEC2-SCRAPING). The CoT report
@@ -562,10 +594,11 @@ export default function OnChainData() {
 
     // ETF Overview: REAL daily flows per ETF scraped from Farside.co.uk (SEC2-SCRAPING).
     // history:[{date,isoDate,IBIT,FBTC,ARKB,BITB,GBTC,total}] — daily flow in $M per ETF.
-    // We aggregate the 30-day daily flows into a per-ETF net 30d flow. AUM and 24h volume stay as
-    // the mock snapshot (no free live AUM/volume source), but the PRIMARY metric — net 30d flow —
-    // is REAL. EST badge REMOVED — the displayed net flow values are real Farside scraped data.
-    if (liveEtfFlows.length > 0 && Array.isArray(mockData.etfOverview)) {
+    // We aggregate the 30-day daily flows into a per-ETF net 30d flow. DATA-7:
+    // totalAum and volume24h previously fell back to mock snapshot values —
+    // now they are null (rendered as "—") because no free live AUM/volume
+    // source exists. The PRIMARY metric — net 30d flow — is REAL.
+    if (liveEtfFlows.length > 0) {
       const tickers = ["IBIT", "FBTC", "ARKB", "BITB", "GBTC"];
       // Sum daily flows per ticker across the 30-day window. Server returns newest-first.
       const sums: Record<string, number> = { IBIT: 0, FBTC: 0, ARKB: 0, BITB: 0, GBTC: 0 };
@@ -576,20 +609,13 @@ export default function OnChainData() {
         IBIT: "BlackRock iShares", FBTC: "Fidelity Wise", ARKB: "Ark 21Shares",
         BITB: "Bitwise 100", GBTC: "Grayscale Trust"
       };
-      // Use mockData.etfOverview as the base for AUM and volume24h fallback (no free live source for
-      // those fields). Override netFlow30d with the REAL aggregated Farside sum.
-      const mockByTicker: Record<string, any> = {};
-      mockData.etfOverview.forEach((e: any) => { mockByTicker[e.ticker] = e; });
-      merged.etfOverview = tickers.map((t) => {
-        const fb = mockByTicker[t] || { totalAum: 0, volume24h: 0 };
-        return {
-          ticker: t,
-          name: tickerToName[t] || t,
-          netFlow30d: +sums[t].toFixed(1),          // REAL Farside 30-day net flow ($M)
-          totalAum: fb.totalAum,                    // snapshot fallback (no free live AUM source)
-          volume24h: fb.volume24h                   // snapshot fallback (no free live volume source)
-        };
-      });
+      merged.etfOverview = tickers.map((t) => ({
+        ticker: t,
+        name: tickerToName[t] || t,
+        netFlow30d: +sums[t].toFixed(1),            // REAL Farside 30-day net flow ($M)
+        totalAum: null,                             // no free live AUM source — rendered as "—"
+        volume24h: null                             // no free live volume source — rendered as "—"
+      }));
     }
 
     // BTC Spot Inflow/Outflow: REAL exchange netflow from Santiment GraphQL free tier
@@ -611,7 +637,7 @@ export default function OnChainData() {
       });
     }
     return merged;
-  }, [mockData, liveMetrics, liveOiMerged, liveDominanceHistory, liveCorrelations, liveOrderbook,
+  }, [liveMetrics, liveOiMerged, liveDominanceHistory, liveCorrelations, liveOrderbook,
       livePriceBtc, livePriceEth, livePriceSol, livePriceBnb, livePriceXrp,
       liveS2f, liveMvrv, liveDrawdown, liveNvt, liveMinerData, liveActiveAddresses,
       liveExchangeNetflow, liveEtfFlows, liveCmeOi]);
@@ -626,6 +652,9 @@ export default function OnChainData() {
 
   // Real-time onchain and derivatives state
   const [liveDerivatives, setLiveDerivatives] = useState<any>(null);
+  // /api/onchain/data `isStale` flag — the server marks cached/fallback
+  // snapshots; rendered as a STALE badge on the live feed + price panels.
+  const [liveIsStale, setLiveIsStale] = useState<boolean>(false);
   const [isLiveScanning, setIsLiveScanning] = useState<boolean>(true);
   const [aiSubTab, setAiSubTab] = useState<"sandbox" | "periodic">("sandbox");
   const [automatedAnalysis, setAutomatedAnalysis] = useState<string>("");
@@ -783,7 +812,13 @@ export default function OnChainData() {
             if (typeof payload.btcPriceChangePercent === "number") setLiveBtcChange(payload.btcPriceChangePercent);
             if (typeof payload.ethPriceChangePercent === "number") setLiveEthChange(payload.ethPriceChangePercent);
             if (typeof payload.solPriceChangePercent === "number") setLiveSolChange(payload.solPriceChangePercent);
-            
+
+            // Contract (3-a/3-b): /api/onchain/data now includes an `isStale`
+            // boolean — true when the derivatives/price snapshot is older than
+            // the server's freshness threshold (cached fallback payload). We
+            // surface it as a visible amber "STALE" badge on the live feed +
+            // price panels so users know the numbers are not fresh.
+            setLiveIsStale(payload.isStale === true);
             setIsLiveScanning(true);
           }
         }
@@ -816,6 +851,7 @@ export default function OnChainData() {
             setLiveMetrics(payload);
             if (payload.fearGreed?.current?.value !== undefined) {
               setFearGreedVal(payload.fearGreed.current.value);
+              setFearGreedLoaded(true);
             }
           }
         }
@@ -1297,6 +1333,7 @@ export default function OnChainData() {
                 )}
 
                 <div className="h-64">
+                  {hasData(data.oiData) ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={data.oiData}>
                       <defs>
@@ -1330,6 +1367,9 @@ export default function OnChainData() {
                       <Area name="SOL OI ($M)" type="monotone" dataKey="SOL" stroke="#a855f7" fillOpacity={0.1} fill="#a855f7" />
                     </AreaChart>
                   </ResponsiveContainer>
+                  ) : (
+                    <EmptyDatasetNote note="Menunggu data Open Interest real dari Binance Futures…" />
+                  )}
                 </div>
               </div>
 
@@ -1345,6 +1385,7 @@ export default function OnChainData() {
                   Pembayaran periodik antara trader long dan short. Nilai positif mengindikasikan dominasi pembeli (bullish leverage).
                 </p>
                 <div className="h-60">
+                  {hasData(data.fundingRates) ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <RechartsLineChart data={data.fundingRates}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -1364,6 +1405,9 @@ export default function OnChainData() {
                       {!liveMetrics?.fundingRates && <Line type="monotone" dataKey="OKX" stroke="#ec4899" strokeWidth={1.5} dot={false} />}
                     </RechartsLineChart>
                   </ResponsiveContainer>
+                  ) : (
+                    <EmptyDatasetNote note="Menunggu data funding rate real dari Binance Futures…" />
+                  )}
                 </div>
               </div>
             </div>
@@ -1420,6 +1464,7 @@ export default function OnChainData() {
                   Total dana institusional di Chicago Mercantile Exchange (CME).
                 </p>
                 <div className="h-44">
+                  {hasData(data.cmeBtcOI) ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <RechartsBarChart data={data.cmeBtcOI}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -1430,6 +1475,9 @@ export default function OnChainData() {
                       <Bar name="Options ($M)" dataKey="Options" fill="#a855f7" stackId="a" />
                     </RechartsBarChart>
                   </ResponsiveContainer>
+                  ) : (
+                    <EmptyDatasetNote note="Menunggu data CFTC CoT (CME OI) dari sumber real…" />
+                  )}
                 </div>
               </div>
 
@@ -1443,7 +1491,7 @@ export default function OnChainData() {
                   <span className="text-[10px] bg-slate-800 px-1.5 py-0.2 rounded text-slate-400 font-mono">Metric #25</span>
                 </div>
                 <div className="space-y-3">
-                  {data.altcoinOIVolume.map((item) => (
+                  {hasData(data.altcoinOIVolume) ? data.altcoinOIVolume.map((item) => (
                     <div key={item.symbol} className="flex items-center justify-between text-xs border-b border-slate-800/50 pb-2 last:border-0 last:pb-0">
                       <div>
                         <span className="font-bold text-white block">{item.symbol}</span>
@@ -1456,7 +1504,7 @@ export default function OnChainData() {
                         </span>
                       </div>
                     </div>
-                  ))}
+                  )) : <EmptyDatasetNote note="Menunggu data Open Interest altcoin real dari Binance Futures…" />}
                 </div>
               </div>
 
@@ -1565,7 +1613,11 @@ export default function OnChainData() {
                 </div>
                 
                 <div className="flex-1 overflow-y-auto pr-1 space-y-1.5 max-h-[220px] scrollbar-thin">
-                  {liveLiquidations.map((liq) => (
+                  {liveLiquidations.length === 0 ? (
+                    <div className="py-8">
+                      <EmptyDatasetNote note="Menunggu data dari Binance WS — feed likuidasi akan muncul otomatis…" />
+                    </div>
+                  ) : liveLiquidations.map((liq) => (
                     <div 
                       key={liq.id} 
                       onClick={() => setSelectedLiquidation(liq)}
@@ -1616,6 +1668,7 @@ export default function OnChainData() {
                   Jumlah nominal USD likuidasi harian yang terjadi karena posisi long dipaksa likuid (hijau) vs posisi short (merah).
                 </p>
                 <div className="h-64">
+                  {hasData(data.totalLiquidations) ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <RechartsBarChart data={data.totalLiquidations}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -1627,6 +1680,9 @@ export default function OnChainData() {
                       <Bar name="Likuidasi Shorts ($M)" dataKey="Shorts" fill="#ef4444" radius={[2, 2, 0, 0]} />
                     </RechartsBarChart>
                   </ResponsiveContainer>
+                  ) : (
+                    <EmptyDatasetNote note="Menunggu data likuidasi real dari Binance Futures…" />
+                  )}
                 </div>
               </div>
 
@@ -1643,6 +1699,7 @@ export default function OnChainData() {
                   Menganalisis korelasi antara pergerakan tajam harga spot BTC dan lonjakan total likuidasi di pasar berjangka.
                 </p>
                 <div className="h-64">
+                  {hasData(data.priceVsLiq) ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <ComposedChart data={data.priceVsLiq}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -1654,6 +1711,9 @@ export default function OnChainData() {
                       <Bar yAxisId="right" dataKey="Liquidations" fill="#f59e0b" fillOpacity={0.7} barSize={12} />
                     </ComposedChart>
                   </ResponsiveContainer>
+                  ) : (
+                    <EmptyDatasetNote note="Menunggu data likuidasi & harga real…" />
+                  )}
                 </div>
               </div>
             </div>
@@ -1676,7 +1736,7 @@ export default function OnChainData() {
                   </p>
                   
                   <div className="space-y-3">
-                    {data.exchangeLiquidations.map((ex) => (
+                    {hasData(data.exchangeLiquidations) ? data.exchangeLiquidations.map((ex) => (
                       <div key={ex.name} className="text-xs">
                         <div className="flex justify-between mb-1 font-semibold">
                           <span>{ex.name}</span>
@@ -1691,7 +1751,7 @@ export default function OnChainData() {
                           <span>Shorts: ${ex.Shorts}M</span>
                         </div>
                       </div>
-                    ))}
+                    )) : <EmptyDatasetNote note="Data pangsa likuidasi per bursa tidak tersedia dari sumber real." />}
                   </div>
                 </div>
 
@@ -1724,7 +1784,7 @@ export default function OnChainData() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/60">
-                      {data.top10AllTimeLiq.map((ev) => (
+                      {hasData(data.top10AllTimeLiq) ? data.top10AllTimeLiq.map((ev) => (
                         <tr key={ev.rank} className="hover:bg-slate-900/40">
                           <td className="py-2 text-slate-400 font-mono">{ev.rank}</td>
                           <td className="text-slate-300">{ev.date}</td>
@@ -1732,7 +1792,13 @@ export default function OnChainData() {
                           <td className="text-right font-mono text-rose-400 font-bold">${ev.amountUsd}M</td>
                           <td className="text-right font-mono text-slate-400">${ev.btcPrice}</td>
                         </tr>
-                      ))}
+                      )) : (
+                        <tr>
+                          <td colSpan={5} className="py-8">
+                            <EmptyDatasetNote note="Data historis peristiwa likuidasi tidak tersedia dari sumber real." />
+                          </td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -1801,6 +1867,7 @@ export default function OnChainData() {
                   Perbandingan visual volume perdagangan spot langsung vs perdagangan berjangka (derivatif) global.
                 </p>
                 <div className="h-64">
+                  {hasData(data.volumeSpotFutures) ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <RechartsBarChart data={data.volumeSpotFutures}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -1812,6 +1879,9 @@ export default function OnChainData() {
                       <Bar name="Volume Futures ($B)" dataKey="Futures" fill="#f59e0b" stackId="v" />
                     </RechartsBarChart>
                   </ResponsiveContainer>
+                  ) : (
+                    <EmptyDatasetNote note="Menunggu data volume spot/futures real…" />
+                  )}
                 </div>
               </div>
 
@@ -1835,7 +1905,7 @@ export default function OnChainData() {
                   <div>
                     <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block mb-2">Top Gainers</span>
                     <div className="space-y-1.5">
-                      {data.gainersLosers.gainers.map((c) => (
+                      {hasData(data.gainersLosers?.gainers) ? data.gainersLosers.gainers.map((c) => (
                         <div key={c.symbol} className="flex justify-between items-center text-xs bg-slate-950/50 p-2 rounded border border-slate-800/40">
                           <div>
                             <span className="font-bold text-white block">{c.symbol}</span>
@@ -1846,7 +1916,7 @@ export default function OnChainData() {
                             <span className="text-[11px] font-mono font-bold text-emerald-400">+{c.change}%</span>
                           </div>
                         </div>
-                      ))}
+                      )) : <EmptyDatasetNote note="Menunggu data top gainers real dari CoinGecko…" />}
                     </div>
                   </div>
 
@@ -1854,7 +1924,7 @@ export default function OnChainData() {
                   <div>
                     <span className="text-[10px] font-bold text-rose-400 uppercase tracking-wider block mb-2">Top Losers</span>
                     <div className="space-y-1.5">
-                      {data.gainersLosers.losers.map((c) => (
+                      {hasData(data.gainersLosers?.losers) ? data.gainersLosers.losers.map((c) => (
                         <div key={c.symbol} className="flex justify-between items-center text-xs bg-slate-950/50 p-2 rounded border border-slate-800/40">
                           <div>
                             <span className="font-bold text-white block">{c.symbol}</span>
@@ -1865,7 +1935,7 @@ export default function OnChainData() {
                             <span className="text-[11px] font-mono font-bold text-rose-400">{c.change}%</span>
                           </div>
                         </div>
-                      ))}
+                      )) : <EmptyDatasetNote note="Menunggu data top losers real dari CoinGecko…" />}
                     </div>
                   </div>
                 </div>
@@ -1884,7 +1954,7 @@ export default function OnChainData() {
                   Aset-aset dengan lonjakan volume perdagangan tertinggi dalam rentang waktu bulanan.
                 </p>
                 <div className="space-y-3">
-                  {data.volumeGainers30d.map((vg) => (
+                  {hasData(data.volumeGainers30d) ? data.volumeGainers30d.map((vg) => (
                     <div key={vg.symbol} className="text-xs">
                       <div className="flex justify-between mb-1">
                         <span className="font-bold text-white">{vg.symbol}</span>
@@ -1894,7 +1964,7 @@ export default function OnChainData() {
                         <div className="bg-emerald-400 h-full" style={{ width: `${Math.min(vg.volGrowth / 2, 100)}%` }} />
                       </div>
                     </div>
-                  ))}
+                  )) : <EmptyDatasetNote note="Data pertumbuhan volume 30 hari tidak tersedia dari sumber real." />}
                 </div>
               </div>
 
@@ -1921,6 +1991,7 @@ export default function OnChainData() {
                 Total kumulatif biaya pendanaan (Funding Fee) yang diselesaikan secara real-time harian.
               </p>
               <div className="h-72">
+                {hasData(data.fundingOverview) ? (
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={data.fundingOverview}>
                     <defs>
@@ -1938,6 +2009,9 @@ export default function OnChainData() {
                     <Line name="Harian Diselesaikan ($M)" type="monotone" dataKey="DailySettled" stroke="#eab308" strokeWidth={1} dot={false} />
                   </AreaChart>
                 </ResponsiveContainer>
+                ) : (
+                  <EmptyDatasetNote note="Menunggu data settlement funding real…" />
+                )}
               </div>
             </div>
 
@@ -2110,6 +2184,7 @@ export default function OnChainData() {
                 Akumulasi tren likuiditas orderbook buy vs sell limit across seluruh bursa utama dari hari ke hari.
               </p>
               <div className="h-64">
+                {hasData(data.aggregatedLiquidityDelta) ? (
                 <ResponsiveContainer width="100%" height="100%">
                   <RechartsLineChart data={data.aggregatedLiquidityDelta}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -2121,6 +2196,9 @@ export default function OnChainData() {
                     <Line type="monotone" dataKey="Total Asks (±1%)" stroke="#ef4444" strokeWidth={1.5} dot={false} />
                   </RechartsLineChart>
                 </ResponsiveContainer>
+                ) : (
+                  <EmptyDatasetNote note="Data historis likuiditas orderbook tidak tersedia dari sumber real." />
+                )}
               </div>
             </div>
 
@@ -2149,6 +2227,7 @@ export default function OnChainData() {
                   Jumlah koin BTC yang ditransfer masuk (Inflow) ke dalam bursa exchange vs ditransfer keluar (Outflow).
                 </p>
                 <div className="h-64">
+                  {hasData(data.btcSpotFlows) ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <RechartsBarChart data={data.btcSpotFlows}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -2160,6 +2239,9 @@ export default function OnChainData() {
                       <Bar name="Outflow (BTC)" dataKey="Outflow" fill="#0ea5e9" radius={[2, 2, 0, 0]} />
                     </RechartsBarChart>
                   </ResponsiveContainer>
+                  ) : (
+                    <EmptyDatasetNote note="Menunggu data netflow exchange real dari Santiment…" />
+                  )}
                 </div>
               </div>
 
@@ -2176,6 +2258,7 @@ export default function OnChainData() {
                   Statistik aliran bersih (Inflow dikurangi Outflow) multi-aset. Angka positif menunjukkan potensi tekanan jual.
                 </p>
                 <div className="h-60">
+                  {hasData(data.spotNetflowStats) ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <RechartsBarChart data={data.spotNetflowStats}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -2193,6 +2276,9 @@ export default function OnChainData() {
                       </Bar>
                     </RechartsBarChart>
                   </ResponsiveContainer>
+                  ) : (
+                    <EmptyDatasetNote note="Data statistik netflow multi-aset tidak tersedia dari sumber real." />
+                  )}
                 </div>
               </div>
             </div>
@@ -2213,6 +2299,7 @@ export default function OnChainData() {
                   Melacak perpindahan dana bersih yang mengalir langsung ke dompet penyimpanan pribadi (private wallets).
                 </p>
                 <div className="h-64">
+                  {hasData(data.walletFlows) ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <RechartsLineChart data={data.walletFlows}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -2224,6 +2311,9 @@ export default function OnChainData() {
                       <Line name="Netflow Wallet USDT ($M)" type="monotone" dataKey="USDT_Flow" stroke="#22c55e" strokeWidth={1.5} dot={false} />
                     </RechartsLineChart>
                   </ResponsiveContainer>
+                  ) : (
+                    <EmptyDatasetNote note="Data netflow dompet tidak tersedia dari sumber real." />
+                  )}
                 </div>
               </div>
 
@@ -2240,6 +2330,7 @@ export default function OnChainData() {
                   Tren total persediaan cadangan Bitcoin dan stablecoin USDT yang berada di dompet bursa terpusat (Exchange wallets).
                 </p>
                 <div className="h-64">
+                  {hasData(data.exchangeBalances) ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <ComposedChart data={data.exchangeBalances}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -2251,6 +2342,9 @@ export default function OnChainData() {
                       <Line yAxisId="right" name="Cadangan USDT Bursa" type="monotone" dataKey="USDT_Exchange_Reserve" stroke="#10b981" strokeWidth={2} dot={false} />
                     </ComposedChart>
                   </ResponsiveContainer>
+                  ) : (
+                    <EmptyDatasetNote note="Data cadangan bursa tidak tersedia dari sumber real." />
+                  )}
                 </div>
               </div>
             </div>
@@ -2271,6 +2365,7 @@ export default function OnChainData() {
                   Jumlah harian alamat Bitcoin yang aktif melakukan transaksi dan alamat baru yang baru terbuat di blockchain.
                 </p>
                 <div className="h-64">
+                  {hasData(data.addressMetrics) ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={data.addressMetrics}>
                       <defs>
@@ -2288,6 +2383,9 @@ export default function OnChainData() {
                       <Line name="Alamat Baru Terbuat" type="monotone" dataKey="New_Addresses" stroke="#a855f7" strokeWidth={1.5} dot={false} />
                     </AreaChart>
                   </ResponsiveContainer>
+                  ) : (
+                    <EmptyDatasetNote note="Menunggu data alamat aktif real dari Coinmetrics…" />
+                  )}
                 </div>
               </div>
 
@@ -2304,6 +2402,7 @@ export default function OnChainData() {
                   Total pengeluaran miner dari dompet (Outflows) dan total pendapatan penambang harian (Subsidi Blok + Biaya).
                 </p>
                 <div className="h-64">
+                  {hasData(data.minerData) ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <ComposedChart data={data.minerData}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -2315,6 +2414,9 @@ export default function OnChainData() {
                       <Line name="Pendapatan Harian Miner ($M)" type="monotone" dataKey="Miner_Revenue" stroke="#eab308" strokeWidth={2} dot={false} />
                     </ComposedChart>
                   </ResponsiveContainer>
+                  ) : (
+                    <EmptyDatasetNote note="Menunggu data pendapatan miner real dari blockchain.info…" />
+                  )}
                 </div>
               </div>
             </div>
@@ -2399,6 +2501,7 @@ export default function OnChainData() {
                   Mengevaluasi harga Bitcoin relatif terhadap kelangkaan yang diproyeksikan oleh pasokan penambangan baru.
                 </p>
                 <div className="h-[280px]">
+                  {hasData(data.stockToFlow) ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <RechartsLineChart data={data.stockToFlow}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -2411,6 +2514,9 @@ export default function OnChainData() {
                       <Line type="monotone" name="Harga BTC Aktual" dataKey="Actual BTC Price" stroke="#0ea5e9" strokeWidth={2} dot={false} />
                     </RechartsLineChart>
                   </ResponsiveContainer>
+                  ) : (
+                    <EmptyDatasetNote note="Menunggu data Stock-to-Flow real (Blockchair + blockchain.info)…" />
+                  )}
                 </div>
               </div>
             </div>
@@ -2431,6 +2537,7 @@ export default function OnChainData() {
                   Mengukur deviasi nilai pasar terhadap nilai realisasinya. Mengidentifikasi puncak siklus (zona merah) & dasar (zona hijau).
                 </p>
                 <div className="h-64">
+                  {hasData(data.mvrvZScore) ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <RechartsLineChart data={data.mvrvZScore}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -2443,6 +2550,9 @@ export default function OnChainData() {
                       <Line type="monotone" name="MVRV Z-Score" dataKey="MVRV Z-Score" stroke="#eab308" strokeWidth={2.5} dot={false} />
                     </RechartsLineChart>
                   </ResponsiveContainer>
+                  ) : (
+                    <EmptyDatasetNote note="Menunggu data MVRV real dari Santiment…" />
+                  )}
                 </div>
               </div>
 
@@ -2459,6 +2569,7 @@ export default function OnChainData() {
                   Rasio kapitalisasi pasar spot langsung dibagi kapitalisasi terealisasi (Realized Cap).
                 </p>
                 <div className="h-64">
+                  {hasData(data.mvrvRatio) ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={data.mvrvRatio}>
                       <defs>
@@ -2476,6 +2587,9 @@ export default function OnChainData() {
                       <Area type="monotone" name="MVRV Ratio" dataKey="MVRV Ratio" stroke="#22d3ee" fillOpacity={1} fill="url(#colorMvrv)" strokeWidth={1.5} />
                     </AreaChart>
                   </ResponsiveContainer>
+                  ) : (
+                    <EmptyDatasetNote note="Menunggu data MVRV real dari Santiment…" />
+                  )}
                 </div>
               </div>
             </div>
@@ -2507,17 +2621,24 @@ export default function OnChainData() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/60">
-                      {data.etfOverview.map((etf) => (
+                      {hasData(data.etfOverview) ? data.etfOverview.map((etf) => (
                         <tr key={etf.ticker} className="hover:bg-slate-900/40">
                           <td className="py-2 text-white font-bold font-mono">{etf.ticker}</td>
                           <td className="text-slate-300">{etf.name}</td>
                           <td className={`text-right font-mono font-bold ${etf.netFlow30d >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                             {etf.netFlow30d >= 0 ? "+" : ""}{etf.netFlow30d}M
                           </td>
-                          <td className="text-right font-mono text-slate-300">${etf.totalAum.toLocaleString()}</td>
-                          <td className="text-right font-mono text-slate-400">${etf.volume24h}</td>
+                          {/* DATA-7: AUM & volume have no free live source — null renders "—". */}
+                          <td className="text-right font-mono text-slate-300">{etf.totalAum != null ? `$${etf.totalAum.toLocaleString()}` : "—"}</td>
+                          <td className="text-right font-mono text-slate-400">{etf.volume24h != null ? `$${etf.volume24h}` : "—"}</td>
                         </tr>
-                      ))}
+                      )) : (
+                        <tr>
+                          <td colSpan={5} className="py-8">
+                            <EmptyDatasetNote note="Menunggu data aliran ETF real dari Farside.co.uk…" />
+                          </td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -2572,6 +2693,7 @@ export default function OnChainData() {
                   Rasio kapitalisasi pasar Bitcoin dibandingkan total seluruh kapitalisasi aset kripto global.
                 </p>
                 <div className="h-64">
+                  {hasData(data.btcDominance) ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={data.btcDominance}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -2584,6 +2706,9 @@ export default function OnChainData() {
                       <Area name="Altcoins (%)" type="monotone" dataKey="Altcoins" stackId="1" stroke="#a855f7" fill="#a855f7" fillOpacity={0.2} />
                     </AreaChart>
                   </ResponsiveContainer>
+                  ) : (
+                    <EmptyDatasetNote note="Menunggu data dominasi real dari CoinGecko…" />
+                  )}
                 </div>
               </div>
 
@@ -2601,6 +2726,7 @@ export default function OnChainData() {
                     Indeks gelembung pasar (Bubble Index) dan Rasio Transaksi Jaringan (NVT).
                   </p>
                   <div className="h-48">
+                    {hasData(data.bubbleAndNvt) ? (
                     <ResponsiveContainer width="100%" height="100%">
                       <RechartsLineChart data={data.bubbleAndNvt}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -2612,6 +2738,9 @@ export default function OnChainData() {
                         <Line name="NVT Ratio" type="monotone" dataKey="NVTRatio" stroke="#3b82f6" strokeWidth={1.5} dot={false} />
                       </RechartsLineChart>
                     </ResponsiveContainer>
+                    ) : (
+                      <EmptyDatasetNote note="Menunggu data NVT real dari blockchain.info…" />
+                    )}
                   </div>
                 </div>
 
@@ -2637,6 +2766,7 @@ export default function OnChainData() {
                   Menganalisis hubungan harga Bitcoin dengan likuiditas mata uang fiat global (M2) dan suku bunga bank sentral AS (FED).
                 </p>
                 <div className="h-64">
+                  {hasData(data.macroSupplyRate) ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <ComposedChart data={data.macroSupplyRate}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -2650,6 +2780,9 @@ export default function OnChainData() {
                       <Line yAxisId="right" name="Fed Funds Rate (%)" type="monotone" dataKey="FedFundsRate" stroke="#ec4899" strokeWidth={1.5} strokeDasharray="3 3" dot={false} />
                     </ComposedChart>
                   </ResponsiveContainer>
+                  ) : (
+                    <EmptyDatasetNote note="Data M2 / Fed Funds Rate tidak tersedia dari sumber real." />
+                  )}
                 </div>
               </div>
 
@@ -2668,7 +2801,7 @@ export default function OnChainData() {
                   </p>
                   
                   <div className="space-y-2.5">
-                    {data.btcCorrelations.map((c) => (
+                    {hasData(data.btcCorrelations) ? data.btcCorrelations.map((c) => (
                       <div key={c.asset} className="text-xs border-b border-slate-800/50 pb-2 last:border-0 last:pb-0">
                         <div className="flex justify-between items-center mb-1">
                           <span className="font-bold text-white">{c.asset}</span>
@@ -2688,7 +2821,7 @@ export default function OnChainData() {
                           <span className="text-[9px] text-slate-500 whitespace-nowrap">{c.label}</span>
                         </div>
                       </div>
-                    ))}
+                    )) : <EmptyDatasetNote note="Menunggu data korelasi real (CoinGecko + Yahoo Finance)…" />}
                   </div>
                 </div>
 
@@ -2714,6 +2847,7 @@ export default function OnChainData() {
                   Menunjukkan sentimen psikologi pasar berdasarkan status keuntungan/kerugian yang belum direalisasikan.
                 </p>
                 <div className="h-44">
+                  {hasData(data.bubbleAndNvt) ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={data.bubbleAndNvt}>
                       <defs>
@@ -2731,6 +2865,9 @@ export default function OnChainData() {
                       <Area name="NUPL Ratio" type="monotone" dataKey="NUPL" stroke="#10b981" fillOpacity={1} fill="url(#colorNupl)" strokeWidth={1.5} />
                     </AreaChart>
                   </ResponsiveContainer>
+                  ) : (
+                    <EmptyDatasetNote note="Menunggu data NVT real dari blockchain.info…" />
+                  )}
                 </div>
               </div>
 
@@ -2747,6 +2884,7 @@ export default function OnChainData() {
                   Distribusi koin beredar yang dipegang oleh pemegang jangka panjang (&gt;155 hari) vs pemegang spekulatif jangka pendek.
                 </p>
                 <div className="h-44">
+                  {hasData(data.holdersSupply) ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={data.holdersSupply}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -2758,6 +2896,9 @@ export default function OnChainData() {
                       <Area name="Short-Term Holder (STH)" type="monotone" dataKey="Short-Term Holders" stroke="#ef4444" fill="#ef4444" fillOpacity={0.1} />
                     </AreaChart>
                   </ResponsiveContainer>
+                  ) : (
+                    <EmptyDatasetNote note="Data LTH/STH supply tidak tersedia dari sumber real." />
+                  )}
                 </div>
               </div>
 
@@ -2774,6 +2915,7 @@ export default function OnChainData() {
                   Persentase penurunan harga dari harga puncak tertinggi sepanjang masa ($73,750).
                 </p>
                 <div className="h-44">
+                  {hasData(data.drawdownAth) ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={data.drawdownAth}>
                       <defs>
@@ -2789,6 +2931,9 @@ export default function OnChainData() {
                       <Area name="Drawdown (%)" type="monotone" dataKey="Drawdown dari ATH (%)" stroke="#f43f5e" strokeWidth={1.5} fillOpacity={1} fill="url(#colorDrawdown)" />
                     </AreaChart>
                   </ResponsiveContainer>
+                  ) : (
+                    <EmptyDatasetNote note="Menunggu data drawdown real dari blockchain.info…" />
+                  )}
                 </div>
               </div>
 

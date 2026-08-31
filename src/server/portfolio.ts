@@ -53,6 +53,29 @@ const alertSchema = z.object({
   id: z.string().max(100).optional(),
 });
 
+// SEC-23: the bulk-sync endpoint previously spread the ENTIRE client array
+// straight into a $transaction with `String(h.symbol || "")` +
+// `parseFloat(...) || 0` coercion — accepting ANY shape, NaN, negatives,
+// and unbounded array sizes (one request could create thousands of rows).
+const holdingsSyncSchema = z.object({
+  holdings: z
+    .array(
+      z.object({
+        symbol: z.string().min(1).max(20).regex(/^[A-Za-z0-9.\-_ ]+$/, {
+          message: "Simbol hanya boleh alfanumerik, titik, strip, garis bawah, spasi.",
+        }),
+        category: z.string().min(1).max(30).regex(/^[A-Za-z0-9.\-_ ]+$/, {
+          message: "Kategori hanya boleh alfanumerik, titik, strip, garis bawah, spasi.",
+        }),
+        purchasePrice: z.number().finite().nonnegative(),
+        quantity: z.number().finite().nonnegative(),
+        notes: z.string().max(2000).nullable().optional(),
+        id: z.string().max(100).optional(),
+      })
+    )
+    .max(200, { message: "Maksimal 200 holding per sinkronisasi." }),
+});
+
 /** FIX-B-1: tiny helper — parse + flatten zod error into a single message string. */
 function zodError(err: z.ZodError): string {
   return err.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
@@ -115,20 +138,25 @@ portfolioRouter.delete("/holdings/:id", async (req: Request, res: Response) => {
 // POST /api/portfolio/holdings/sync — bulk replace (full sync from client)
 portfolioRouter.post("/holdings/sync", async (req: Request, res: Response) => {
   try {
-    const { holdings } = req.body; // array of {symbol, category, purchasePrice, quantity, notes}
-    if (!Array.isArray(holdings)) {
-      return res.status(400).json({ success: false, error: "Format data tidak valid." });
+    // SEC-23: validate the array with zod BEFORE touching Prisma — max 200
+    // items, symbol/category charset, finite non-negative amounts. Previously
+    // this endpoint accepted an unbounded array of arbitrary shapes.
+    const parsed = holdingsSyncSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ success: false, error: "Input tidak valid: " + zodError(parsed.error) });
     }
+    const holdings = parsed.data.holdings;
     // Replace all holdings for this user (transactional delete+create)
     await prisma.$transaction([
       prisma.portfolioHolding.deleteMany({ where: { userId: req.user!.sub } }),
-      ...holdings.map((h: any) => prisma.portfolioHolding.create({
+      ...holdings.map((h) => prisma.portfolioHolding.create({
         data: {
+          id: h.id || undefined,
           userId: req.user!.sub,
-          symbol: String(h.symbol || ""),
-          category: String(h.category || "crypto"),
-          purchasePrice: parseFloat(h.purchasePrice) || 0,
-          quantity: parseFloat(h.quantity) || 0,
+          symbol: h.symbol,
+          category: h.category,
+          purchasePrice: h.purchasePrice,
+          quantity: h.quantity,
           notes: h.notes || null,
         },
       })),
@@ -274,12 +302,69 @@ interface TaxLotResult {
   remainingLots: TaxLot[];
   totalRemainingQuantity: number;
   totalRemainingCostBasis: number;
-  estimatedTaxIdr: number; // PMK-68 0.1% on proceeds
+  estimatedTaxIdr: number | null; // PMK-68 0.1% on proceeds; null = kurs USD/IDR unavailable (DATA-24)
   notes: string[];
 }
 
 const PMK_68_TAX_RATE = 0.001; // 0.1% Indonesian crypto transaction tax
-const USD_TO_IDR_FALLBACK = 15800;
+
+// ---------------------------------------------------------------------------
+// DATA-24: live USD→IDR rate (replaces the hardcoded 15,800 which was wrong
+// by ~2,700 IDR at the time of the audit). Fetched from open.er-api.com with
+// a 1-hour in-module cache + in-flight dedup. If the rate is unavailable we
+// return null and the tax estimate is honestly omitted (never a wrong
+// number). A short-lived negative cache avoids hammering a dead upstream.
+// ---------------------------------------------------------------------------
+const USD_IDR_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const USD_IDR_FETCH_TIMEOUT_MS = 6000;
+let usdIdrCache: { rate: number; ts: number } | null = null;
+let usdIdrFailedAt = 0; // last failure ts (retry after 60s)
+let usdIdrInflight: Promise<number | null> | null = null;
+
+async function fetchUsdIdrRate(): Promise<number | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), USD_IDR_FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch("https://open.er-api.com/v6/latest/USD", {
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as any;
+    const rate = typeof data?.rates?.IDR === "number" ? data.rates.IDR : parseFloat(data?.rates?.IDR);
+    if (!Number.isFinite(rate) || rate <= 0) return null;
+    return rate;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function getUsdIdrRate(): Promise<number | null> {
+  if (usdIdrCache && Date.now() - usdIdrCache.ts < USD_IDR_CACHE_TTL_MS) {
+    return usdIdrCache.rate;
+  }
+  // Back off for 60s after a failure so a dead upstream isn't re-queried
+  // on every tax-lots request.
+  if (!usdIdrCache && Date.now() - usdIdrFailedAt < 60 * 1000) {
+    return null;
+  }
+  if (usdIdrInflight) return usdIdrInflight; // dedup concurrent callers
+  usdIdrInflight = (async () => {
+    const rate = await fetchUsdIdrRate();
+    if (rate !== null) {
+      usdIdrCache = { rate, ts: Date.now() };
+    } else {
+      usdIdrFailedAt = Date.now();
+    }
+    return rate;
+  })();
+  try {
+    return await usdIdrInflight;
+  } finally {
+    usdIdrInflight = null;
+  }
+}
 
 portfolioRouter.get("/tax-lots", async (req: Request, res: Response) => {
   try {
@@ -422,10 +507,16 @@ portfolioRouter.get("/tax-lots", async (req: Request, res: Response) => {
     const totalGainLoss = totalProceeds - totalCostBasis;
     const totalGainLossPct = totalCostBasis > 0 ? (totalGainLoss / totalCostBasis) * 100 : 0;
 
-    // PMK-68 estimated tax (0.1% of proceeds, in IDR)
-    const estimatedTaxIdr = totalProceeds * PMK_68_TAX_RATE * USD_TO_IDR_FALLBACK;
+    // PMK-68 estimated tax (0.1% of proceeds, in IDR) — using the LIVE USD→IDR
+    // rate from open.er-api.com (1h cache). DATA-24: if the rate is
+    // unavailable we return null + a note instead of a WRONG hardcoded number.
+    const usdIdr = await getUsdIdrRate();
+    const estimatedTaxIdr = usdIdr !== null ? totalProceeds * PMK_68_TAX_RATE * usdIdr : null;
 
     const notes: string[] = [];
+    if (estimatedTaxIdr === null) {
+      notes.push("kurs USD/IDR tidak tersedia — estimasi pajak IDR tidak dapat dihitung (coba lagi nanti).");
+    }
     if (remainingToSell > 0.00000001) {
       notes.push(`Peringatan: jumlah jual (${sellQuantity}) melebihi posisi tersedia. Hanya ${sellQuantity - remainingToSell} unit yang terjual.`);
     }
@@ -726,7 +817,7 @@ portfolioRouter.get("/tax-report", async (req: Request, res: Response) => {
       else if (type === "SELL") bySymbol.get(sym)!.sells.push(t);
     }
 
-    const USD_TO_IDR = 15800;
+    const usdIdrRate = await getUsdIdrRate(); // DATA-24: live rate; null = unavailable
     const perSymbol: any[] = [];
     let totalProceeds = 0;
     let totalCostBasis = 0;
@@ -790,18 +881,22 @@ portfolioRouter.get("/tax-report", async (req: Request, res: Response) => {
     // PMK-68 tax: 0.1% of total proceeds (transaction-based, not gain-based)
     const pmk68TaxRate = 0.001;
     const pmk68TaxUsd = totalProceeds * pmk68TaxRate;
-    const pmk68TaxIdr = pmk68TaxUsd * USD_TO_IDR;
+    // DATA-24: no more hardcoded 15.800 — honest null when kurs unavailable.
+    const pmk68TaxIdr = usdIdrRate !== null ? pmk68TaxUsd * usdIdrRate : null;
+    const taxIdrText = pmk68TaxIdr !== null
+      ? `Rp ${pmk68TaxIdr.toLocaleString("id-ID", { maximumFractionDigits: 0 })}`
+      : "tidak tersedia (kurs USD/IDR sedang tidak dapat diambil)";
 
     const realizedGainLossPct = totalCostBasis > 0 ? (totalRealizedGL / totalCostBasis) * 100 : 0;
 
     // Summary message
     let summary: string;
     if (totalRealizedGL > 0) {
-      summary = `Tahun ${year}: Realized gain $${totalRealizedGL.toFixed(2)} (${realizedGainLossPct.toFixed(1)}%) dari ${yearTxs.length} transaksi. Estimasi pajak PMK-68 (0.1% dari proceeds): Rp ${pmk68TaxIdr.toLocaleString("id-ID", { maximumFractionDigits: 0 })}.`;
+      summary = `Tahun ${year}: Realized gain $${totalRealizedGL.toFixed(2)} (${realizedGainLossPct.toFixed(1)}%) dari ${yearTxs.length} transaksi. Estimasi pajak PMK-68 (0.1% dari proceeds): ${taxIdrText}.`;
     } else if (totalRealizedGL < 0) {
-      summary = `Tahun ${year}: Realized loss $${Math.abs(totalRealizedGL).toFixed(2)} (${Math.abs(realizedGainLossPct).toFixed(1)}%) dari ${yearTxs.length} transaksi. Estimasi pajak PMK-68 (0.1% dari proceeds): Rp ${pmk68TaxIdr.toLocaleString("id-ID", { maximumFractionDigits: 0 })}. Loss dapat dikompensasi di tahun berikutnya sesuai aturan pajak Indonesia.`;
+      summary = `Tahun ${year}: Realized loss $${Math.abs(totalRealizedGL).toFixed(2)} (${Math.abs(realizedGainLossPct).toFixed(1)}%) dari ${yearTxs.length} transaksi. Estimasi pajak PMK-68 (0.1% dari proceeds): ${taxIdrText}. Loss dapat dikompensasi di tahun berikutnya sesuai aturan pajak Indonesia.`;
     } else {
-      summary = `Tahun ${year}: ${yearTxs.length} transaksi tercatat. Tidak ada realized gain/loss (hanya BUY atau hanya SELL parsial). Estimasi pajak PMK-68: Rp ${pmk68TaxIdr.toLocaleString("id-ID", { maximumFractionDigits: 0 })}.`;
+      summary = `Tahun ${year}: ${yearTxs.length} transaksi tercatat. Tidak ada realized gain/loss (hanya BUY atau hanya SELL parsial). Estimasi pajak PMK-68: ${taxIdrText}.`;
     }
 
     res.json({
@@ -815,6 +910,7 @@ portfolioRouter.get("/tax-report", async (req: Request, res: Response) => {
         realizedGainLossPct,
         pmk68TaxUsd: pmk68TaxUsd,
         pmk68TaxIdr: pmk68TaxIdr,
+        usdIdrRate, // kurs live yang dipakai (null jika gagal) — transparan di UI
         pmk68TaxRate,
         transactionCount: yearTxs.length,
         buyCount,

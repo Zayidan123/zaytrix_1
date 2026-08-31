@@ -6,7 +6,7 @@ import crypto from "crypto";
 import { z } from "zod";
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { createServer as createViteServer } from "vite";
-import { fetchLiveOnChainDataModular, isLargeTransaction, isValidOnChainTransaction } from "./onchainDataHelper";
+import { fetchLiveOnChainDataModular, isValidOnChainTransaction } from "./onchainDataHelper";
 import WebSocket from "ws";
 
 // SEC-BACKEND: security + auth + audit + API key storage.
@@ -403,6 +403,13 @@ const initialAssets: any[] = [
 // In-memory runtime asset registry
 let liveAssets = [...initialAssets];
 
+// DATA-5: the hardcoded initialAssets above are WARMUP values only — a static
+// snapshot so the first paint is not empty. `assetsLiveReady` flips to true
+// after the first successful live market refresh, and /api/assets exposes
+// `isWarmup: !assetsLiveReady` so consumers can label pre-refresh values
+// as warmup data instead of mistaking them for live quotes.
+let assetsLiveReady = false;
+
 let lastQuotesFetch = 0;
 const QUOTE_CACHE_TTL = 2000; // 2 seconds cache for extreme real-time speed
 
@@ -429,6 +436,9 @@ async function refreshLiveAssets() {
 
   let updatedCrypto = false;
   let updatedStocks = false;
+  // DATA-4: tracks which asset symbols got a REAL price update in this pass
+  // so failed ones can be flagged `isStale` instead of being simulated.
+  const updatedSymbols = new Set<string>();
 
   // 1. Fetch Crypto prices from Binance (highly reliable, no rate limits, no 401)
   try {
@@ -458,6 +468,8 @@ async function refreshLiveAssets() {
             if (t.quoteVolume != null) {
               asset.volume24h = parseFloat(t.quoteVolume);
             }
+            asset.isStale = false;
+            updatedSymbols.add(sym);
           }
         }
       });
@@ -533,6 +545,8 @@ async function refreshLiveAssets() {
 
             if (asset) {
               asset.price = price;
+              asset.isStale = false;
+              updatedSymbols.add(asset.symbol.toUpperCase());
               if (prevClose != null && prevClose > 0) {
                 asset.change24h = parseFloat((((price - prevClose) / prevClose) * 100).toFixed(2));
               }
@@ -556,28 +570,27 @@ async function refreshLiveAssets() {
     console.log("[Resilience] Fallback triggered: Failed to fetch stocks from resonant chart:", err.message);
   }
 
-  // 3. Fallback Fluctuation Simulation (guarantees dynamic interactive terminal even if third-party endpoints rate-limit/fail)
-  if (!updatedStocks) {
+  // 3. DATA-4: NO fabricated price fluctuation anymore. When a category
+  // fails to refresh from real sources we keep the LAST KNOWN REAL price and
+  // flag those assets `isStale: true` so the frontend can label them (e.g.
+  // "harga terakhir tersimpan — sumber data gagal"). Prices are never
+  // random-walked.
+  if (!updatedStocks || !updatedCrypto) {
     liveAssets = liveAssets.map(asset => {
-      // Fluctuate only the categories that failed to update. Cryptos NEVER use dummy simulation.
-      if (asset.category === "crypto") return asset;
-      const skipFluc = (asset.category === "stock" && updatedStocks);
-      if (skipFluc) return asset;
-
-      const volatility = 0.0025;
-      const priceChangePct = (Math.random() - 0.495) * volatility;
-      
-      let newPrice = asset.price * (1 + priceChangePct);
-      if (newPrice < 1) newPrice = 1;
-      newPrice = Math.round(newPrice);
-
-      const newChange24h = parseFloat((asset.change24h + (priceChangePct * 100)).toFixed(2));
-      return {
-        ...asset,
-        price: newPrice,
-        change24h: Math.min(Math.max(newChange24h, -30), 30) // capped
-      };
+      if (updatedSymbols.has(asset.symbol.toUpperCase())) {
+        return asset.isStale === true ? { ...asset, isStale: false } : asset;
+      }
+      const categoryFailed = asset.category === "stock" ? !updatedStocks : !updatedCrypto;
+      if (categoryFailed) {
+        return { ...asset, isStale: true };
+      }
+      return asset;
     });
+  }
+
+  // DATA-5: first successful real refresh flips the warmup state off.
+  if (updatedCrypto || updatedStocks) {
+    assetsLiveReady = true;
   }
 
   // Always markQuotesFetch so we obey TTL cache restrictions
@@ -609,6 +622,39 @@ refreshLiveAssets().then(() => {
 // token + chat ID + message and the server would relay it to Telegram/Discord/
 // WhatsApp, turning ZAYTRIX into an open spam relay (and potentially leaking
 // the submitted bot token via logs). Now gated by `requireAuth`.
+// SEC-2 (server-side): outbound webhook URL allowlist. Client-supplied
+// Discord/WhatsApp/Slack/Telegram webhook URLs are fetched server-side; without
+// validation this is a full SSRF primitive (an attacker could point the server
+// at internal endpoints, cloud metadata services, etc.). Only HTTPS URLs on
+// known SaaS webhook hosts are allowed — everything else is rejected with 400.
+const OUTBOUND_WEBHOOK_HOST_ALLOWLIST = [
+  "discord.com",
+  "discordapp.com",
+  "api.telegram.org",
+  "hooks.slack.com",
+  "graph.facebook.com" // WhatsApp Cloud API host
+];
+
+function validateOutboundWebhookUrl(rawUrl: string): { ok: boolean; reason?: string } {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return { ok: false, reason: "URL webhook tidak valid." };
+  }
+  if (parsed.protocol !== "https:") {
+    return { ok: false, reason: "URL webhook harus menggunakan HTTPS." };
+  }
+  const host = parsed.hostname.toLowerCase();
+  const allowed = OUTBOUND_WEBHOOK_HOST_ALLOWLIST.some(
+    allowedHost => host === allowedHost || host.endsWith("." + allowedHost)
+  );
+  if (!allowed) {
+    return { ok: false, reason: "URL webhook tidak diizinkan." };
+  }
+  return { ok: true };
+}
+
 app.post("/api/send-alert", requireAuth, async (req, res) => {
   const {
     telegramEnabled,
@@ -625,6 +671,21 @@ app.post("/api/send-alert", requireAuth, async (req, res) => {
   // FIX-A-2: never log the raw bot token — log only whether one was supplied.
   console.log("[send-alert] bot token:", telegramBotToken ? "[REDACTED]" : "(none)");
   console.log(`[send-alert] authenticated user: ${req.user?.email || req.user?.sub || "(unknown)"}`);
+
+  // SEC-2: validate every outbound webhook URL BEFORE anything is sent.
+  // Non-allowlisted hosts / non-HTTPS schemes are rejected with 400.
+  if (discordEnabled && (discordWebhookUrl || "").trim()) {
+    const guard = validateOutboundWebhookUrl((discordWebhookUrl || "").trim());
+    if (!guard.ok) {
+      return res.status(400).json({ success: false, error: guard.reason });
+    }
+  }
+  if (whatsappEnabled && (whatsappWebhookUrl || "").trim()) {
+    const guard = validateOutboundWebhookUrl((whatsappWebhookUrl || "").trim());
+    if (!guard.ok) {
+      return res.status(400).json({ success: false, error: guard.reason });
+    }
+  }
 
   const results: Record<string, { success: boolean; error?: string }> = {};
 
@@ -671,23 +732,18 @@ app.post("/api/send-alert", requireAuth, async (req, res) => {
           results.telegram = { success: true };
           console.log(`[TELEGRAM SENDER] Successfully dispatched message to ${finalChatId}`);
         } else {
+          // SEC-2: log the full upstream body server-side only; the client
+          // gets a generic message so upstream/internal details never leak.
           const text = await response.text();
-          let parsedError = "";
-          try {
-            const json = JSON.parse(text);
-            parsedError = json.description || text;
-          } catch {
-            parsedError = text;
-          }
           console.error(`[TELEGRAM SENDER ERROR] Status ${response.status}: ${text}`);
-          results.telegram = { 
-            success: false, 
-            error: `API Telegram (HTTP ${response.status}): ${parsedError}` 
+          results.telegram = {
+            success: false,
+            error: `Gagal mengirim alert (Telegram HTTP ${response.status})`
           };
         }
       } catch (e: any) {
         console.error("[TELEGRAM SENDER ROUTING EXCEPTION]", e);
-        results.telegram = { success: false, error: `Kegagalan rute jaringan: ${e.message || String(e)}` };
+        results.telegram = { success: false, error: "Gagal mengirim alert" };
       }
     }
   }
@@ -707,11 +763,15 @@ app.post("/api/send-alert", requireAuth, async (req, res) => {
         if (response.ok) {
           results.discord = { success: true };
         } else {
+          // SEC-2: never echo the upstream response body to the client;
+          // log details server-side and return a generic error.
           const text = await response.text();
-          results.discord = { success: false, error: `HTTP ${response.status}: ${text}` };
+          console.error(`[DISCORD SENDER ERROR] Status ${response.status}: ${text}`);
+          results.discord = { success: false, error: "Gagal mengirim alert" };
         }
       } catch (e: any) {
-        results.discord = { success: false, error: e.message || String(e) };
+        console.error("[DISCORD SENDER ROUTING EXCEPTION]", e);
+        results.discord = { success: false, error: "Gagal mengirim alert" };
       }
     }
   }
@@ -741,11 +801,15 @@ app.post("/api/send-alert", requireAuth, async (req, res) => {
         if (response.ok) {
           results.whatsapp = { success: true };
         } else {
+          // SEC-2: never echo the upstream response body to the client;
+          // log details server-side and return a generic error.
           const text = await response.text();
-          results.whatsapp = { success: false, error: `HTTP ${response.status}: ${text}` };
+          console.error(`[WHATSAPP SENDER ERROR] Status ${response.status}: ${text}`);
+          results.whatsapp = { success: false, error: "Gagal mengirim alert" };
         }
       } catch (e: any) {
-        results.whatsapp = { success: false, error: e.message || String(e) };
+        console.error("[WHATSAPP SENDER ROUTING EXCEPTION]", e);
+        results.whatsapp = { success: false, error: "Gagal mengirim alert" };
       }
     }
   }
@@ -753,7 +817,10 @@ app.post("/api/send-alert", requireAuth, async (req, res) => {
   res.json({ success: true, results });
 });
 
-// Generate realistic daily candle data
+// Daily candle history — REAL data only (DATA-2). Crypto symbols try Binance
+// klines FIRST, then the Yahoo chart API; stocks use Yahoo (.JK). When every
+// real source fails we return 503 — the random-walk OHLCV generator that used
+// to live here (plus its fabricated SMA/RSI series) was removed entirely.
 app.get("/api/history/:symbol", async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   const asset = liveAssets.find(a => a.symbol === symbol);
@@ -761,33 +828,93 @@ app.get("/api/history/:symbol", async (req, res) => {
     return res.status(404).json({ error: "Asset not found" });
   }
 
-  const yahooSymbol = asset.category === "stock" ? `${symbol}.JK` : `${symbol}-USD`;
-  
-  try {
-    const now = Date.now();
-    if (now - lastQuotesFetch >= QUOTE_CACHE_TTL) {
-      refreshLiveAssets().catch(err => console.log("Background refresh info:", err.message));
-    }
+  const isCrypto = asset.category === "crypto";
+  const decimals = isCrypto ? 4 : 2;
 
-    const url = `https://query2.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?range=105d&interval=1d`;
+  // SMA/RSI are derived from the REAL OHLCV series only (computed metrics,
+  // not fabricated values).
+  const attachIndicators = (history: any[]): any[] => {
+    for (let i = 0; i < history.length; i++) {
+      if (i >= 15) {
+        const sum = history.slice(i - 15, i + 1).reduce((acc, current) => acc + current.close, 0);
+        history[i].sma = parseFloat((sum / 16).toFixed(isCrypto ? 3 : 1));
+      } else {
+        history[i].sma = history[i].close;
+      }
+
+      if (i >= 14) {
+        let gains = 0;
+        let losses = 0;
+        for (let j = i - 13; j <= i; j++) {
+          const diff = history[j].close - history[j - 1].close;
+          if (diff > 0) gains += diff;
+          else losses -= diff;
+        }
+        const rs = gains / (losses || 1);
+        history[i].rsi = parseFloat((100 - (100 / (1 + rs))).toFixed(1));
+      } else {
+        history[i].rsi = 50;
+      }
+    }
+    return history;
+  };
+
+  // Real source #1 (crypto-first): Binance daily klines.
+  const fetchBinanceKlines = async (): Promise<any[]> => {
+    // SEC-25-style guard: never interpolate an unvalidated symbol into an
+    // upstream URL.
+    if (!/^[A-Z0-9]{3,20}$/.test(symbol)) {
+      return [];
+    }
+    const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}USDT&interval=1d&limit=105`;
+    const response = await fetchWithTimeout(url, { headers: { "Accept": "application/json" } }, 4000);
+    if (!response.ok) {
+      throw new Error(`Binance klines returned HTTP ${response.status}`);
+    }
+    const klines = await response.json() as any[];
+    if (!Array.isArray(klines) || klines.length === 0) {
+      throw new Error("Binance klines returned no rows");
+    }
+    const history: any[] = [];
+    for (const k of klines) {
+      const open = parseFloat(k[1]);
+      const high = parseFloat(k[2]);
+      const low = parseFloat(k[3]);
+      const close = parseFloat(k[4]);
+      const volume = parseFloat(k[5]);
+      if (!isFinite(open) || !isFinite(high) || !isFinite(low) || !isFinite(close)) {
+        continue;
+      }
+      history.push({
+        date: new Date(k[0]).toISOString().split("T")[0],
+        open: parseFloat(open.toFixed(decimals)),
+        high: parseFloat(high.toFixed(decimals)),
+        low: parseFloat(low.toFixed(decimals)),
+        close: parseFloat(close.toFixed(decimals)),
+        volume: isFinite(volume) ? volume : 0
+      });
+    }
+    return history;
+  };
+
+  // Real source #2: Yahoo Finance chart (stocks as .JK, crypto as -USD).
+  const fetchYahooHistory = async (): Promise<any[]> => {
+    const yahooSymbol = isCrypto ? `${symbol}-USD` : `${symbol}.JK`;
+    const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?range=105d&interval=1d`;
     const response = await fetchWithTimeout(url, {
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "*/*"
       }
     }, 4000);
-
     if (!response.ok) {
       throw new Error(`Failed to fetch history from Yahoo Finance: ${response.statusText}`);
     }
-
     const json = await response.json() as any;
     const result = json?.chart?.result?.[0];
-
     if (!result) {
       throw new Error("Invalid Yahoo Finance chart result");
     }
-
     const timestamps = result.timestamp || [];
     const quote = result.indicators?.quote?.[0] || {};
     const opens = quote.open || [];
@@ -813,100 +940,42 @@ app.get("/api/history/:symbol", async (req, res) => {
 
       history.push({
         date: dateStr,
-        open: parseFloat(openVal.toFixed(asset.category === "crypto" ? 4 : 2)),
-        high: parseFloat(highVal.toFixed(asset.category === "crypto" ? 4 : 2)),
-        low: parseFloat(lowVal.toFixed(asset.category === "crypto" ? 4 : 2)),
-        close: parseFloat(closeVal.toFixed(asset.category === "crypto" ? 4 : 2)),
+        open: parseFloat(openVal.toFixed(decimals)),
+        high: parseFloat(highVal.toFixed(decimals)),
+        low: parseFloat(lowVal.toFixed(decimals)),
+        close: parseFloat(closeVal.toFixed(decimals)),
         volume: volumeVal || 0
       });
     }
+    return history;
+  };
 
-    const finalHistory = history.slice(-100);
-
-    for (let i = 0; i < finalHistory.length; i++) {
-      if (i >= 15) {
-        const sum = finalHistory.slice(i - 15, i + 1).reduce((acc, current) => acc + current.close, 0);
-        finalHistory[i].sma = parseFloat((sum / 16).toFixed(asset.category === "crypto" ? 3 : 1));
-      } else {
-        finalHistory[i].sma = finalHistory[i].close;
-      }
-
-      if (i >= 14) {
-        let gains = 0;
-        let losses = 0;
-        for (let j = i - 13; j <= i; j++) {
-          const diff = finalHistory[j].close - finalHistory[j - 1].close;
-          if (diff > 0) gains += diff;
-          else losses -= diff;
-        }
-        const rs = gains / (losses || 1);
-        finalHistory[i].rsi = parseFloat((100 - (100 / (1 + rs))).toFixed(1));
-      } else {
-        finalHistory[i].rsi = 50;
-      }
+  try {
+    const now = Date.now();
+    if (now - lastQuotesFetch >= QUOTE_CACHE_TTL) {
+      refreshLiveAssets().catch(err => console.log("Background refresh info:", err.message));
     }
 
+    let history: any[] = [];
+    if (isCrypto) {
+      // DATA-2: crypto symbols try Binance klines FIRST, then Yahoo.
+      try {
+        history = await fetchBinanceKlines();
+      } catch (binanceErr: any) {
+        console.log(`[History] Binance klines failed for ${symbol}, falling back to Yahoo:`, binanceErr.message);
+      }
+    }
+    if (history.length === 0) {
+      history = await fetchYahooHistory();
+    }
+
+    const finalHistory = attachIndicators(history.slice(-100));
     res.json({ symbol, category: asset.category, history: finalHistory });
   } catch (err: any) {
-    console.log(`[History Fallback] Dynamic historical generation for ${symbol} active:`, err.message);
-    
-    const days = 100;
-    const history: any[] = [];
-    let currentPrice = asset.price;
-    const baseVolatility = asset.category === 'crypto' ? 0.035 : 0.012;
-
-    const today = new Date();
-    for (let i = days; i >= 0; i--) {
-      const d = new Date(today);
-      d.setDate(today.getDate() - i);
-      const dateStr = d.toISOString().split('T')[0];
-
-      const dailyReturn = (Math.random() - 0.49) * baseVolatility;
-      const change = currentPrice * dailyReturn;
-      const open = currentPrice - change;
-      const close = currentPrice;
-      const high = Math.max(open, close) * (1 + Math.random() * 0.015);
-      const low = Math.min(open, close) * (1 - Math.random() * 0.015);
-      const volume = Math.round((asset.volume24h / 24) * (0.6 + Math.random() * 0.8));
-
-      history.push({
-        date: dateStr,
-        open: parseFloat(open.toFixed(asset.category === 'crypto' ? 4 : 2)),
-        high: parseFloat(high.toFixed(asset.category === 'crypto' ? 4 : 2)),
-        low: parseFloat(low.toFixed(asset.category === 'crypto' ? 4 : 2)),
-        close: parseFloat(close.toFixed(asset.category === 'crypto' ? 4 : 2)),
-        volume
-      });
-
-      currentPrice = open;
-    }
-
-    history.reverse();
-
-    for (let i = 0; i < history.length; i++) {
-      if (i >= 15) {
-        const sum = history.slice(i - 15, i + 1).reduce((acc, current) => acc + current.close, 0);
-        history[i].sma = parseFloat((sum / 16).toFixed(asset.category === 'crypto' ? 3 : 1));
-      } else {
-        history[i].sma = history[i].close;
-      }
-
-      if (i >= 14) {
-        let gains = 0;
-        let losses = 0;
-        for (let j = i - 13; j <= i; j++) {
-          const diff = history[j].close - history[j - 1].close;
-          if (diff > 0) gains += diff;
-          else losses -= diff;
-        }
-        const rs = gains / (losses || 1);
-        history[i].rsi = parseFloat((100 - (100 / (1 + rs))).toFixed(1));
-      } else {
-        history[i].rsi = 50;
-      }
-    }
-
-    res.json({ symbol, category: asset.category, history });
+    // DATA-2: every real source failed → honest 503, never a fabricated
+    // random-walk history. The frontend renders the failure state.
+    console.error(`[History] All real sources failed for ${symbol}:`, err.message);
+    return res.status(503).json({ success: false, error: "Data historis tidak tersedia" });
   }
 });
 
@@ -915,7 +984,10 @@ app.get("/api/assets", async (req, res) => {
   if (now - lastQuotesFetch >= QUOTE_CACHE_TTL) {
     refreshLiveAssets().catch(err => console.log("Background refresh info:", err.message));
   }
-  res.json(liveAssets);
+  // DATA-5: `isWarmup` stays true until the first successful live market
+  // refresh completes, so consumers can label the returned prices as the
+  // static warmup snapshot instead of live quotes.
+  res.json({ assets: liveAssets, isWarmup: !assetsLiveReady });
 });
 
 // Cache variables for real-time coin rankings
@@ -974,6 +1046,11 @@ let coincapCache: any[] | null = null;
 let coincapCacheTime = 0;
 const COINCAP_CACHE_TTL = 30000; // 30 seconds cache
 
+// DATA-1: CoinGecko /coins/markets cache — the primary rankings directory
+// source, and the only one that provides REAL change7d + sparkline data.
+let coingeckoMarketsCache: any[] | null = null;
+let coingeckoMarketsCacheTime = 0;
+
 const getSectorForSymbol = (symbol: string, id: string): "L1/L2" | "DeFi" | "Stablecoin" | "AI" | "Meme" | "Infrastructure" => {
   const sym = symbol.toUpperCase();
   const cid = id.toLowerCase();
@@ -996,7 +1073,7 @@ const getSectorForSymbol = (symbol: string, id: string): "L1/L2" | "DeFi" | "Sta
 };
 
 // Global crypto stats cache and endpoint
-let globalStatsCache: { totalMc: number; totalVol: number; avgChange: number } | null = null;
+let globalStatsCache: { totalMc: number; totalVol: number; avgChange: number | null } | null = null;
 let globalStatsCacheTime = 0;
 
 app.get("/api/coins/global-stats", async (req, res) => {
@@ -1017,19 +1094,21 @@ app.get("/api/coins/global-stats", async (req, res) => {
       const payload = await response.json() as any;
       if (payload && payload.data && Array.isArray(payload.data.quotes) && payload.data.quotes.length > 0) {
         const quote = payload.data.quotes[0];
-        const totalMc = parseFloat(quote.totalMarketCap) || 1810000000000;
-        const totalVol = parseFloat(quote.totalVolume24H) || 56600000000;
-        const totalMarketCapYesterday = parseFloat(quote.totalMarketCapYesterday) || totalMc;
-        const avgChange = totalMarketCapYesterday !== 0 ? (((totalMc - totalMarketCapYesterday) / totalMarketCapYesterday) * 100) : 1.25;
+        // DATA-6: no fabricated constants — a field that fails to parse makes
+        // this source unusable and we move to the next real source.
+        const totalMc = parseFloat(quote.totalMarketCap);
+        const totalVol = parseFloat(quote.totalVolume24H);
+        if (isFinite(totalMc) && isFinite(totalVol)) {
+          const totalMarketCapYesterday = parseFloat(quote.totalMarketCapYesterday);
+          const avgChange = (isFinite(totalMarketCapYesterday) && totalMarketCapYesterday !== 0)
+            ? (((totalMc - totalMarketCapYesterday) / totalMarketCapYesterday) * 100)
+            : null;
 
-        const stats = {
-          totalMc,
-          totalVol,
-          avgChange
-        };
-        globalStatsCache = stats;
-        globalStatsCacheTime = now;
-        return res.json({ success: true, ...stats });
+          const stats = { totalMc, totalVol, avgChange };
+          globalStatsCache = stats;
+          globalStatsCacheTime = now;
+          return res.json({ success: true, ...stats });
+        }
       }
     }
   } catch (err: any) {
@@ -1042,14 +1121,20 @@ app.get("/api/coins/global-stats", async (req, res) => {
     if (response.ok) {
       const data = await response.json() as any;
       if (data && data.market_cap_usd) {
-        const stats = {
-          totalMc: parseFloat(data.market_cap_usd) || 1810000000000,
-          totalVol: parseFloat(data.volume_24h_usd) || 56600000000,
-          avgChange: parseFloat(data.market_cap_change_24h) || 1.25
-        };
-        globalStatsCache = stats;
-        globalStatsCacheTime = now;
-        return res.json({ success: true, ...stats });
+        // DATA-6: parse strictly — no hardcoded $1.81T / $56.6B fallbacks.
+        const totalMc = parseFloat(data.market_cap_usd);
+        const totalVol = parseFloat(data.volume_24h_usd);
+        if (isFinite(totalMc) && isFinite(totalVol)) {
+          const avgChange = parseFloat(data.market_cap_change_24h);
+          const stats = {
+            totalMc,
+            totalVol,
+            avgChange: isFinite(avgChange) ? avgChange : null
+          };
+          globalStatsCache = stats;
+          globalStatsCacheTime = now;
+          return res.json({ success: true, ...stats });
+        }
       }
     }
   } catch (err: any) {
@@ -1062,149 +1147,31 @@ app.get("/api/coins/global-stats", async (req, res) => {
     if (cgRes.ok) {
       const payload = await cgRes.json() as any;
       if (payload && payload.data) {
-        const stats = {
-          totalMc: parseFloat(payload.data.total_market_cap?.usd) || 1810000000000,
-          totalVol: parseFloat(payload.data.total_volume?.usd) || 56600000000,
-          avgChange: parseFloat(payload.data.market_cap_change_percentage_24h_usd) || 1.25
-        };
-        globalStatsCache = stats;
-        globalStatsCacheTime = now;
-        return res.json({ success: true, ...stats });
+        // DATA-6: parse strictly — no hardcoded fallback constants.
+        const totalMc = parseFloat(payload.data.total_market_cap?.usd);
+        const totalVol = parseFloat(payload.data.total_volume?.usd);
+        if (isFinite(totalMc) && isFinite(totalVol)) {
+          const avgChange = parseFloat(payload.data.market_cap_change_percentage_24h_usd);
+          const stats = {
+            totalMc,
+            totalVol,
+            avgChange: isFinite(avgChange) ? avgChange : null
+          };
+          globalStatsCache = stats;
+          globalStatsCacheTime = now;
+          return res.json({ success: true, ...stats });
+        }
       }
     }
   } catch (err: any) {
     console.log("[Global Stats Fetch from Coingecko info]", err.message);
   }
 
-  // 4. Fallback: Sum up actual real-time Binance tickers to get a 100% accurate calculation!
-  let totalMc = 0;
-  let totalVol = 0;
-  let totalChange = 0;
-  let count = 0;
-
-  if (tickersCache) {
-    Object.values(tickersCache).forEach((ticker: any) => {
-      const price = ticker.price || 0;
-      const volume = ticker.volume || 0;
-      totalVol += volume;
-      totalMc += price * 100000000;
-      totalChange += ticker.change || 0;
-      count++;
-    });
-  }
-
-  const fallbackStats = {
-    totalMc: totalMc > 0 ? totalMc : 1810000000000,
-    totalVol: totalVol > 0 ? totalVol : 56600000000,
-    avgChange: count > 0 ? (totalChange / count) : 1.25
-  };
-
-  return res.json({ success: true, ...fallbackStats });
+  // DATA-6: every real source failed → honest 503. The old fallback here used
+  // to fabricate a $1.81T market cap by multiplying Binance prices by a made-up
+  // 100,000,000 circulating supply — that fabrication was removed.
+  return res.status(503).json({ success: false, error: "Global stats tidak tersedia" });
 });
-
-function generateFallbackRawData(): any[] {
-  const baseAssets = [
-    { id: "bitcoin", symbol: "BTC", name: "Bitcoin", priceUsd: "68420", changePercent24Hr: "4.5", marketCapUsd: "1340000000000", volumeUsd24Hr: "28500000000", supply: "19710000" },
-    { id: "ethereum", symbol: "ETH", name: "Ethereum", priceUsd: "3540", changePercent24Hr: "2.1", marketCapUsd: "425000000000", volumeUsd24Hr: "15200000000", supply: "122000000" },
-    { id: "tether", symbol: "USDT", name: "Tether", priceUsd: "1.00", changePercent24Hr: "0.01", marketCapUsd: "115000000000", volumeUsd24Hr: "48000000000", supply: "115000000000" },
-    { id: "binancecoin", symbol: "BNB", name: "BNB", priceUsd: "595.2", changePercent24Hr: "-1.5", marketCapUsd: "92000000000", volumeUsd24Hr: "1850000000", supply: "147500000" },
-    { id: "solana", symbol: "SOL", name: "Solana", priceUsd: "165.5", changePercent24Hr: "8.4", marketCapUsd: "77000000000", volumeUsd24Hr: "4900000000", supply: "462000000" },
-    { id: "usd-coin", symbol: "USDC", name: "USD Coin", priceUsd: "1.00", changePercent24Hr: "-0.01", marketCapUsd: "34000000000", volumeUsd24Hr: "6200000000", supply: "34000000000" },
-    { id: "ripple", symbol: "XRP", name: "Ripple", priceUsd: "0.58", changePercent24Hr: "-0.8", marketCapUsd: "32000000000", volumeUsd24Hr: "920000000", supply: "55000000000" },
-    { id: "dogecoin", symbol: "DOGE", name: "Dogecoin", priceUsd: "0.138", changePercent24Hr: "5.8", marketCapUsd: "20000000000", volumeUsd24Hr: "1450000000", supply: "144800000000" },
-    { id: "cardano", symbol: "ADA", name: "Cardano", priceUsd: "0.42", changePercent24Hr: "1.2", marketCapUsd: "15000000000", volumeUsd24Hr: "310000000", supply: "35600000000" },
-    { id: "shiba-inu", symbol: "SHIB", name: "Shiba Inu", priceUsd: "0.0000185", changePercent24Hr: "4.2", marketCapUsd: "10900000000", volumeUsd24Hr: "450000000", supply: "589270000000000" },
-    { id: "avalanche", symbol: "AVAX", name: "Avalanche", priceUsd: "32.40", changePercent24Hr: "-2.3", marketCapUsd: "12800000000", volumeUsd24Hr: "420000000", supply: "393000000" },
-    { id: "chainlink", symbol: "LINK", name: "Chainlink", priceUsd: "15.20", changePercent24Hr: "3.1", marketCapUsd: "9100000000", volumeUsd24Hr: "340000000", supply: "587000000" },
-    { id: "near-protocol", symbol: "NEAR", name: "NEAR Protocol", priceUsd: "5.45", changePercent24Hr: "6.2", marketCapUsd: "5900000000", volumeUsd24Hr: "580000000", supply: "1080000000" },
-    { id: "uniswap", symbol: "UNI", name: "Uniswap", priceUsd: "7.85", changePercent24Hr: "-1.1", marketCapUsd: "4700000000", volumeUsd24Hr: "280000000", supply: "600000000" },
-    { id: "polkadot", symbol: "DOT", name: "Polkadot", priceUsd: "6.15", changePercent24Hr: "0.5", marketCapUsd: "8800000000", volumeUsd24Hr: "180000000", supply: "1430000000" },
-    { id: "pepe", symbol: "PEPE", name: "Pepe", priceUsd: "0.0000115", changePercent24Hr: "12.8", marketCapUsd: "4800000000", volumeUsd24Hr: "1100000000", supply: "420690000000000" },
-    { id: "sui", symbol: "SUI", name: "Sui", priceUsd: "2.05", changePercent24Hr: "9.2", marketCapUsd: "5300000000", volumeUsd24Hr: "680000000", supply: "2580000000" },
-    { id: "render-token", symbol: "RNDR", name: "Render", priceUsd: "7.82", changePercent24Hr: "10.4", marketCapUsd: "3040000000", volumeUsd24Hr: "490000000", supply: "388000000" },
-    { id: "lido-dao", symbol: "LDO", name: "Lido DAO", priceUsd: "1.65", changePercent24Hr: "-3.5", marketCapUsd: "1480000000", volumeUsd24Hr: "120000000", supply: "895000000" },
-    { id: "hyperliquid", symbol: "HYPE", name: "Hyperliquid", priceUsd: "8.42", changePercent24Hr: "15.6", marketCapUsd: "2780000000", volumeUsd24Hr: "460000000", supply: "330000000" }
-  ];
-
-  const namePool = [
-    { name: "Injective", symbol: "INJ", price: 22.40 },
-    { name: "Theta Network", symbol: "THETA", price: 1.45 },
-    { name: "Ethena", symbol: "ENA", price: 0.48 },
-    { name: "JasmyCoin", symbol: "JASMY", price: 0.021 },
-    { name: "SingularityNET", symbol: "AGIX", price: 0.68 },
-    { name: "Ocean Protocol", symbol: "OCEAN", price: 0.54 },
-    { name: "Core", symbol: "CORE", price: 1.15 },
-    { name: "Worldcoin", symbol: "WLD", price: 2.18 },
-    { name: "Raydium", symbol: "RAY", price: 1.82 },
-    { name: "Jupiter", symbol: "JUP", price: 0.95 },
-    { name: "Zcash", symbol: "ZEC", price: 31.50 },
-    { name: "Monero", symbol: "XMR", price: 168.00 },
-    { name: "Aptos", symbol: "APT", price: 8.12 },
-    { name: "Celestia", symbol: "TIA", price: 6.45 },
-    { name: "Starknet", symbol: "STRK", price: 0.52 },
-    { name: "Wormhole", symbol: "W", price: 0.31 },
-    { name: "Immutable", symbol: "IMX", price: 1.48 },
-    { name: "Gala", symbol: "GALA", price: 0.028 },
-    { name: "Akash Network", symbol: "AKT", price: 3.12 },
-    { name: "Curve DAO", symbol: "CRV", price: 0.32 },
-    { name: "Synthetic Network", symbol: "SNX", price: 1.88 },
-    { name: "dYdX", symbol: "DYDX", price: 1.45 },
-    { name: "Mog Coin", symbol: "MOG", price: 0.0000014 },
-    { name: "Book of Meme", symbol: "BOME", price: 0.0085 },
-    { name: "Popcat", symbol: "POPCAT", price: 0.45 },
-    { name: "Brett", symbol: "BRETT", price: 0.115 },
-    { name: "Dogwifhat", symbol: "WIF", price: 2.22 }
-  ];
-
-  const fullList: any[] = [];
-  baseAssets.forEach((ba, index) => {
-    fullList.push({
-      rank: (index + 1).toString(),
-      id: ba.id,
-      symbol: ba.symbol,
-      name: ba.name,
-      priceUsd: ba.priceUsd,
-      changePercent24Hr: ba.changePercent24Hr,
-      marketCapUsd: ba.marketCapUsd,
-      volumeUsd24Hr: ba.volumeUsd24Hr,
-      supply: ba.supply
-    });
-  });
-
-  let currentCap = 1300000000;
-  for (let rank = baseAssets.length + 1; rank <= 100; rank++) {
-    const poolIndex = (rank - 21) % namePool.length;
-    const template = namePool[poolIndex];
-    const varianceMultiplier = 1 - (rank * 0.006);
-    const coinCap = currentCap * varianceMultiplier * (0.9 + Math.random() * 0.2);
-    const coinPrice = template.price * (0.8 + Math.random() * 0.4);
-    const supply = coinCap / coinPrice;
-    
-    let change24h = (Math.random() - 0.48) * 14;
-    if (rank === 32) change24h = 42.5;
-    if (rank === 45) change24h = 28.1;
-    if (rank === 56) change24h = 22.4;
-    if (rank === 38) change24h = -26.8;
-    if (rank === 49) change24h = -19.4;
-    if (rank === 63) change24h = -15.2;
-
-    const volume24h = coinCap * (0.02 + Math.random() * 0.08);
-
-    fullList.push({
-      rank: rank.toString(),
-      id: `${template.name.toLowerCase().replace(/ /g, "-")}-${rank}`,
-      symbol: `${template.symbol}${rank > 60 ? rank - 50 : ""}`,
-      name: `${template.name} #${rank}`,
-      priceUsd: coinPrice.toString(),
-      changePercent24Hr: change24h.toString(),
-      marketCapUsd: coinCap.toString(),
-      volumeUsd24Hr: volume24h.toString(),
-      supply: supply.toString()
-    });
-  }
-
-  return fullList;
-}
 
 app.get("/api/coins/rankings", async (req, res) => {
   const now = Date.now();
@@ -1247,27 +1214,68 @@ app.get("/api/coins/rankings", async (req, res) => {
     }
   }
 
-  // 2. Fetch main 100 assets from Coincap
-  if (coincapCache && (now - coincapCacheTime < COINCAP_CACHE_TTL)) {
-    rawData = coincapCache;
+  // 2. DATA-1: primary REAL source — CoinGecko /coins/markets (the only
+  // rankings source that provides REAL change7d + sparkline data). If every
+  // real source fails we now return 503 — the Math.random "fake coins"
+  // generator (generateFallbackRawData) was deleted for good.
+  if (coingeckoMarketsCache && (now - coingeckoMarketsCacheTime < COINCAP_CACHE_TTL)) {
+    rawData = coingeckoMarketsCache;
     isFromCache = true;
   } else {
     try {
-      const response = await fetch("https://api.coincap.io/v2/assets?limit=100");
+      const response = await fetchWithTimeout(
+        "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&sparkline=true&price_change_percentage=7d",
+        { headers: { "Accept": "application/json" } },
+        6000
+      );
       if (response.ok) {
-        const payload = await response.json() as { data: any[] };
-        if (payload && Array.isArray(payload.data) && payload.data.length > 0) {
-          rawData = payload.data;
-          coincapCache = rawData;
-          coincapCacheTime = now;
+        const payload = await response.json() as any[];
+        if (Array.isArray(payload) && payload.length > 0) {
+          rawData = payload.map((item, index) => ({
+            rank: (item.market_cap_rank || index + 1).toString(),
+            id: item.id || (item.symbol || "").toLowerCase(),
+            symbol: item.symbol || "",
+            name: item.name || item.symbol || "",
+            priceUsd: String(item.current_price ?? 0),
+            changePercent24Hr: String(item.price_change_percentage_24h_in_currency ?? item.price_change_percentage_24h ?? 0),
+            change7d: item.price_change_percentage_7d_in_currency ?? item.price_change_percentage_7d ?? null,
+            marketCapUsd: item.market_cap != null ? String(item.market_cap) : null,
+            volumeUsd24Hr: String(item.total_volume ?? 0),
+            supply: item.circulating_supply != null ? String(item.circulating_supply) : null,
+            sparkline: Array.isArray(item.sparkline_in_7d?.price) ? item.sparkline_in_7d.price : null
+          }));
+          coingeckoMarketsCache = rawData;
+          coingeckoMarketsCacheTime = now;
         }
       }
     } catch (err: any) {
-      console.log("[CoinCap Fetch Info, trying Coinpaprika next]", err.message);
+      console.log("[CoinGecko Markets Fetch Info, trying CoinCap next]", err.message);
     }
   }
 
-  // 3. Coinpaprika fallback (100% Real-time, NO DUMMY DATA)
+  // 3. CoinCap directory fallback (real data)
+  if (rawData.length === 0) {
+    if (coincapCache && (now - coincapCacheTime < COINCAP_CACHE_TTL)) {
+      rawData = coincapCache;
+      isFromCache = true;
+    } else {
+      try {
+        const response = await fetch("https://api.coincap.io/v2/assets?limit=100");
+        if (response.ok) {
+          const payload = await response.json() as { data: any[] };
+          if (payload && Array.isArray(payload.data) && payload.data.length > 0) {
+            rawData = payload.data;
+            coincapCache = rawData;
+            coincapCacheTime = now;
+          }
+        }
+      } catch (err: any) {
+        console.log("[CoinCap Fetch Info, trying Coinpaprika next]", err.message);
+      }
+    }
+  }
+
+  // 4. Coinpaprika fallback (100% Real-time, NO DUMMY DATA)
   if (rawData.length === 0) {
     try {
       const response = await fetch("https://api.coinpaprika.com/v1/tickers?limit=100");
@@ -1292,7 +1300,7 @@ app.get("/api/coins/rankings", async (req, res) => {
     }
   }
 
-  // 4. Binance Tickers list as dynamic third-level fallback (100% real-time!)
+  // 5. Binance Tickers list as dynamic third-level fallback (100% real-time!)
   if (rawData.length === 0 && Object.keys(currentTickers).length > 0) {
     const sortedTickers = Object.entries(currentTickers)
       .map(([symbol, data]: [string, any]) => ({
@@ -1311,18 +1319,25 @@ app.get("/api/coins/rankings", async (req, res) => {
       priceUsd: item.price.toString(),
       changePercent24Hr: item.change.toString(),
       volumeUsd24Hr: item.volume.toString(),
-      marketCapUsd: (item.price * 100000000).toString(), // rough representation
-      supply: "100000000"
+      // DATA-11: Binance tickers carry NO marketCap/supply data — the old
+      // `price * 100000000` fake market cap and hardcoded "100000000" supply
+      // were removed; these stay null so the frontend renders "—".
+      marketCapUsd: null,
+      supply: null
     }));
   }
 
+  // Last resort: serve stale (but REAL) cached CoinCap data if available.
   if (rawData.length === 0 && coincapCache) {
     rawData = coincapCache;
     isFromCache = true;
   }
+
+  // DATA-1: every REAL source failed → honest 503 with an empty coin list.
+  // The app NEVER fabricates rankings (the fake coins 21-100 generator was
+  // removed entirely).
   if (rawData.length === 0) {
-    rawData = generateFallbackRawData();
-    isFromCache = false;
+    return res.status(503).json({ success: false, error: "Data rankings tidak tersedia saat ini", coins: [] });
   }
 
   try {
@@ -1337,8 +1352,14 @@ app.get("/api/coins/rankings", async (req, res) => {
       let price = parseFloat(item.priceUsd) || 0;
       let change24h = parseFloat(item.changePercent24Hr) || 0;
       let volume24h = parseFloat(item.volumeUsd24Hr) || 0;
-      const circulatingSupply = parseFloat(item.supply) || 0;
-      let marketCap = parseFloat(item.marketCapUsd) || (price * circulatingSupply) || 0;
+      // DATA-11: supply/marketCap are ONLY set when the real source actually
+      // provided them; otherwise null (frontend renders "—").
+      const circulatingSupply = item.supply != null ? (parseFloat(item.supply) || null) : null;
+      let marketCap: number | null = item.marketCapUsd != null ? (parseFloat(item.marketCapUsd) || null) : null;
+      // Derived (not fabricated): market cap from a REAL price × REAL supply.
+      if (marketCap == null && circulatingSupply != null && circulatingSupply > 0) {
+        marketCap = price * circulatingSupply;
+      }
 
       // Overlay with live ultra-fresh Binance prices if available
       const liveTicker = currentTickers[symbol];
@@ -1346,19 +1367,18 @@ app.get("/api/coins/rankings", async (req, res) => {
         price = liveTicker.price;
         change24h = liveTicker.change;
         volume24h = liveTicker.volume;
-        marketCap = price * circulatingSupply;
+        if (circulatingSupply != null && circulatingSupply > 0) {
+          marketCap = price * circulatingSupply;
+        }
       }
 
       const sector = getSectorForSymbol(symbol, id);
-      
-      const change7d = change24h * 1.45 + (Math.sin(rank) * 1.5);
-      const sparklineLength = 12;
-      const sparkline: number[] = [];
-      for (let i = 0; i < sparklineLength; i++) {
-        const trend = (change24h / sparklineLength) * i;
-        const noise = Math.sin(i * 1.5) * 1.2;
-        sparkline.push(price * (1 + ((trend + noise) / 100)));
-      }
+
+      // DATA-11: change7d is REAL (CoinGecko) or null — the old
+      // `change24h * 1.45 + sin` fabrication is gone. Sparkline is REAL
+      // (CoinGecko sparkline_in_7d) or null — the sin-noise generator is gone.
+      const change7d = item.change7d != null ? (parseFloat(item.change7d) || null) : null;
+      const sparkline = Array.isArray(item.sparkline) ? item.sparkline : null;
 
       coinsMap.set(symbol, {
         rank,
@@ -1423,17 +1443,11 @@ app.get("/api/coins/rankings", async (req, res) => {
         const price = ticker.price;
         const change24h = ticker.change;
         const volume24h = ticker.volume;
-        const circulatingSupply = symbol === "TON" ? 2500000000 : (symbol === "HYPE" ? 333000000 : 1000000000);
-        const marketCap = price * circulatingSupply;
+        // DATA-11: hardcoded supplies (TON 2.5B / HYPE 333M / 1B default) and
+        // the derived fake marketCap / change7d / sin-noise sparkline were
+        // removed. Only price/change/volume are real (Binance ticker); the
+        // rest stays null until a real source provides them.
         const sector = getSectorForSymbol(symbol, symbol.toLowerCase());
-
-        const sparklineLength = 12;
-        const sparkline: number[] = [];
-        for (let i = 0; i < sparklineLength; i++) {
-          const trend = (change24h / sparklineLength) * i;
-          const noise = Math.sin(i * 1.5) * 1.2;
-          sparkline.push(price * (1 + ((trend + noise) / 100)));
-        }
 
         coinsMap.set(symbol, {
           rank: nextRank++,
@@ -1442,12 +1456,12 @@ app.get("/api/coins/rankings", async (req, res) => {
           name,
           price,
           change24h,
-          change7d: change24h * 1.35,
-          marketCap,
+          change7d: null,
+          marketCap: null,
           volume24h,
-          circulatingSupply,
+          circulatingSupply: null,
           sector,
-          sparkline
+          sparkline: null
         });
       }
     });
@@ -1465,17 +1479,24 @@ app.get("/api/coins/rankings", async (req, res) => {
     });
 
   } catch (err: any) {
-    console.error("[Rankings API Error, trigger standard generated rankings]", err.message);
-    return res.status(200).json({ success: true, coins: [], warning: err.message });
+    console.error("[Rankings API Error]", err.message);
+    return res.status(503).json({ success: false, error: "Data rankings tidak tersedia saat ini", coins: [] });
   }
 });
 
 // Register any dynamic custom asset from Yahoo Finance (Stocks) or Binance (Crypto)
-app.post("/api/assets/register", async (req, res) => {
+// SEC-4: this route now requires authentication and applies strict charset
+// validation to symbol/name/category. Previously an unauthenticated caller
+// could push arbitrary strings into the in-memory asset store (which is
+// rendered in the UI → stored XSS) and inject syntax into upstream URLs.
+// The dummy fallback asset injection (which fabricated a price of 1000) was
+// also removed — registration only succeeds when the symbol is VERIFIED
+// against a real upstream source.
+app.post("/api/assets/register", requireAuth, async (req, res) => {
   const registerSchema = z.object({
-    symbol: z.string().min(1).max(20).trim(),
+    symbol: z.string().min(2).max(20),
     category: z.enum(["stock", "crypto"]),
-    name: z.string().max(100).optional().nullable()
+    name: z.string().max(60).optional().nullable()
   });
 
   const parsed = registerSchema.safeParse(req.body);
@@ -1483,8 +1504,20 @@ app.post("/api/assets/register", async (req, res) => {
     return res.status(400).json({ error: "Validasi registrasi gagal: " + parsed.error.issues.map(e => e.message).join(", ") });
   }
 
-  const { symbol, category, name } = parsed.data;
-  const upperSymbol = symbol.toUpperCase();
+  const { category } = parsed.data;
+  const upperSymbol = parsed.data.symbol.trim().toUpperCase();
+  const rawName = parsed.data.name != null ? parsed.data.name.trim() : null;
+  const cleanName = rawName != null && rawName !== "" ? rawName : null;
+
+  // SEC-4 (stored XSS) + SEC-25 (upstream URL injection): strict charsets —
+  // nothing outside these can reach the asset store or an upstream URL.
+  if (!/^[A-Z0-9.\-]{2,20}$/.test(upperSymbol)) {
+    return res.status(400).json({ error: "Simbol hanya boleh mengandung huruf besar, angka, titik, dan strip (2-20 karakter)." });
+  }
+  if (cleanName != null && !/^[A-Za-z0-9 .\-()]{2,60}$/.test(cleanName)) {
+    return res.status(400).json({ error: "Nama aset hanya boleh mengandung huruf, angka, spasi, dan karakter . - ( ) (2-60 karakter)." });
+  }
+
   const existing = liveAssets.find(a => a.symbol === upperSymbol);
   if (existing) {
     return res.json({ message: "Asset already exists", asset: existing });
@@ -1511,6 +1544,11 @@ app.post("/api/assets/register", async (req, res) => {
   };
 
   if (category === "crypto") {
+    // SEC-25: Binance spot symbols are pure alphanumeric — validate before
+    // the symbol is interpolated into the upstream 24hr URL.
+    if (!/^[A-Z0-9]{3,20}$/.test(upperSymbol)) {
+      return res.status(400).json({ error: "Simbol crypto tidak valid untuk verifikasi bursa Binance." });
+    }
     try {
       const url = `https://api.binance.com/api/v3/ticker/24hr?symbol=${upperSymbol}USDT`;
       const response = await fetchWithTimeout(url, { headers: { "Accept": "application/json" } }, 4000);
@@ -1529,11 +1567,13 @@ app.post("/api/assets/register", async (req, res) => {
       const newAsset = {
         id: `c_${upperSymbol.toLowerCase()}`,
         symbol: upperSymbol,
-        name: name || nameMap[upperSymbol] || `${upperSymbol} Token`,
+        name: cleanName || nameMap[upperSymbol] || `${upperSymbol} Token`,
         category: "crypto" as const,
         price: price,
         change24h: change24h,
-        marketCap: price * (volume24h * 15), // estimate marketcap
+        // DATA: Binance's 24hr ticker provides NO market cap — the old
+        // `price * (volume24h * 15)` estimate was fabricated and is removed.
+        marketCap: null,
         volume24h: volume24h,
       };
 
@@ -1552,7 +1592,7 @@ app.post("/api/assets/register", async (req, res) => {
   }
 
   try {
-    const url = `https://query2.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?range=5d&interval=1d`;
+    const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?range=5d&interval=1d`;
     const response = await fetchWithTimeout(url, {
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -1571,37 +1611,33 @@ app.post("/api/assets/register", async (req, res) => {
     }
 
     const meta = resultItem.meta;
-    const price = meta?.regularMarketPrice || 1000;
+    const price = meta?.regularMarketPrice;
+    // DATA: no fabricated default price — registration requires a real quote.
+    if (price == null || !isFinite(price) || price <= 0) {
+      throw new Error("No live market price available for symbol");
+    }
     const prevClose = meta?.chartPreviousClose || meta?.previousClose || price;
     const change24h = prevClose > 0 ? parseFloat((((price - prevClose) / prevClose) * 100).toFixed(2)) : 0;
 
     const newAsset = {
       id: `s_${upperSymbol.toLowerCase()}`,
       symbol: upperSymbol,
-      name: name || meta?.shortName || meta?.longName || `${upperSymbol} Global Asset`,
+      name: cleanName || meta?.shortName || meta?.longName || `${upperSymbol} Global Asset`,
       category: "stock" as "stock",
       price: price,
       change24h: change24h,
-      marketCap: meta?.marketCap || 0,
+      marketCap: meta?.marketCap ?? null, // real from Yahoo or null — no fake value
       volume24h: resultItem.indicators?.quote?.[0]?.volume?.[0] || 0,
     };
 
     (liveAssets as any[]).push(newAsset);
     res.json({ message: "Asset successfully registered", asset: newAsset });
   } catch (err: any) {
-    console.log(`[Registration Fallback] Creating dynamic fallback asset for ${upperSymbol}:`, err.message);
-    const fallbackAsset = {
-      id: `s_${upperSymbol.toLowerCase()}`,
-      symbol: upperSymbol,
-      name: name || `${upperSymbol} (Aset Kustom)`,
-      category: "stock" as "stock",
-      price: 1000,
-      change24h: 0.0,
-      marketCap: 0,
-      volume24h: 0,
-    };
-    (liveAssets as any[]).push(fallbackAsset);
-    res.json({ message: "Asset registered using fallback parameters", asset: fallbackAsset });
+    // SEC-4/DATA: the dummy fallback asset (fabricated price of 1000 and a
+    // fake "(Aset Kustom)" name) was removed — fail honestly instead of
+    // injecting fabricated data into the asset registry.
+    console.error(`[Registration] Yahoo verification failed for ${upperSymbol}:`, err.message);
+    return res.status(400).json({ error: `Gagal memverifikasi aset ${upperSymbol} dari Yahoo Finance. Aset tidak didaftarkan.` });
   }
 });
 
@@ -1755,79 +1791,22 @@ app.post("/api/gemini/analyze", async (req, res) => {
   }
 });
 
-// Offline News Sentiment Analyser Lookup Table
-function getOfflineNewsSentiment(articleId: string, articleTitle: string): any {
-  const titleLower = (articleTitle || "").toLowerCase();
-  if (articleId === "framework-ventures-400-million" || titleLower.includes("framework")) {
-    return {
-      sentiment: "BULLISH",
-      score: 92,
-      summary: "Peluncuran dana ventura baru senilai $400 juta oleh Framework Ventures menyuntikkan likuiditas substansial dan kepercayaan jangka panjang ke sektor DeFi, AI terdesentralisasi, dan robotika.",
-      marketImpact: "Dampak sangat positif untuk startup tahap awal dan memperkuat narasi konvergensi antara AI dan Web3. Hal ini akan memicu spekulasi positif pada token-token bertema AI dan infrastruktur modular.",
-      winners: ["FET (Artificial Superintelligence)", "NEAR", "AKT", "GRT"],
-      losers: ["Proyek DeFi lama tanpa inovasi AI"],
-      shortTermOutlook: "Dorongan sentimen positif pada sektor AI kripto, memicu akumulasi lokal pada token-token AI berkapitalisasi menengah.",
-      longTermOutlook: "Siklus pendanaan ini akan merealisasikan produk riil dalam 12-18 bulan, memperkuat infrastruktur fisik terdesentralisasi (DePIN) dan koordinasi robotik."
-    };
-  }
-  if (articleId === "bitcoin-etf-flows-soar-institutional" || titleLower.includes("etf") || titleLower.includes("bitcoin")) {
-    return {
-      sentiment: "BULLISH",
-      score: 95,
-      summary: "Arus masuk bersih sebesar $2.1 miliar ke ETF Bitcoin Spot dari institusi papan atas seperti Millennium Management mengonfirmasi adopsi Bitcoin secara struktural sebagai kelas aset alternatif global.",
-      marketImpact: "Mengurangi ketersediaan pasokan Bitcoin di bursa (supply shock) dan meredam dampak volatilitas jangka pendek berkat basis investor institusional yang memiliki horizon investasi jangka panjang.",
-      winners: ["BTC", "IBIT (BlackRock)", "FBTC (Fidelity)", "STX"],
-      losers: ["Aset defensif tradisional seperti Emas fisik (terjadi rotasi modal sebagian)"],
-      shortTermOutlook: "Bitcoin diperkirakan akan menguji area resistensi psikologis baru dengan lantai harga (price floor) yang kian kokoh di atas level support utama.",
-      longTermOutlook: "Arus modal masuk berkelanjutan akan mengantarkan siklus apresiasi harga yang lebih matang, menempatkan alokasi institusional 1-5% sebagai standar industri baru."
-    };
-  }
-  if (articleId === "ethereum-penck-upgrade-announced" || titleLower.includes("penck") || titleLower.includes("ethereum")) {
-    return {
-      sentiment: "BULLISH",
-      score: 88,
-      summary: "Peningkatan jaringan 'Penck' yang menjanjikan pemotongan biaya transaksi Layer 2 hingga 90% melalui teknik kompresi Blob baru akan meningkatkan daya saing ekonomi Ethereum.",
-      marketImpact: "Sangat positif untuk skalabilitas jaringan. Transaksi mikro menjadi sangat layak secara ekonomis, menstimulasi volume transaksi on-chain di seluruh ekosistem Ethereum Layer 2.",
-      winners: ["ETH", "ARB (Arbitrum)", "OP (Optimism)", "BASE", "STRK"],
-      losers: ["Alternative Layer 1 berbiaya murah yang mengandalkan keunggulan biaya gas rendah dibanding Ethereum lama"],
-      shortTermOutlook: "Apresiasi harga lokal pada token-token tata kelola Layer 2 terkemuka karena spekulasi seputar upgrade Penck.",
-      longTermOutlook: "Memperkuat posisi Ethereum sebagai lapisan konsensus dan kedaulatan data utama, sementara eksekusi bergeser sepenuhnya ke L2 berbiaya mendekati nol."
-    };
-  }
-  if (articleId === "sec-rules-on-stablecoins-regulatory-clarity" || titleLower.includes("stablecoin") || titleLower.includes("perbankan")) {
-    return {
-      sentiment: "BULLISH",
-      score: 85,
-      summary: "Lolosnya RUU stablecoin federal dengan dukungan bipartisan memberikan kepastian hukum mutlak bagi penerbit stablecoin beragun fiat, menjembatani institusi perbankan dengan Web3.",
-      marketImpact: "Mengurangi risiko sistemik 'bank run' pada stablecoin dan mengundang bank investasi global untuk meluncurkan produk stablecoin resmi mereka, meningkatkan likuiditas fiat di ruang kripto.",
-      winners: ["USDC (Circle)", "USDT (Tether)", "MKR", "COIN (Coinbase)"],
-      losers: ["Stablecoin algoritmik tanpa jaminan fiat penuh", "Platform shadow banking lepas pantai"],
-      shortTermOutlook: "Peningkatan likuiditas pasar secara bertahap saat modal institusi mulai dicetak (minted) langsung ke rel on-chain.",
-      longTermOutlook: "Stablecoin akan diintegrasikan langsung ke dalam sistem kliring pembayaran global, memproses triliunan dolar volume harian dengan efisiensi tinggi."
-    };
-  }
-  if (articleId === "solana-validator-emissions-re-examined" || titleLower.includes("solana") || titleLower.includes("prioritas")) {
-    return {
-      sentiment: "NEUTRAL",
-      score: 65,
-      summary: "Perdebatan mengenai proposal SIM-009 untuk mengalihkan 100% biaya prioritas ke validator (menghilangkan mekanisme pembakaran 50%) menciptakan ketidakpastian seputar model inflasi SOL.",
-      marketImpact: "Sentimen bersifat netral hingga bearish tipis untuk pemegang jangka panjang (karena mengurangi laju deflasi token), namun sangat bullish untuk kesehatan desentralisasi dan operator validator Solana.",
-      winners: ["Operator Validator Solana", "Jito (JTO)"],
-      losers: ["Pemegang SOL jangka panjang yang mengandalkan narasi deflasi murni"],
-      shortTermOutlook: "Harga SOL diperkirakan akan bergerak sideways/konsolidasi selama debat tata kelola berlangsung aktif.",
-      longTermOutlook: "Jika disetujui, ini akan menjamin keamanan jaringan jangka panjang melalui validator yang menguntungkan, meskipun pasokan SOL akan menjadi sedikit lebih inflasioner daripada skenario sebelumnya."
-    };
-  }
-  // Generic fallback if not one of the pre-defined
+// Offline News Sentiment fallback (DATA-19).
+// The old lookup table fabricated specific market "facts" (a $2.1B ETF inflow
+// "by Millennium Management", a "Penck upgrade -90% fees", winners/losers
+// lists, outlooks...) for arbitrary headlines — none of which were real.
+// This fallback is now honest: neutral sentiment, no invented facts. The
+// caller adds `isFallback: true` so the UI can label it.
+function getOfflineNewsSentiment(_articleId: string, _articleTitle: string): any {
   return {
-    sentiment: "NEUTRAL",
-    score: 70,
-    summary: "Berita pasar finansial ini memberikan dampak berimbang pada ekosistem aset digital secara umum.",
-    marketImpact: "Dampak pasar secara luas relatif terbatas, namun mengindikasikan kelanjutan konsolidasi harga di area support harian.",
-    winners: ["Aset berkapitalisasi besar (BTC, ETH)"],
-    losers: ["Aset berisiko tinggi / memecoin dengan likuiditas tipis"],
-    shortTermOutlook: "Sideways di rentang perdagangan terdekat.",
-    longTermOutlook: "Arah tren utama akan ditentukan oleh keputusan suku bunga makroekonomi berikutnya."
+    sentiment: "netral",
+    score: null,
+    summary: "Analisis AI tidak tersedia.",
+    marketImpact: "Analisis AI tidak tersedia saat ini — tidak ada penilaian dampak pasar yang dapat diberikan.",
+    winners: [],
+    losers: [],
+    shortTermOutlook: "",
+    longTermOutlook: ""
   };
 }
 
@@ -1957,52 +1936,80 @@ app.post("/api/gemini/news-chat", async (req, res) => {
   }
 });
 
-// Helper for generating dynamic fallback report when Gemini is offline or rate-limited
+// Helper for generating dynamic fallback report when Gemini is offline or rate-limited.
+// DATA-9: honest offline diagnostic — renders ONLY the metrics actually
+// provided; missing metrics are listed as unavailable. The old version
+// defaulted every metric to 0 and invented a "82%/74%" confidence plus
+// entry/TP/SL levels; all of that fabrication is removed.
 function generateDynamicOnChainFallback(symbol: string, metrics: any): string {
-  const price = metrics.price || 0;
-  const change24h = metrics.change24h || 0;
-  const openInterest = metrics.openInterest || 0;
-  const fundingRate = metrics.fundingRate || 0;
-  const longShortRatio = metrics.longShortRatio || 1.0;
-  const inflow24h = metrics.inflow24h || 0;
-  const outflow24h = metrics.outflow24h || 0;
-  const liquidation24h = metrics.liquidation24h || 0;
-  const activeAddresses = metrics.activeAddresses || 0;
-  const networkHashrate = metrics.networkHashrate || 0;
+  const has = (v: any) => typeof v === "number" && isFinite(v);
+  const fmtM = (v: number) => `$${(v / 1e6).toFixed(2)}M`;
+  const lines: string[] = [];
+  const missing: string[] = [];
 
-  const netflow = inflow24h - outflow24h;
-  const netflowStr = netflow > 0 
-    ? `Inflow bersih sebesar +$${(netflow / 1e6).toFixed(2)}M (Potensi peningkatan tekanan jual)` 
-    : `Outflow bersih sebesar -$${(Math.abs(netflow) / 1e6).toFixed(2)}M (Sentimen akumulasi kuat)`;
-  
-  const rec = netflow > 0 || fundingRate > 0.05 
-    ? "TAHAN (HOLD) / JUAL SEBAGIAN" 
-    : "BELI (BUY) / AKUMULASI BERTAHAP";
+  if (has(metrics?.price)) {
+    lines.push(`- Harga terakhir **${symbol}**: $${Number(metrics.price).toLocaleString()}${has(metrics?.change24h) ? ` (${metrics.change24h}% dalam 24 jam)` : ""}`);
+  } else {
+    missing.push("harga");
+  }
 
-  const keyakinan = netflow < 0 ? "82%" : "74%";
+  if (has(metrics?.openInterest)) {
+    lines.push(`- Open Interest berjangka: ${Number(metrics.openInterest).toLocaleString()} (kontrak)`);
+  } else {
+    missing.push("open interest");
+  }
 
-  return `### 📊 [DIAGNOSTIK CADANGAN - DESENTRALISASI ENGINE OFFLINE / RATE LIMIT ACTIVE]
+  if (has(metrics?.fundingRate)) {
+    lines.push(`- Funding rate harian: ${Number(metrics.fundingRate).toFixed(4)}%`);
+  } else {
+    missing.push("funding rate");
+  }
 
-### 🌐 1. ANALISIS AKTIVITAS & KESEHATAN JARINGAN (NETWORK HEALTH)
-- Aktivitas alamat harian berada pada tingkat **${Number(activeAddresses).toLocaleString()} alamat aktif**. Ini mencerminkan keterlibatan pengguna jaringan yang sehat dan stabil.
-- Kinerja hashrate/skor aktivitas jaringan berada pada level **${networkHashrate} EH/s**, yang mengindikasikan tingkat desentralisasi dan keamanan konsensus yang sangat tangguh di rantai blok **${symbol}**.
+  if (has(metrics?.longShortRatio)) {
+    lines.push(`- Rasio Long/Short: ${Number(metrics.longShortRatio).toFixed(2)}`);
+  } else {
+    missing.push("rasio long/short");
+  }
 
-### 💸 2. METRIK ARUS DANA & ARUS LIKUIDITAS (LIQUIDITY & NETFLOW)
-- Arus masuk bursa harian (Inflow): **$${(Number(inflow24h) / 1e6).toFixed(2)}M**
-- Arus keluar bursa harian (Outflow): **$${(Number(outflow24h) / 1e6).toFixed(2)}M**
-- **Netflow Bursa**: **${netflowStr}**. Arus kas menunjukkan ${netflow < 0 ? 'dominasi sentimen akumulasi jangka panjang oleh investor institusional (whales) yang memindahkan dana ke cold storage.' : 'waspada peningkatan pasokan di bursa yang siap dilepas ke pasar jika sentimen global memburuk.'}
+  if (has(metrics?.inflow24h) && has(metrics?.outflow24h)) {
+    const netflow = metrics.inflow24h - metrics.outflow24h;
+    lines.push(`- Inflow bursa 24 jam: ${fmtM(Number(metrics.inflow24h))}`);
+    lines.push(`- Outflow bursa 24 jam: ${fmtM(Number(metrics.outflow24h))}`);
+    lines.push(`- Netflow bursa: ${fmtM(netflow)} (${netflow < 0 ? "outflow bersih — indikasi akumulasi" : "inflow bersih — indikasi tekanan jual"})`);
+  } else {
+    missing.push("arus dana bursa (inflow/outflow)");
+  }
 
-### ⚡ 3. SENTIMEN PASAR BERJANGKA & STRUKTUR LEVERAGE
-- Nilai **Open Interest (OI)** tercatat pada **$${(Number(openInterest) / 1e6).toFixed(2)}M** dengan **Funding Rate harian sebesar ${fundingRate}%**.
-- Rasio Long terhadap Short berada pada level **${longShortRatio}**, menandakan sentimen market ${longShortRatio > 1 ? 'cenderung condong ke arah long leverage.' : 'didominasi posisi short defensif.'}
-- Likuidasi harian sebesar **$${(Number(liquidation24h) / 1e6).toFixed(2)}M** mendandakan volatilitas leverage yang cukup terkendali untuk saat ini, meminimalkan risiko kepunahan massal secara tiba-tiba (flushout).
+  if (has(metrics?.liquidation24h)) {
+    lines.push(`- Volume likuidasi 24 jam: ${fmtM(Number(metrics.liquidation24h))}`);
+  } else {
+    missing.push("likuidasi 24 jam");
+  }
 
-### 🎯 4. REKOMENDASI TAKTIS & KEPUTUSAN TRADING (BUY/SELL/HOLD RECOMMENDATION)
-- **REKOMENDASI AKHIR**: **${rec}**
-- **Tingkat Keyakinan**: **${keyakinan}** (Estimasi Model Berbasis Kuantitatif Lokal)
-- **Target Entri Ideal**: $${(Number(price) * 0.985).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 4})}
-- **Batas Stop-Loss Rekomendasi**: $${(Number(price) * 0.94).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 4})} (Drawdown 6%)
-- **Target Ambil Untung (Take-Profit)**: $${(Number(price) * 1.15).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 4})} (Potensi Kenaikan 15%)`;
+  if (has(metrics?.activeAddresses)) {
+    lines.push(`- Alamat aktif harian: ${Number(metrics.activeAddresses).toLocaleString()}`);
+  } else {
+    missing.push("alamat aktif");
+  }
+
+  if (has(metrics?.networkHashrate)) {
+    lines.push(`- Hashrate/skor aktivitas jaringan: ${metrics.networkHashrate}`);
+  } else {
+    missing.push("hashrate");
+  }
+
+  const availableBlock = lines.length > 0
+    ? lines.join("\n")
+    : "- (tidak ada metrik yang tersedia)";
+
+  return `### 📊 [MODE FALLBACK — ANALISIS AI TIDAK TERSEDIA]
+
+**Analisis AI tidak tersedia saat ini** (kunci AI belum dikonfigurasi atau panggilan AI gagal). Berikut hanya metrik mentah yang berhasil dikumpulkan sistem — bukan hasil analisis:
+
+${availableBlock}
+${missing.length > 0 ? `\nMetrik tidak tersedia: ${missing.join(", ")}.` : ""}
+
+Tidak ada rekomendasi trading, tingkat keyakinan, atau level entry/stop/target yang dapat diberikan tanpa analisis AI. Angka-angka di atas bukan hasil evaluasi dan tidak boleh dijadikan dasar keputusan investasi.`;
 }
 
 // Gemini-analyzed financial evaluation for onchain data
@@ -2436,6 +2443,9 @@ export interface SignalHistoryEntry {
   category: "crypto" | "stock";
   recommendation: "STRONG BUY" | "BUY" | "HOLD" | "SELL" | "STRONG SELL";
   confidence: number;
+  // DATA-3: provenance label — "heuristic" (momentum rule on real 24h
+  // change), "ai" (Gemini analysis), or "manual" (user-entered).
+  source: "heuristic" | "ai" | "manual";
   entryPrice: number;
   currentPrice: number;
   tpPrice: number;
@@ -2445,10 +2455,25 @@ export interface SignalHistoryEntry {
   timeframe: "intraday" | "daily" | "weekly";
 }
 
-// Healthy starting seeds to guarantee the 'Rekap Sinyal AI' chart and metrics have beautiful data immediately
+// In-memory signal history (no persistence — values are honest and ephemeral)
 let signalHistory: SignalHistoryEntry[] = [];
 
-// Real-time bootstrap function directly deriving values from live assets price actions
+// DATA-3: honest heuristic confidence. Documented formula:
+//   confidence = clamp(round(50 + |change24h| * 5), 50, 90)
+// Rationale: a bootstrap "signal" is only a momentum heuristic on the REAL
+// 24h change, so bigger |change| = stronger momentum = higher (never high)
+// confidence; small moves are low-confidence HOLDs. No Math.random.
+function heuristicConfidence(change24h: number): number {
+  return Math.min(90, Math.max(50, Math.round(50 + Math.abs(change24h) * 5)));
+}
+
+// Real-time bootstrap function directly deriving values from live assets price actions.
+// Documented momentum heuristic (DATA-3):
+//   change > 3.5  → STRONG BUY;  change > 0.8  → BUY
+//   change < -3.5 → STRONG SELL; change < -0.8 → SELL
+//   otherwise     → HOLD
+// Every bootstrap signal is labeled source:"heuristic" so the UI can show
+// that it is a rule-based signal, not an AI one.
 function bootstrapRealTimeSignals() {
   signalHistory = []; // Reset completely! No hardcoded static values.
   
@@ -2457,28 +2482,24 @@ function bootstrapRealTimeSignals() {
   liveAssets.forEach((asset) => {
     const change = asset.change24h || 0;
     let rec: "STRONG BUY" | "BUY" | "HOLD" | "SELL" | "STRONG SELL" = "HOLD";
-    let conf = Math.floor(65 + Math.random() * 15); // 65-80 default confidence
 
     if (change > 3.5) {
       rec = "STRONG BUY";
-      conf = Math.min(98, Math.floor(82 + change));
     } else if (change > 0.8) {
       rec = "BUY";
-      conf = Math.min(85, Math.floor(70 + change * 2));
     } else if (change < -3.5) {
       rec = "STRONG SELL";
-      conf = Math.min(98, Math.floor(82 + Math.abs(change)));
     } else if (change < -0.8) {
       rec = "SELL";
-      conf = Math.min(85, Math.floor(70 + Math.abs(change) * 2));
     }
 
     recordGeneratedSignal(
       asset.symbol,
       asset.category,
       rec,
-      conf,
-      asset.price
+      heuristicConfidence(change),
+      asset.price,
+      "heuristic"
     );
   });
 }
@@ -2492,23 +2513,29 @@ function recordGeneratedSignal(
   category: "crypto" | "stock",
   recommendation: "STRONG BUY" | "BUY" | "HOLD" | "SELL" | "STRONG SELL",
   confidence: number,
-  price: number
+  price: number,
+  source: "heuristic" | "ai" = "ai"
 ) {
-  const timeframes: ("intraday" | "daily" | "weekly")[] = ["intraday", "daily", "weekly"];
-  const timeframe = timeframes[Math.floor(Math.random() * timeframes.length)];
-  
-  // Dynamic target pricing mathematically structured
+  // DATA-3: timeframe is a documented deterministic default ("daily") for
+  // system-generated signals — the old random timeframe pick was fabrication.
+  const timeframe: "intraday" | "daily" | "weekly" = "daily";
+
+  // DATA-3: documented fixed TP/SL model for system-generated signals (the
+  // old Math.random ±5-9% / -3-5% jitter fabricated the levels):
+  //   BUY:  TP = +5%, SL = -3%   (risk:reward ≈ 1 : 1.67)
+  //   SELL: TP = -5%, SL = +3%
+  //   HOLD: TP = +4%, SL = -3%   (monitoring band)
   let tpPrice = price;
   let slPrice = price;
   const isBuy = recommendation.includes("BUY");
   const isSell = recommendation.includes("SELL");
 
   if (isBuy) {
-    tpPrice = price * (1 + 0.05 + Math.random() * 0.04); // +5% to +9%
-    slPrice = price * (1 - 0.03 - Math.random() * 0.02); // -3% to -5%
+    tpPrice = price * 1.05;
+    slPrice = price * 0.97;
   } else if (isSell) {
-    tpPrice = price * (1 - 0.05 - Math.random() * 0.04); // -5% to -9% Short Target
-    slPrice = price * (1 + 0.03 + Math.random() * 0.02); // +3% to +5% Stop Loss
+    tpPrice = price * 0.95;
+    slPrice = price * 1.03;
   } else {
     // HOLD
     tpPrice = price * 1.04;
@@ -2539,6 +2566,7 @@ function recordGeneratedSignal(
     category,
     recommendation,
     confidence,
+    source,
     entryPrice: price,
     currentPrice: price,
     tpPrice,
@@ -2592,7 +2620,9 @@ function updatePendingSignals() {
 }
 
 // Query signals list & recap stats endpoint
-app.get("/api/trading-signals/history", (req, res) => {
+// SEC-3: requireAuth — signal history is per-user-adjacent analytics and was
+// previously readable (and writable via generate-manual) by anonymous clients.
+app.get("/api/trading-signals/history", requireAuth, (req, res) => {
   const { symbol, timeframe } = req.query;
   
   let filtered = [...signalHistory];
@@ -2610,9 +2640,12 @@ app.get("/api/trading-signals/history", (req, res) => {
   const totalSl = signalHistory.filter(s => s.status === "STOP LOSS (SL)").length;
   const totalPending = signalHistory.filter(s => s.status === "PENDING").length;
 
+  // DATA-3/FUNC-18: winRate is null when no signal has COMPLETED yet — the
+  // old defaults (75% / 80% / 75% / 70%) were fabricated. The frontend shows
+  // "N/A" for null.
   const winRate = completed.length > 0 
     ? parseFloat(((totalTp / completed.length) * 100).toFixed(1)) 
-    : 75.0;
+    : null;
 
   // Granular Timeframe compilations (intraday, daily, weekly)
   const getTfRecapObj = (tf: "intraday" | "daily" | "weekly") => {
@@ -2620,7 +2653,7 @@ app.get("/api/trading-signals/history", (req, res) => {
     const comp = list.filter(s => s.status !== "PENDING");
     const tp = list.filter(s => s.status === "TARGET HIT (TP)").length;
     const sl = list.filter(s => s.status === "STOP LOSS (SL)").length;
-    const wr = comp.length > 0 ? parseFloat(((tp / comp.length) * 100).toFixed(1)) : (tf === "intraday" ? 80.0 : tf === "daily" ? 75.0 : 70.0);
+    const wr = comp.length > 0 ? parseFloat(((tp / comp.length) * 100).toFixed(1)) : null;
 
     return {
       total: list.length,
@@ -2661,25 +2694,65 @@ interface SavedNotificationConfig {
   whatsappPhoneNumber: string;
 }
 
-let activeNotificationConfig: SavedNotificationConfig = {
-  telegramEnabled: false,
-  telegramBotToken: "",
-  telegramChatId: "",
-  discordEnabled: false,
-  discordWebhookUrl: "",
-  whatsappEnabled: false,
-  whatsappWebhookUrl: "",
-  whatsappPhoneNumber: ""
-};
+// SEC-8: notification configs are now keyed PER-USER (userId -> config) so
+// one authenticated user can no longer read/overwrite another user's bot
+// tokens via a shared global config. Legacy flat config files are loaded
+// under the "legacy" key so existing setups keep working.
+const notificationConfigs = new Map<string, SavedNotificationConfig>();
+
+// SEC-8: secret redaction helper for logs — masks the middle of a secret,
+// e.g. "123456:AAF-f9xyz..." -> "1234****yz...".
+function redactSecret(value: string): string {
+  const v = (value || "").trim();
+  if (!v) return "(none)";
+  if (v.length <= 8) return "****";
+  return `${v.substring(0, 4)}****${v.substring(v.length - 4)}`;
+}
 
 const CONFIG_FILE_PATH = path.join(process.cwd(), "notifications-config.json");
+
+// SEC-8: persist the per-user config map to disk (mode 0o600 — the file
+// contains bot tokens / webhook URLs).
+function persistNotificationConfigs(): void {
+  try {
+    const payload: any = { users: {} };
+    notificationConfigs.forEach((cfg, userId) => {
+      payload.users[userId] = cfg;
+    });
+    fs.writeFileSync(CONFIG_FILE_PATH, JSON.stringify(payload, null, 2), { encoding: "utf-8", mode: 0o600 });
+  } catch (e: any) {
+    console.log("[On-Chain Data Background] Failed to save config file:", e.message);
+  }
+}
 
 // Read initial config on boot if exists
 try {
   if (fs.existsSync(CONFIG_FILE_PATH)) {
     const fileData = fs.readFileSync(CONFIG_FILE_PATH, "utf-8");
-    activeNotificationConfig = JSON.parse(fileData);
-    console.log("[On-Chain Data Background] Loaded notifications config on boot:", activeNotificationConfig);
+    const parsed = JSON.parse(fileData);
+    if (parsed && typeof parsed === "object" && parsed.users && typeof parsed.users === "object") {
+      Object.entries(parsed.users).forEach(([userId, cfg]: [string, any]) => {
+        if (cfg && typeof cfg === "object") notificationConfigs.set(userId, cfg);
+      });
+    } else if (parsed && typeof parsed === "object") {
+      // Legacy flat format (pre-SEC-8 single global config) — kept working
+      // under the "legacy" key.
+      notificationConfigs.set("legacy", parsed);
+    }
+    // SEC-8: redacted boot log — the old log printed the whole config object
+    // (bot tokens + webhook URLs) in PLAINTEXT. Every secret is now masked.
+    console.log("[On-Chain Data Background] Loaded notifications config on boot for", notificationConfigs.size, "user(s):",
+      Array.from(notificationConfigs.entries()).map(([uid, cfg]) => ({
+        user: uid,
+        telegramEnabled: !!cfg.telegramEnabled,
+        telegramBotToken: redactSecret(cfg.telegramBotToken || ""),
+        telegramChatId: cfg.telegramChatId ? "[REDACTED]" : "(none)",
+        discordEnabled: !!cfg.discordEnabled,
+        discordWebhookUrl: cfg.discordWebhookUrl ? "[REDACTED]" : "(none)",
+        whatsappEnabled: !!cfg.whatsappEnabled,
+        whatsappWebhookUrl: cfg.whatsappWebhookUrl ? "[REDACTED]" : "(none)"
+      }))
+    );
   }
 } catch (e: any) {
   console.log("[On-Chain Data Background] Failed to load config on boot:", e.message);
@@ -2740,576 +2813,33 @@ async function fetchLatestOnChainData() {
   return fetchLiveOnChainDataModular();
 }
 
-async function fetchLatestWhaleDataOld() {
-  return { processedTxs: [] as any[], blockHeight: 0, blockHash: "", btcPrice: 0, ethPrice: 0, recommendedFees: {} as any };
-  // 1. Fetch real-time BTC & ETH price feeds from Binance with Spot fallback values
-  let btcPrice = 95230.00;
-  let ethPrice = 3380.00;
-  
-  try {
-    const btcRes = await fetch("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT");
-    if (btcRes.ok) {
-      const data = await btcRes.json() as any;
-      btcPrice = parseFloat(data.price) || 95230.00;
-    }
-  } catch (e: any) {
-    console.log("[Whale Tracker] Live BTC ticker price check fallback", e.message);
-  }
-
-  try {
-    const ethRes = await fetch("https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT");
-    if (ethRes.ok) {
-      const data = await ethRes.json() as any;
-      ethPrice = parseFloat(data.price) || 3512.40;
-    }
-  } catch (e: any) {
-    console.log("[Whale Tracker] Live ETH ticker price check fallback", e.message);
-  }
-
-  // 2. Fetch real-time blocks tip height from the Bitcoin Network using blockstream.info APIs!
-  let blockHeight = 840000 + Math.floor((Date.now() / 1000 - 1713571200) / 600); // Intelligent mathematical default
-  let heightFetched = false;
-
-  try {
-    const heightRes = await fetch("https://blockstream.info/api/blocks/tip/height");
-    if (heightRes.ok) {
-      const textHeight = await heightRes.text();
-      const parsed = parseInt(textHeight.trim());
-      if (parsed && parsed > 840000) {
-        blockHeight = parsed;
-        heightFetched = true;
-      }
-    }
-  } catch (e: any) {
-    console.log("[Whale Tracker API] Blockstream height query failed, trying fallback mempool", e.message);
-    try {
-      const heightRes = await fetch("https://mempool.space/api/blocks/tip/height");
-      if (heightRes.ok) {
-        const textHeight = await heightRes.text();
-        const parsed = parseInt(textHeight.trim());
-        if (parsed && parsed > 840000) {
-          blockHeight = parsed;
-          heightFetched = true;
-        }
-      }
-    } catch (e2: any) {
-      console.log("[Whale Tracker API] Fallback mempool height query also failed", e2.message);
-    }
-  }
-
-  // 3. Fetch real-time blocks tip hash from blockstream.info APIs!
-  let blockHash = `0000000000000000000${(blockHeight).toString(16).padEnd(16, "a")}ae38ca5ce638bc2fa1cd3fae12e3919c`.substring(0, 64);
-  let hashFetched = false;
-
-  try {
-    const hashRes = await fetch("https://blockstream.info/api/blocks/tip/hash");
-    if (hashRes.ok) {
-      const textHash = (await hashRes.text()).trim();
-      if (textHash && textHash.length === 64) {
-        blockHash = textHash;
-        hashFetched = true;
-      }
-    }
-  } catch (e: any) {
-    console.log("[Whale Tracker API] Blockstream hash query failed, trying fallback mempool", e.message);
-    try {
-      const hashRes = await fetch("https://mempool.space/api/blocks/tip/hash");
-      if (hashRes.ok) {
-        const textHash = (await hashRes.text()).trim();
-        if (textHash && textHash.length === 64) {
-          blockHash = textHash;
-          hashFetched = true;
-        }
-      }
-    } catch (e2: any) {
-      console.log("[Whale Tracker API] Fallback mempool hash query also failed", e2.message);
-    }
-  }
-
-  // 4. Fetch real-time average transaction fees (sat/vB)
-  let recommendedFees = { fastestFee: 15, halfHourFee: 12, hourFee: 8, economyFee: 5, minimumFee: 2 };
-  try {
-    const feesRes2 = await fetch("https://mempool.space/api/v1/fees/recommended");
-    if (feesRes2.ok) {
-      recommendedFees = await feesRes2.json() as any;
-    }
-  } catch (e: any) {
-    console.log("[Whale Tracker] Live network fees fallback", e.message);
-  }
-
-  // 5. Fetch true recent CONFIRMED transactions from the latest block on Blockstream!
-  let recentMempoolTxs: any[] = [];
-  let blockTxsFetched = false;
-
-  if (hashFetched) {
-    try {
-      const blockTxsRes = await fetch(`https://blockstream.info/api/block/${blockHash}/txs`);
-      if (blockTxsRes.ok) {
-        const blockTxs = await blockTxsRes.json() as any[];
-        if (Array.isArray(blockTxs) && blockTxs.length > 0) {
-          recentMempoolTxs = blockTxs.map(tx => {
-            let valueSat = 0;
-            if (tx.vout && Array.isArray(tx.vout)) {
-              valueSat = tx.vout.reduce((sum: number, out: any) => sum + (out.value || 0), 0);
-            }
-            return {
-              txid: tx.txid,
-              fee: tx.fee || 10000,
-              vsize: tx.vsize || Math.floor(tx.weight / 4) || tx.size || 250,
-              value: valueSat
-            };
-          });
-          blockTxsFetched = true;
-          console.log(`[Whale Tracker Background] Successfully fetched ${recentMempoolTxs.length} real confirmed transactions from Blockstream block ${blockHeight}`);
-        }
-      }
-    } catch (e: any) {
-      console.log("[Whale Tracker] Failed to fetch confirmed block transactions, falling back to mempool recent", e.message);
-    }
-  }
-
-  // Fallback to recent unconfirmed mempool transactions from blockstream.info if block fetch failed
-  if (!blockTxsFetched) {
-    try {
-      const recentRes = await fetch("https://blockstream.info/api/mempool/recent");
-      if (recentRes.ok) {
-        recentMempoolTxs = await recentRes.json() as any[];
-      }
-    } catch (e: any) {
-      console.log("[Whale Tracker] Live blockstream mempool transactions fallback", e.message);
-    }
-  }
-
-  // Last-resort fallback to mempool.space
-  if (!recentMempoolTxs || recentMempoolTxs.length === 0) {
-    try {
-      const recentRes = await fetch("https://mempool.space/api/mempool/recent");
-      if (recentRes.ok) {
-        recentMempoolTxs = await recentRes.json() as any[];
-      }
-    } catch (e: any) {
-      console.log("[Whale Tracker] mempool.space fallback failed too", e.message);
-    }
-  }
-
-  // Curated list of genuine on-chain transaction hashes that exist on-chain
-  const REAL_BTC_HASHES = [
-    "fef226d7f0236a282bc7228a0ca2ee8de964f6916e7af2c59560f6074a8868c6",
-    "e402b938f0d01ca2ee8de964f6916e7af2c59560f6074a8868c6e7f2c96c4b2b",
-    "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
-    "2c490a0fc441c2ee8de964f6916e7af2c59560f6074a8868c6e7f2c96c4b2b2b",
-    "d485e92be9fe0ca2ee8de964f6916e7af2c59560f6074a8868c6e7f2c96c4b2b",
-    "0e3e23b325256e42b650a3ee9cd91f0e4dddc7dddc12a32c2a04874dd4fbfbd7",
-    "9f8e4384ddfa1a3ee9cd91f0e4dddc7dddc12a32c2a04874dd4fbfbd712a30b20",
-    "11a8f302cfbb20760cb1d9dfb10292723326ebc8c1e2df80e9dfb031bfbd7a1a0",
-    "58a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48",
-    "22184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16",
-    "44830874e4fe62fc80d62a04e2115b9345e16c5cf302fc80e9d5fbf5d48d7a10",
-    "a6b325256e42b650a3ee9cd91f0e4dddc7dddc12a32c2a04874dd4fbfbd7e600",
-    "881c2ee8de964f6916e7af2c59560f6074a8868c6e7f2c96c4b2b2b217112044",
-    "00aa5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda3",
-    "999226d7f0236a282bc7228a0ca2ee8de964f6916e7af2c59560f6074a8868c6",
-    "7772b938f0d01ca2ee8de964f6916e7af2c59560f6074a8868c6e7f2c96c4b2b",
-    "1115e92be9fe0ca2ee8de964f6916e7af2c59560f6074a8868c6e7f2c96c4b2b",
-    "333e23b325256e42b650a3ee9cd91f0e4dddc7dddc12a32c2a04874dd4fbfbd",
-    "555e4384ddfa1a3ee9cd91f0e4dddc7dddc12a32c2a04874dd4fbfbd712a30b2",
-    "7778f302cfbb20760cb1d9dfb10292723326ebc8c1e2df80e9dfb031bfbd7a1a"
-  ];
-
-  const REAL_ETH_HASHES = [
-    "0xc83bc2fa1cd3fae12e3919c315053228a0ca2ee8de964f6916e7af2c59560f6",
-    "0x7a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b2c490a0fc441c",
-    "0x9e64f6916e7af2c59560f6074a8868c6e7f2c96c4b2b2b217112044fe38ca5c",
-    "0x1cd3fae12e3919c315053228a0ca2ee8de964f6916e7af2c59560f6074a886",
-    "0x8ae38ca5ce638bc2fa1cd3fae12e3919c315053228a0ca2ee8de964f6916e7",
-    "0x2fa1cd3fae12e3919c315053228a0ca2ee8de964f6916e7af2c59560f6074",
-    "0x6074a8868c6e7f2c96c4b2b2b217112044fe38ca5ce638bc2fa1cd3fae12e3",
-    "0xe12e3919c315053228a0ca2ee8de964f6916e7af2c59560f6074a8868c6e7f",
-    "0x8140bb6bf0236a282bc7228a0ca2ee8de964f6916e7af2c59560f6074a886c",
-    "0x5bf5d48d7a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9",
-    "0x0fc441c2ee8de964f6916e7af2c59560f6074a8868c6e7f2c96c4b2b2b2171",
-    "0x964f6916e7af2c59560f6074a8868c6e7f2c96c4b2b2b217112044fe38ca5c",
-    "0x712a30b2011a8f302cfbb20760cb1d9dfb10292723326ebc8c1e2df80e9dfb",
-    "0x44830874e4fe62fc80d62a04e2115b9345e16c5cf302fc80e9d5fbf5d48d7a",
-    "0x58a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5",
-    "0xe60a3ee9cd91f0e4dddc7dddc12a32c2a04874dd4fbfbd7e6005256e42b650",
-    "0xb650a3ee9cd91f0e4dddc7dddc12a32c2a04874dd4fbfbd7e6005256e42b65",
-    "0xdddc12a32c2a04874dd4fbfbd7e6005256e42b650a3ee9cd91f0e4dddc7ddd",
-    "0xfbfbd7e6005256e42b650a3ee9cd91f0e4dddc7dddc12a32c2a04874dd4fbf",
-    "0x111112a32c2a04874dd4fbfbd7e6005256e42b650a3ee9cd91f0e4dddc7dd"
-  ];
-
-  // If both APIs are returning thin list, we generate realistic high-value true onchain-mapped items using real BTC hashes
-  if (!recentMempoolTxs || recentMempoolTxs.length === 0) {
-    recentMempoolTxs = Array.from({ length: 15 }).map((_, i) => {
-      const mockValueSat = 10000000000 + Math.floor(Math.random() * 450000000000); // Massive BTC values
-      const mockFeeSat = 10000 + Math.floor(Math.random() * 50000);
-      const btcHash = REAL_BTC_HASHES[i % REAL_BTC_HASHES.length];
-      return {
-        txid: btcHash,
-        fee: mockFeeSat,
-        vsize: 140 + Math.floor(Math.random() * 200),
-        value: mockValueSat
-      };
-    });
-  }
-
-  // 5b. Fetch true recent Ethereum block transactions from Cloudflare public RPC
-  let recentEthTxs: any[] = [];
-  try {
-    const ethBlockRes = await fetch("https://cloudflare-eth.com", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        method: "eth_getBlockByNumber",
-        params: ["latest", true],
-        id: 1
-      })
-    });
-    if (ethBlockRes.ok) {
-      const ethData = await ethBlockRes.json() as any;
-      if (ethData && ethData.result && ethData.result.transactions) {
-        recentEthTxs = ethData.result.transactions;
-      }
-    }
-  } catch (e: any) {
-    console.log("[Whale Tracker] Cloudflare Ethereum RPC query failed", e.message);
-  }
-
-  // ROBUST FALLBACK FOR ETHEREUM-BASED ASSETS USING GENUINE HISTORICAL HASHES
-  if (!recentEthTxs || recentEthTxs.length < 10) {
-    console.log("[Whale Tracker] recentEthTxs is empty or thin, appending high-fidelity live Ethereum whale transactions fallback (ETH, USDT, USDC)...");
-    const simulatedEthTxs = Array.from({ length: 15 }).map((_, i) => {
-      const type = i % 3; // 0 = ETH, 1 = USDT, 2 = USDC
-      const realEthHash = REAL_ETH_HASHES[i % REAL_ETH_HASHES.length];
-      const fromAddr = "0x" + Array.from({ length: 40 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
-      let toAddr = "0x" + Array.from({ length: 40 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
-      
-      let valueHex = "0x0";
-      let input = "0x";
-
-      if (type === 1) {
-        // USDT
-        toAddr = "0xdac17f958d2ee523a2206206994597c13d831ec7";
-        const amountUsdt = 1000000 + Math.floor(Math.random() * 45000000); // $1M to $46M
-        const amountHex = (BigInt(amountUsdt) * 1000000n).toString(16).padStart(64, "0");
-        const paddedAddr = fromAddr.slice(2).padStart(64, "0");
-        input = `0xa9059cbb${paddedAddr}${amountHex}`;
-      } else if (type === 2) {
-        // USDC
-        toAddr = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
-        const amountUsdc = 1000000 + Math.floor(Math.random() * 35000000); // $1M to $36M
-        const amountHex = (BigInt(amountUsdc) * 1000000n).toString(16).padStart(64, "0");
-        const paddedAddr = fromAddr.slice(2).padStart(64, "0");
-        input = `0xa9059cbb${paddedAddr}${amountHex}`;
-      } else {
-        // ETH
-        const amountEth = 1000 + Math.floor(Math.random() * 8500); // 1000 to 9500 ETH (approx $3M - $30M USD)
-        valueHex = "0x" + (BigInt(amountEth) * 1000000000000000000n).toString(16);
-      }
-
-      return {
-        hash: realEthHash,
-        from: fromAddr,
-        to: toAddr,
-        value: valueHex,
-        input: input,
-        gas: "0x15f90",
-        gasPrice: "0x4a817c800"
-      };
-    });
-    recentEthTxs = [...(recentEthTxs || []), ...simulatedEthTxs];
-  }
-
-  const exchanges = ["Binance", "Coinbase", "Kraken", "OKX", "Bybit", "Bitfinex", "Upbit", "Gemini", "Gate.io"];
-  const allRawTxs: any[] = [];
-
-  // Map BTC transactions
-  recentMempoolTxs.forEach((tx: any, idx: number) => {
-    let txHash = tx.txid || "";
-    if (!txHash || txHash.length < 10) {
-      txHash = REAL_BTC_HASHES[idx % REAL_BTC_HASHES.length];
-    }
-    
-    const valueSat = tx.value || 0;
-    let amount = valueSat / 100000000;
-    let usdAmount = amount * btcPrice;
-    
-    // SCALE ALL TRANSACTIONS UP TO AT LEAST $1,000,000 USD TO ENSURE COMPLIANCE
-    if (usdAmount < 1000000) {
-      usdAmount = 1000000 + Math.random() * 45000000; // $1.0M to $46M USD
-      amount = usdAmount / btcPrice;
-    }
-    
-    allRawTxs.push({
-      txHash,
-      coin: "BTC",
-      blockchain: "Bitcoin",
-      amount,
-      usdAmount,
-      fromAddr: "Unknown Wallet",
-      toAddr: "Unknown Wallet",
-      vsize: tx.vsize || 250,
-      feeUsd: ((tx.fee || 12000) / 100000000) * btcPrice,
-      timestamp: new Date(Date.now() - idx * 30000 - Math.random() * 15000).toISOString()
-    });
-  });
-
-  // Map ETH/USDT/USDC transactions
-  recentEthTxs.forEach((tx: any, idx: number) => {
-    let txHash = tx.hash || "";
-    if (!txHash || txHash.length < 10) {
-      txHash = REAL_ETH_HASHES[idx % REAL_ETH_HASHES.length];
-    }
-    const fromAddr = tx.from || "Unknown Wallet";
-    const toAddr = tx.to || "Unknown Wallet";
-    const toLower = toAddr.toLowerCase();
-    
-    let coin: "BTC" | "ETH" | "USDT" | "USDC" = "ETH";
-    let amount = 0;
-    let usdAmount = 0;
-    
-    if (toLower === "0xdac17f958d2ee523a2206206994597c13d831ec7") {
-      coin = "USDT";
-      try {
-        const input = tx.input || "";
-        if (input.startsWith("0xa9059cbb") && input.length >= 138) {
-          const valHex = input.substring(74, 138);
-          const valBig = BigInt("0x" + valHex);
-          amount = Number(valBig) / 1e6; // USDT has 6 decimals
-        } else {
-          amount = 1000000 + Math.floor(Math.random() * 35000000);
-        }
-      } catch {
-        amount = 1200000;
-      }
-      usdAmount = amount;
-    } else if (toLower === "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48") {
-      coin = "USDC";
-      try {
-        const input = tx.input || "";
-        if (input.startsWith("0xa9059cbb") && input.length >= 138) {
-          const valHex = input.substring(74, 138);
-          const valBig = BigInt("0x" + valHex);
-          amount = Number(valBig) / 1e6; // USDC has 6 decimals
-        } else {
-          amount = 1000000 + Math.floor(Math.random() * 30000000);
-        }
-      } catch {
-        amount = 1050000;
-      }
-      usdAmount = amount;
-    } else {
-      coin = "ETH";
-      const wei = BigInt(tx.value || "0x0");
-      amount = Number(wei) / 1e18;
-      usdAmount = amount * ethPrice;
-    }
-
-    // SCALE ALL ETH/TOKEN TRANSACTIONS UP TO AT LEAST $1,000,000 USD TO ENSURE COMPLIANCE
-    if (usdAmount < 1000000) {
-      usdAmount = 1000000 + Math.random() * 38000000; // $1.0M to $39M USD
-      if (coin === "ETH") {
-        amount = usdAmount / ethPrice;
-      } else {
-        amount = usdAmount; // USDT / USDC pegged
-      }
-    }
-
-    const gasLimit = parseInt(tx.gas || "0x5208", 16) || 21000;
-    const gasPriceWei = BigInt(tx.gasPrice || "0x3b9aca00");
-    const feeUsd = (Number(gasLimit * Number(gasPriceWei)) / 1e18) * ethPrice;
-
-    allRawTxs.push({
-      txHash,
-      coin,
-      blockchain: "Ethereum",
-      amount,
-      usdAmount,
-      fromAddr,
-      toAddr,
-      vsize: Math.floor(gasLimit / 4),
-      feeUsd,
-      timestamp: new Date(Date.now() - idx * 20000 - Math.random() * 10000).toISOString()
-    });
-  });
-
-  // 6. Map the real-time elements into a high-fidelity multi-coin, multi-direction Tracker modeled after Whale Alerts
-  const processedTxs = allRawTxs.map((item: any, idx: number) => {
-    const txHash = item.txHash;
-    const coin = item.coin;
-    const blockchain = item.blockchain;
-    const amount = item.amount;
-    const usdAmount = item.usdAmount;
-    
-    // Determine Source, Destination, and Direction transfer pathways
-    const secondChar = txHash.startsWith("0x") ? txHash.charAt(2) : txHash.charAt(0);
-    const thirdChar = txHash.startsWith("0x") ? txHash.charAt(3) : txHash.charAt(1);
-    
-    let sourceName = "Unknown Wallet";
-    let destName = "Unknown Wallet";
-    
-    const sourceIdx = parseInt(secondChar || "0", 16);
-    const destIdx = parseInt(thirdChar || "0", 16);
-
-    // 40% chance of source being an Exchange, 60% Unknown Wallet
-    if (sourceIdx >= 10 && sourceIdx < 16) {
-      sourceName = exchanges[(sourceIdx - 10) % exchanges.length];
-    }
-    
-    // 40% chance of destination being an Exchange, 60% Unknown Wallet
-    if (destIdx >= 10 && destIdx < 16) {
-      destName = exchanges[(destIdx - 10) % exchanges.length];
-    }
-
-    // If the address matches actual exchange wallets (simulated via known RPC fields if applicable)
-    if (item.fromAddr && item.fromAddr !== "Unknown Wallet") {
-      const addrHash = item.fromAddr.substring(2, 6).toLowerCase();
-      const exchangeVal = parseInt(addrHash, 16) % (exchanges.length * 2);
-      if (exchangeVal < exchanges.length) {
-        sourceName = exchanges[exchangeVal];
-      }
-    }
-    if (item.toAddr && item.toAddr !== "Unknown Wallet") {
-      const addrHash = item.toAddr.substring(2, 6).toLowerCase();
-      const exchangeVal = parseInt(addrHash, 16) % (exchanges.length * 2);
-      if (exchangeVal < exchanges.length) {
-        destName = exchanges[exchangeVal];
-      }
-    }
-
-    // Keep it clean: Source and Dest shouldn't be identical
-    if (sourceName !== "Unknown Wallet" && sourceName === destName) {
-      destName = "Unknown Wallet";
-    }
-
-    // Determine Direction label
-    let direction: "Unknown to Exchange" | "Exchange to Unknown" | "Exchange to Exchange" | "Unknown to Unknown" = "Unknown to Unknown";
-    if (sourceName === "Unknown Wallet" && destName !== "Unknown Wallet") {
-      direction = "Unknown to Exchange"; // Inflow (Bearish pressure)
-    } else if (sourceName !== "Unknown Wallet" && destName === "Unknown Wallet") {
-      direction = "Exchange to Unknown"; // Outflow (Bullish holding)
-    } else if (sourceName !== "Unknown Wallet" && destName !== "Unknown Wallet") {
-      direction = "Exchange to Exchange"; // Arbitrage / Rebalancing
-    }
-
-    // Addresses formatting
-    let senderAddr = item.fromAddr || "Unknown Wallet";
-    let receiverAddr = item.toAddr || "Unknown Wallet";
-
-    if (senderAddr === "Unknown Wallet") {
-      const addrStart = coin === "BTC" ? "bc1q" : "0x";
-      senderAddr = `${addrStart}${txHash.substring(3, 9).toLowerCase()}...${txHash.substring(58, 62).toLowerCase()}`;
-    } else if (senderAddr.length > 15) {
-      senderAddr = `${senderAddr.substring(0, 6)}...${senderAddr.substring(senderAddr.length - 4)}`;
-    }
-
-    if (receiverAddr === "Unknown Wallet") {
-      const addrStart = coin === "BTC" ? "bc1q" : "0x";
-      receiverAddr = `${addrStart}${txHash.substring(9, 15).toLowerCase()}...${txHash.substring(54, 58).toLowerCase()}`;
-    } else if (receiverAddr.length > 15) {
-      receiverAddr = `${receiverAddr.substring(0, 6)}...${receiverAddr.substring(receiverAddr.length - 4)}`;
-    }
-
-    // Assign Alert levels and Siren alerts based on actual USD size
-    let alertLevel: "CRITICAL" | "HIGH" | "WARNING" | "MEDIUM" | "LOW" = "LOW";
-    let sirensCount = 1;
-    let sirensStr = "🚨";
-    let classification = "TRANSFER OTC";
-
-    if (usdAmount >= 10000000) {
-      alertLevel = "CRITICAL";
-      sirensCount = 7;
-      sirensStr = "🚨🚨🚨🚨🚨🚨🚨";
-      classification = `🐋 ULTRA POSEIDON ${coin} SHIFT`;
-    } else if (usdAmount >= 5000000) {
-      alertLevel = "HIGH";
-      sirensCount = 5;
-      sirensStr = "🚨🚨🚨🚨🚨";
-      classification = `🐋 MEGA KRAKEN ${coin} SHIFT`;
-    } else if (usdAmount >= 1000000) {
-      alertLevel = "WARNING";
-      sirensCount = 3;
-      sirensStr = "🚨🚨🚨";
-      classification = `🐋 POWER WHALE ${coin} MOVEMENT`;
-    } else if (usdAmount >= 250000) {
-      alertLevel = "MEDIUM";
-      sirensCount = 2;
-      sirensStr = "🚨🚨";
-      classification = `🐋 STANDARD WHALE ${coin} FLOW`;
-    } else {
-      alertLevel = "LOW";
-      sirensCount = 1;
-      sirensStr = "🚨";
-      classification = `INSTITUTIONAL ${coin} ACCUMULATION`;
-    }
-
-    // Generate deterministic balance estimates
-    const balanceSeed = parseInt(txHash.substring(15, 20), 16) || 12345;
-    const senderBalance = (sourceName !== "Unknown Wallet") ? 0 : (balanceSeed % 3 === 0) ? 0 : parseFloat((amount * (1.1 + (balanceSeed % 10) / 10)).toFixed(4));
-    const receiverBalance = parseFloat((amount + (balanceSeed % 5 === 0 ? 0 : (balanceSeed % 250) / 10)).toFixed(4));
-
-    // Choose a blockchain explorer URL based on crypto / chain (ALWAYS use Blockstream for BTC!)
-    let explorerUrl = `https://blockstream.info/tx/${txHash}`;
-    if (blockchain === "Ethereum") {
-      explorerUrl = `https://etherscan.io/tx/${txHash}`;
-    }
-
-    return {
-      txhash: txHash,
-      timestamp: item.timestamp,
-      coin,
-      blockchain,
-      amount: parseFloat(amount.toFixed(coin === "BTC" || coin === "ETH" ? 6 : 2)),
-      usdAmount: parseFloat(usdAmount.toFixed(2)),
-      feeUsd: parseFloat(item.feeUsd.toFixed(2)),
-      classification,
-      alertLevel,
-      sirensCount,
-      sirensStr,
-      direction,
-      sourceName,
-      destName,
-      sender: senderAddr,
-      receiver: receiverAddr,
-      senderBalance,
-      receiverBalance,
-      explorerUrl,
-      sizeBytes: item.vsize || 225
-    };
-  });
-
-  // Sort transactions chronologically and filter to strictly show transactions meeting our criteria
-  const filteredProcessedTxs = processedTxs
-    .filter((tx: any) => isValidOnChainTransaction(tx))
-    .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-
-  return {
-    processedTxs: filteredProcessedTxs,
-    blockHeight,
-    blockHash,
-    btcPrice,
-    ethPrice,
-    recommendedFees
-  };
-}
-
 // Background Alerting Engine State
 const notifiedTxHashes = new Set<string>();
 let isFirstAlertScan = true;
 
 async function runBackgroundOnChainAlerts() {
-  if (!activeNotificationConfig.telegramEnabled) {
+  // SEC-8: run the scan + alert cycle for EVERY configured user (per-user
+  // configs) instead of one shared global config.
+  for (const [userId, cfg] of Array.from(notificationConfigs.entries())) {
+    try {
+      await runBackgroundOnChainAlertsForUser(userId, cfg);
+    } catch (userErr: any) {
+      console.error(`[Background On-Chain Alert] (${userId}) scan failed:`, userErr.message);
+    }
+  }
+}
+
+async function runBackgroundOnChainAlertsForUser(userId: string, userConfig: SavedNotificationConfig) {
+  if (!userConfig.telegramEnabled) {
     return;
   }
-  const token = activeNotificationConfig.telegramBotToken.trim();
-  const chatId = activeNotificationConfig.telegramChatId.trim();
+  const token = userConfig.telegramBotToken.trim();
+  const chatId = userConfig.telegramChatId.trim();
   if (!token || !chatId) {
     return;
   }
 
-  console.log(`[Background On-Chain Alert] Scanning for highly specific large on-chain transactions for Telegram bot: ${token.substring(0, 8)}...`);
+  console.log(`[Background On-Chain Alert] (${userId}) Scanning for highly specific large on-chain transactions for Telegram bot: ${redactSecret(token)}`);
   try {
     const { processedTxs } = await fetchLatestOnChainData();
 
@@ -3417,7 +2947,11 @@ app.post("/api/settings/notifications", requireAuth, (req, res) => {
       whatsappWebhookUrl,
       whatsappPhoneNumber
     } = req.body;
-    activeNotificationConfig = {
+    // SEC-8: the config is stored PER AUTHENTICATED USER — the old global
+    // `activeNotificationConfig` let any authenticated user overwrite (and
+    // effectively read) every other user's bot tokens / webhooks.
+    const userId = String(req.user?.sub || req.user?.email || "unknown");
+    const newConfig: SavedNotificationConfig = {
       telegramEnabled: !!telegramEnabled,
       telegramBotToken: telegramBotToken || "",
       telegramChatId: telegramChatId || "",
@@ -3427,33 +2961,25 @@ app.post("/api/settings/notifications", requireAuth, (req, res) => {
       whatsappWebhookUrl: whatsappWebhookUrl || "",
       whatsappPhoneNumber: whatsappPhoneNumber || ""
     };
-    try {
-      // FIX-A-3: mode 0o600 → only the file owner can read/write the config
-      // (which contains Telegram bot token + Discord/WhatsApp webhook URLs).
-      fs.writeFileSync(CONFIG_FILE_PATH, JSON.stringify(activeNotificationConfig, null, 2), { encoding: "utf-8", mode: 0o600 });
-      // FIX-A-3: do NOT log the config object — it contains bot tokens /
-      // webhook URLs. Log only the boolean flags + a redacted presence flag.
-      console.log("[On-Chain Data Background] Settings successfully written to disk for user:",
-        req.user?.email || req.user?.sub || "(unknown)",
-        "| telegram:", activeNotificationConfig.telegramEnabled,
-        "| discord:", activeNotificationConfig.discordEnabled,
-        "| whatsapp:", activeNotificationConfig.whatsappEnabled,
-        "| botToken:", activeNotificationConfig.telegramBotToken ? "[REDACTED]" : "(none)");
-    } catch (e: any) {
-      console.log("[On-Chain Data Background] Failed to save config file:", e.message);
-    }
+    notificationConfigs.set(userId, newConfig);
+    persistNotificationConfigs();
+    // FIX-A-3 + SEC-8: do NOT log secrets — log only flags + redacted presence.
+    console.log("[On-Chain Data Background] Settings saved for user:", userId,
+      "| telegram:", newConfig.telegramEnabled,
+      "| discord:", newConfig.discordEnabled,
+      "| whatsapp:", newConfig.whatsappEnabled,
+      "| botToken:", newConfig.telegramBotToken ? "[REDACTED]" : "(none)");
     // FIX-A-3: redact secrets in the response — never echo bot token / webhook
-    // URLs / phone back to the client (the client already has them; echoing
-    // them invites token theft via intercepted responses / browser devtools).
+    // URLs / phone back to the client.
     const redactedConfig = {
-      telegramEnabled: activeNotificationConfig.telegramEnabled,
-      telegramBotToken: activeNotificationConfig.telegramBotToken ? "[REDACTED]" : "",
-      telegramChatId: activeNotificationConfig.telegramChatId,
-      discordEnabled: activeNotificationConfig.discordEnabled,
-      discordWebhookUrl: activeNotificationConfig.discordWebhookUrl ? "[REDACTED]" : "",
-      whatsappEnabled: activeNotificationConfig.whatsappEnabled,
-      whatsappWebhookUrl: activeNotificationConfig.whatsappWebhookUrl ? "[REDACTED]" : "",
-      whatsappPhoneNumber: activeNotificationConfig.whatsappPhoneNumber ? "[REDACTED]" : ""
+      telegramEnabled: newConfig.telegramEnabled,
+      telegramBotToken: newConfig.telegramBotToken ? "[REDACTED]" : "",
+      telegramChatId: newConfig.telegramChatId,
+      discordEnabled: newConfig.discordEnabled,
+      discordWebhookUrl: newConfig.discordWebhookUrl ? "[REDACTED]" : "",
+      whatsappEnabled: newConfig.whatsappEnabled,
+      whatsappWebhookUrl: newConfig.whatsappWebhookUrl ? "[REDACTED]" : "",
+      whatsappPhoneNumber: newConfig.whatsappPhoneNumber ? "[REDACTED]" : ""
     };
     return res.json({ success: true, config: redactedConfig });
   } catch (error: any) {
@@ -3474,38 +3000,11 @@ interface LiveLiquidationEvent {
 
 let liveLiquidationsList: LiveLiquidationEvent[] = [];
 
-function seedLiquidations() {
-  const symbols = ["BTC", "ETH", "SOL", "BNB", "XRP"];
-  const sides = ["BUY", "SELL"];
-  const nowMs = Date.now();
-  for (let i = 0; i < 20; i++) {
-    const sym = symbols[Math.floor(Math.random() * symbols.length)];
-    const side = sides[Math.floor(Math.random() * sides.length)];
-    const price = sym === "BTC" ? 95000 + Math.random() * 2000
-                : sym === "ETH" ? 3300 + Math.random() * 100
-                : sym === "SOL" ? 160 + Math.random() * 10
-                : sym === "BNB" ? 600 + Math.random() * 20
-                : 2.40 + Math.random() * 0.20;
-    const quantity = sym === "BTC" ? 0.05 + Math.random() * 0.5
-                   : sym === "ETH" ? 1 + Math.random() * 5
-                   : sym === "SOL" ? 20 + Math.random() * 100
-                   : sym === "BNB" ? 10 + Math.random() * 50
-                   : 1000 + Math.random() * 5000;
-    const usdAmount = price * quantity;
-    liveLiquidationsList.push({
-      id: `liq_seed_${nowMs - i * 45000}_${Math.random().toString(36).substring(2, 6)}`,
-      symbol: sym,
-      side: side as "BUY" | "SELL",
-      price: parseFloat(price.toFixed(4)),
-      quantity: parseFloat(quantity.toFixed(4)),
-      usdAmount: parseFloat(usdAmount.toFixed(2)),
-      timestamp: new Date(nowMs - i * 45000).toISOString()
-    });
-  }
-}
-
-// Seed initial liquidations immediately so client is never empty
-seedLiquidations();
+// DATA-14: the `seedLiquidations()` function that injected 20 FAKE liquidation
+// events (Math.random prices/quantities for BTC/ETH/SOL/BNB/XRP) was deleted.
+// The feed now starts EMPTY and only fills with REAL Binance Futures
+// `!forceOrder@arr` WebSocket events. The frontend renders an honest empty
+// state until real events arrive.
 
 function initBinanceLiquidationWS() {
   console.log("[Binance WS] Initializing real-time Futures Liquidation Feed...");
@@ -3575,18 +3074,20 @@ initBinanceLiquidationWS();
 let derivativesCache: any = null;
 let derivativesCacheTime = 0;
 
+// DATA-15: derivatives metrics are null unless the Binance fapi fetch for
+// that metric ACTUALLY succeeded. The old hardcoded defaults (OI 1.45B,
+// funding 0.015, L/S 1.42, etc.) were fabricated values and are removed.
 async function fetchBinanceSymbolDerivatives(symbol: string) {
-  let openInterest = symbol === "BTCUSDT" ? 1450000000 : symbol === "ETHUSDT" ? 820000000 : 450000000;
-  let fundingRate = symbol === "BTCUSDT" ? 0.015 : symbol === "ETHUSDT" ? 0.012 : 0.024;
-  let longShortRatio = symbol === "BTCUSDT" ? 1.42 : symbol === "ETHUSDT" ? 1.25 : 1.68;
+  let openInterest: number | null = null;
+  let fundingRate: number | null = null;
+  let longShortRatio: number | null = null;
 
   try {
     const res = await fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${symbol}`);
     if (res.ok) {
       const data = await res.json() as any;
-      if (data && data.openInterest) {
-        openInterest = parseFloat(data.openInterest) || openInterest;
-      }
+      const oi = parseFloat(data?.openInterest);
+      if (isFinite(oi)) openInterest = oi;
     }
   } catch (e: any) {
     console.log(`[Binance Fetch] OI failed for ${symbol}:`, e.message);
@@ -3596,9 +3097,8 @@ async function fetchBinanceSymbolDerivatives(symbol: string) {
     const res = await fetch(`https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${symbol}`);
     if (res.ok) {
       const data = await res.json() as any;
-      if (data && data.lastFundingRate) {
-        fundingRate = parseFloat(data.lastFundingRate) * 100 || fundingRate;
-      }
+      const fr = parseFloat(data?.lastFundingRate);
+      if (isFinite(fr)) fundingRate = fr * 100;
     }
   } catch (e: any) {
     console.log(`[Binance Fetch] FR failed for ${symbol}:`, e.message);
@@ -3609,7 +3109,8 @@ async function fetchBinanceSymbolDerivatives(symbol: string) {
     if (res.ok) {
       const data = await res.json() as any;
       if (Array.isArray(data) && data.length > 0) {
-        longShortRatio = parseFloat(data[data.length - 1].longShortRatio) || longShortRatio;
+        const ls = parseFloat(data[data.length - 1].longShortRatio);
+        if (isFinite(ls)) longShortRatio = ls;
       }
     }
   } catch (e: any) {
@@ -3632,16 +3133,28 @@ async function getLiveBinanceDerivatives() {
       fetchBinanceSymbolDerivatives("SOLUSDT")
     ]);
 
-    derivativesCache = { btc, eth, sol };
+    // DATA-15: if every metric failed to fetch (all null), serve nulls with
+    // isStale:true instead of fabricated numbers.
+    const allNull = [btc, eth, sol].every((d: any) =>
+      d.openInterest == null && d.fundingRate == null && d.longShortRatio == null);
+    derivativesCache = allNull
+      ? { btc: null, eth: null, sol: null, isStale: true }
+      : { btc, eth, sol };
     derivativesCacheTime = now;
   } catch (err: any) {
     console.error("[Binance Fetch] Failed to fetch derivatives:", err.message);
     if (!derivativesCache) {
+      // DATA-15: no hardcoded fallback values — nulls + isStale flag so the
+      // frontend can render "tidak tersedia".
       derivativesCache = {
-        btc: { openInterest: 1450000000, fundingRate: 0.015, longShortRatio: 1.42 },
-        eth: { openInterest: 820000000, fundingRate: 0.012, longShortRatio: 1.25 },
-        sol: { openInterest: 450000000, fundingRate: 0.024, longShortRatio: 1.68 }
+        btc: null,
+        eth: null,
+        sol: null,
+        isStale: true
       };
+    } else {
+      // Serving expired (but real) cache while fapi is down — mark it stale.
+      derivativesCache = { ...derivativesCache, isStale: true };
     }
   }
   return derivativesCache;
@@ -3805,6 +3318,10 @@ app.get("/api/onchain/data", async (req, res) => {
     
     return res.json({
       success: true,
+      // DATA-16: propagate the upstream staleness flag (true when any
+      // on-chain source fell back) so the frontend can label stale data
+      // instead of silently presenting it as live.
+      isStale: data.isStale === true,
       blockHeight: data.blockHeight,
       blockHash: data.blockHash,
       recommendedFees: data.recommendedFees,
@@ -3849,22 +3366,43 @@ async function runAutomatedGeminiAnalysis() {
 
   try {
     const onchainData = await fetchLatestOnChainData();
-    const btcPrice = onchainData.btcPrice || 95230.00;
-    const btcChange = onchainData.btcPriceChangePercent || 1.42;
 
-    // Fetch real derivative data from Binance as researched in ONCHAIN_DATA_RESEARCH.md
-    let openInterest = 1450000000;
-    let fundingRate = 0.015;
-    let longShortRatio = 1.42;
-    let liquidation24h = 12500000;
+    // DATA-9: every metric below is included ONLY if it was actually fetched
+    // successfully in THIS run. The old fabricated defaults (btcPrice 95230,
+    // change 1.42, OI 1.45B, funding 0.015, L/S 1.42, inflow/outflow
+    // $120M/$180M, random activeAddresses 890k±20k, hashrate 615±7, and the
+    // invented $12.5M liquidation24h) were removed entirely.
+    const metrics: any = {};
+    const metricLines: string[] = [];
+    const missing: string[] = [];
+
+    const btcPrice = onchainData.btcPrice;
+    const btcChange = onchainData.btcPriceChangePercent;
+    const priceIsReal = onchainData.isStale !== true;
+    if (priceIsReal && typeof btcPrice === "number" && isFinite(btcPrice)) {
+      metrics.price = btcPrice;
+      if (typeof btcChange === "number" && isFinite(btcChange)) {
+        metrics.change24h = btcChange;
+        metricLines.push(`- Harga BTC: $${btcPrice.toLocaleString()} (${btcChange}% dalam 24 jam)`);
+      } else {
+        metricLines.push(`- Harga BTC: $${btcPrice.toLocaleString()}`);
+        missing.push("perubahan harga 24 jam");
+      }
+    } else {
+      missing.push("harga BTC (data upstream stale/tidak tersedia)");
+    }
+
+    // Fetch real derivative data from Binance fapi (null unless fetched OK).
+    let openInterest: number | null = null;
+    let fundingRate: number | null = null;
+    let longShortRatio: number | null = null;
 
     try {
       const oiRes = await fetch("https://fapi.binance.com/fapi/v1/openInterest?symbol=BTCUSDT");
       if (oiRes.ok) {
         const oiData = await oiRes.json() as any;
-        if (oiData && oiData.openInterest) {
-          openInterest = parseFloat(oiData.openInterest) || openInterest;
-        }
+        const oi = parseFloat(oiData?.openInterest);
+        if (isFinite(oi)) openInterest = oi;
       }
     } catch (e: any) {
       console.log("[Background AI Analysis] Open Interest fetch handled:", e.message);
@@ -3874,9 +3412,8 @@ async function runAutomatedGeminiAnalysis() {
       const premRes = await fetch("https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT");
       if (premRes.ok) {
         const premData = await premRes.json() as any;
-        if (premData && premData.lastFundingRate) {
-          fundingRate = parseFloat(premData.lastFundingRate) * 100 || fundingRate;
-        }
+        const fr = parseFloat(premData?.lastFundingRate);
+        if (isFinite(fr)) fundingRate = fr * 100;
       }
     } catch (e: any) {
       console.log("[Background AI Analysis] Funding Rate fetch handled:", e.message);
@@ -3887,17 +3424,38 @@ async function runAutomatedGeminiAnalysis() {
       if (lsRes.ok) {
         const lsData = await lsRes.json() as any;
         if (Array.isArray(lsData) && lsData.length > 0) {
-          longShortRatio = parseFloat(lsData[lsData.length - 1].longShortRatio) || longShortRatio;
+          const ls = parseFloat(lsData[lsData.length - 1].longShortRatio);
+          if (isFinite(ls)) longShortRatio = ls;
         }
       }
     } catch (e: any) {
       console.log("[Background AI Analysis] Long/Short ratio fetch handled:", e.message);
     }
 
-    // Process network metrics
-    let inflow24h = 120000000;
-    let outflow24h = 180000000;
-    if (onchainData.processedTxs && Array.isArray(onchainData.processedTxs)) {
+    if (openInterest != null) {
+      metrics.openInterest = openInterest;
+      metricLines.push(`- Open Interest (OI) Berjangka Binance: ${openInterest.toLocaleString()} BTC`);
+    } else {
+      missing.push("Open Interest");
+    }
+    if (fundingRate != null) {
+      metrics.fundingRate = fundingRate;
+      metricLines.push(`- Funding Rate Harian Binance: ${fundingRate.toFixed(4)}%`);
+    } else {
+      missing.push("Funding Rate");
+    }
+    if (longShortRatio != null) {
+      metrics.longShortRatio = longShortRatio;
+      metricLines.push(`- Rasio Long/Short Teratas: ${longShortRatio.toFixed(2)}`);
+    } else {
+      missing.push("Rasio Long/Short");
+    }
+
+    // Real exchange flows derived from the transactions actually processed in
+    // this run (no $120M/$180M invented defaults anymore).
+    let inflow24h: number | null = null;
+    let outflow24h: number | null = null;
+    if (onchainData.processedTxs && Array.isArray(onchainData.processedTxs) && onchainData.processedTxs.length > 0) {
       let btcInflow = 0;
       let btcOutflow = 0;
       onchainData.processedTxs.forEach((tx: any) => {
@@ -3909,37 +3467,42 @@ async function runAutomatedGeminiAnalysis() {
       if (btcInflow > 0) inflow24h = btcInflow;
       if (btcOutflow > 0) outflow24h = btcOutflow;
     }
-    const netflow = inflow24h - outflow24h;
-    const activeAddresses = 890000 + Math.floor((Math.random() - 0.5) * 40000);
-    const networkHashrate = 615 + Math.floor((Math.random() - 0.5) * 15);
+    if (inflow24h != null && outflow24h != null) {
+      const netflow = inflow24h - outflow24h;
+      metrics.inflow24h = inflow24h;
+      metrics.outflow24h = outflow24h;
+      metrics.netflow = netflow;
+      metricLines.push(`- Inflow Transaksi ke Bursa (24j): $${(inflow24h / 1e6).toFixed(2)}M`);
+      metricLines.push(`- Outflow Transaksi dari Bursa (24j): $${(outflow24h / 1e6).toFixed(2)}M`);
+      metricLines.push(`- Netflow Bersih Bursa: $${(netflow / 1e6).toFixed(2)}M (${netflow < 0 ? "Akumulasi / Outflow Bersih" : "Tekanan Jual / Inflow Bersih"})`);
+    } else {
+      missing.push("inflow/outflow bursa 24 jam");
+    }
+
+    // activeAddresses / networkHashrate / liquidation24h: NO real source is
+    // wired for these in this run — they are omitted entirely (previously
+    // randomized/invented).
 
     const prompt = `
-Lakukan analisis on-chain dan derivatif pasar otomatis komprehensif terhadap aset digital **BTC** (Bitcoin) menggunakan data metrik real-time terbaru berikut:
+Lakukan analisis on-chain dan derivatif pasar otomatis komprehensif terhadap aset digital **BTC** (Bitcoin) menggunakan data metrik terbaru berikut (HANYA metrik yang berhasil diambil pada run ini):
 
-DATA METRIK REAL-TIME:
-- Harga BTC: $${btcPrice.toLocaleString()} (${btcChange}% dalam 24 jam)
-- Open Interest (OI) Berjangka Binance: $${(openInterest / 1e6).toFixed(2)}M
-- Funding Rate Harian Binance: ${fundingRate.toFixed(4)}%
-- Rasio Long/Short Teratas: ${longShortRatio.toFixed(2)}
-- Inflow Transaksi ke Bursa (24j): $${(inflow24h / 1e6).toFixed(2)}M
-- Outflow Transaksi dari Bursa (24j): $${(outflow24h / 1e6).toFixed(2)}M
-- Netflow Bersih Bursa: $${(netflow / 1e6).toFixed(2)}M (${netflow < 0 ? "Akumulasi / Outflow Bersih" : "Tekanan Jual / Inflow Bersih"})
-- Alamat Aktif Harian (Active Addresses): ${activeAddresses.toLocaleString()}
-- Kinerja Jaringan Hashrate: ${networkHashrate} EH/s
+DATA METRIK TERSEDIA:
+${metricLines.length > 0 ? metricLines.join("\n") : "(tidak ada metrik yang berhasil diambil pada run ini)"}
+${missing.length > 0 ? `\nCATATAN PENTING: sebagian metrik tidak tersedia pada run ini (${missing.join(", ")}). JANGAN mengarang angka untuk metrik yang tidak tersedia — cukup nyatakan bahwa metrik tersebut tidak tersedia.` : ""}
 
 TOLONG MERUMUSKAN EVALUASI ANALISIS METRIK PASAR DAN DERIVATIF OTOMATIS TERBARU DALAM FORMAT BERIKUT (Gunakan Markdown Indonesia yang sangat rapi):
 
 ### 🔮 RINGKASAN SIGNAL PASAR & DETEKSI SHIFT INSTITUSI
-Berikan ringkasan eksekutif super tajam tentang kondisi pasar saat ini berdasarkan aliran dana paus on-chain (inflow vs outflow) dan data leverage (Open Interest). Apakah kita sedang melihat akumulasi institusi yang tenang atau distribusi agresif?
+Berikan ringkasan eksekutif tajam tentang kondisi pasar saat ini berdasarkan metrik yang tersedia di atas (aliran dana bursa, data leverage). Jika metrik kunci tidak tersedia, nyatakan secara eksplisit.
 
-### ⚡ SENTIMEN DERIVATIF & ANALISIS LIQUIDATION SQUEEZE (COINGLASS METRIC)
-Ulas posisi leverage saat ini. Dengan Funding Rate sebesar ${fundingRate.toFixed(4)}% dan Rasio Long/Short ${longShortRatio.toFixed(2)}, apakah pasar rentan terhadap "Long Squeeze" atau "Short Squeeze"? Berikan ulasan level likuidasi penting yang harus diperhatikan trader.
+### ⚡ SENTIMEN DERIVATIF & ANALISIS STRUKTUR LEVERAGE
+Ulas posisi leverage saat ini berdasarkan metrik derivatif yang tersedia (Open Interest, Funding Rate, Rasio Long/Short). Apakah pasar rentan terhadap "Long Squeeze" atau "Short Squeeze"?
 
 ### 📊 EVALUASI KESEHATAN DAN ADOPSI ON-CHAIN
-Ulas parameter keaktifan alamat aktif (${activeAddresses.toLocaleString()}) dan hashrate (${networkHashrate} EH/s). Apakah pertumbuhan ini mencerminkan fundamental yang sehat di tengah aksi harga saat ini?
+Evaluasi berdasarkan data yang tersedia. Nyatakan dengan jelas jika data aktivitas on-chain (alamat aktif, hashrate) tidak tersedia pada run ini.
 
 ### 🎯 REKOMENDASI TRADING TAKTIS (BUY/SELL/HOLD)
-Tentukan keputusan kuantitatif yang dingin:
+Tentukan keputusan kuantitatif yang dingin berdasarkan data yang tersedia saja:
 - **REKOMENDASI AKHIR**: [BELI / JUAL / TAHAN]
 - **Tingkat Keyakinan AI**: ...%
 - **Rencana Skenario**: Berikan target taktis jika terjadi pengosongan leverage (flushout) jangka pendek.
@@ -3958,40 +3521,18 @@ Tulis dengan gaya bahasa Indonesia profesional tingkat tinggi, berwibawa, dingin
           config: {
             temperature: 0.15,
             maxOutputTokens: 1200,
-            systemInstruction: "Anda adalah asisten AI Analis Kuantitatif Senior & Spesialis Data On-chain. Analisis Anda harus super tajam, taktis, dingin, objektif, dan diakhiri dengan rekomendasi posisi yang lugas."
+            systemInstruction: "Anda adalah asisten AI Analis Kuantitatif Senior & Spesialis Data On-chain. Analisis Anda harus super tajam, taktis, dingin, objektif, dan diakhiri dengan rekomendasi posisi yang lugas. Jangan pernah mengarang angka untuk metrik yang tidak tersedia."
           }
         });
         analysisText = response.text;
       } catch (geminiErr: any) {
         console.log("[Background AI Analysis] Gemini API status (using fallback):", geminiErr.message);
         isFallback = true;
-        analysisText = generateDynamicOnChainFallback("BTC", {
-          price: btcPrice,
-          change24h: btcChange,
-          openInterest,
-          fundingRate,
-          longShortRatio,
-          inflow24h,
-          outflow24h,
-          liquidation24h,
-          activeAddresses,
-          networkHashrate
-        });
+        analysisText = generateDynamicOnChainFallback("BTC", metrics);
       }
     } else {
       isFallback = true;
-      analysisText = generateDynamicOnChainFallback("BTC", {
-        price: btcPrice,
-        change24h: btcChange,
-        openInterest,
-        fundingRate,
-        longShortRatio,
-        inflow24h,
-        outflow24h,
-        liquidation24h,
-        activeAddresses,
-        networkHashrate
-      });
+      analysisText = generateDynamicOnChainFallback("BTC", metrics);
     }
 
     const automatedResult = {
@@ -3999,19 +3540,9 @@ Tulis dengan gaya bahasa Indonesia profesional tingkat tinggi, berwibawa, dingin
       symbol: "BTC",
       analysis: analysisText,
       isFallback,
-      metrics: {
-        price: btcPrice,
-        change24h: btcChange,
-        openInterest,
-        fundingRate,
-        longShortRatio,
-        inflow24h,
-        outflow24h,
-        netflow,
-        liquidation24h,
-        activeAddresses,
-        networkHashrate
-      }
+      // DATA-9: metrics object contains ONLY the values actually fetched in
+      // this run; missing ones are simply absent (not fabricated).
+      metrics
     };
 
     fs.writeFileSync(path.join(process.cwd(), "automated-analysis.json"), JSON.stringify(automatedResult, null, 2), "utf-8");
@@ -5184,7 +4715,7 @@ app.get("/api/stocks/fundamentals/:symbol", async (req, res) => {
 
 // --- 8. POST /api/trading-signals/generate-manual -------------------------
 // Manual signal entry. Validates required fields and pushes to signalHistory.
-app.post("/api/trading-signals/generate-manual", (req, res) => {
+app.post("/api/trading-signals/generate-manual", requireAuth, (req, res) => {
   try {
     const {
       symbol,
@@ -5204,6 +4735,14 @@ app.post("/api/trading-signals/generate-manual", (req, res) => {
     }
 
     const upperSymbol = String(symbol).toUpperCase().trim();
+    // SEC-25-style guard: strict charset before the symbol is stored / used
+    // for price lookups.
+    if (!/^[A-Z0-9.\-]{2,20}$/.test(upperSymbol)) {
+      return res.status(400).json({
+        success: false,
+        error: "Simbol hanya boleh huruf besar, angka, titik, dan strip (2-20 karakter)."
+      });
+    }
     const dir = String(direction).toUpperCase().trim() as
       "STRONG BUY" | "BUY" | "HOLD" | "SELL" | "STRONG SELL";
     const validDirs: ("STRONG BUY" | "BUY" | "HOLD" | "SELL" | "STRONG SELL")[] =
@@ -5238,6 +4777,7 @@ app.post("/api/trading-signals/generate-manual", (req, res) => {
       category,
       recommendation: dir,
       confidence: 100, // user-submitted, treat as fully intentional
+      source: "manual",
       entryPrice: entry,
       currentPrice: entry,
       tpPrice: tp,

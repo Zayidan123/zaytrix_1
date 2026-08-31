@@ -4,13 +4,14 @@ import {
   loginUser,
   registerUser,
   loginWith2FA,
+  fetchCurrentUser,
   forgotPassword,
   resetPassword,
   verifyEmail,
   type AuthUser,
 } from "../lib/auth";
 import { useGlobalStore } from "../store";
-import { Shield, Mail, Lock, Phone, Chrome, AlertCircle, CheckCircle, ShieldAlert, KeyRound, ArrowLeft, ShieldCheck, Fingerprint, Zap } from "lucide-react";
+import { Shield, Mail, Lock, Chrome, AlertCircle, CheckCircle, KeyRound, ArrowLeft, ShieldCheck, Fingerprint, Zap, LifeBuoy } from "lucide-react";
 
 interface AuthScreenProps {
   onAuthSuccess: (user: AuthUser) => void;
@@ -19,23 +20,27 @@ interface AuthScreenProps {
 export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
   const addExecutionLog = useGlobalStore(state => state.addExecutionLog);
 
-  // Form toggles
-  const [authMode, setAuthMode] = useState<"login" | "register" | "phone">("login");
+  // Form toggles — FUNC-11: the "phone" (OTP Seluler) tab was REMOVED. The
+  // server has no phone/SMS auth endpoint — the old tab was a decorative stub
+  // that only ever showed "akan segera tersedia" errors. Honest removal: only
+  // login + register remain.
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
 
-  // SEC2-AUTH: alternate screen flows for 2FA challenge, password-reset
-  // request, and password-reset entry (token from URL). When set, the main
-  // auth card is replaced by the corresponding flow UI. The user can always
-  // go back via a "Kembali" link.
-  const [altFlow, setAltFlow] = useState<null | "2fa" | "forgot" | "reset" | "verify-email">(null);
+  // SEC2-AUTH: alternate screen flows for 2FA challenge, backup-code login,
+  // password-reset request, and password-reset entry (token from URL). When
+  // set, the main auth card is replaced by the corresponding flow UI. The user
+  // can always go back via a "Kembali" link.
+  const [altFlow, setAltFlow] = useState<null | "2fa" | "backup" | "forgot" | "reset" | "verify-email" | "oauth-2fa">(null);
   const [twoFactorTempToken, setTwoFactorTempToken] = useState<string | null>(null);
   const [twoFactorEmail, setTwoFactorEmail] = useState<string>("");
+  // FUNC-9: backup-code login input (8×4 hex groups with dashes, e.g.
+  // "a1b2-c3d4-…" — the server strips dashes + lowercases before hashing).
+  const [backupCode, setBackupCode] = useState("");
 
   // Input fields
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const [phoneNumber, setPhoneNumber] = useState("");
-  const [otpCode, setOtpCode] = useState("");
   // SEC2-AUTH: 2FA code input + password-reset token (from URL ?token=…).
   const [twoFactorCode, setTwoFactorCode] = useState("");
   const [resetToken, setResetToken] = useState("");
@@ -47,13 +52,16 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
   const [errMessage, setErrMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  // Phone Auth flow state — kept for UI tab compatibility (phone auth is disabled
-  // in this build; server-side phone OTP not yet implemented).
-  const [confirmationResult, setConfirmationResult] = useState<any | null>(null);
-
+  // (FUNC-11: phone-auth state + handlers removed — the server has no SMS auth.)
   // SEC2-AUTH: detect ?token=… in the URL on mount to drive the reset-password
-  // and verify-email alternate flows. We also pick up ?oauth_error=… to surface
-  // OAuth callback failures from the server-side redirect.
+  // and verify-email alternate flows. We also pick up:
+  //   • ?oauth_error=…  → OAuth callback failures from the server-side redirect
+  //     (FUNC-24: mapped to friendly Indonesian messages instead of raw codes,
+  //     including the new `oauth_tidak_dikonfigurasi` value — "Google OAuth
+  //     belum dikonfigurasi di server").
+  //   • ?oauth_2fa=1 / ?oauth_2fa_required=email (+ optional &temp_token=…)
+  //     → OAuth login hit a 2FA-protected account: show the TOTP challenge
+  //     (SEC-9 contract — verified via POST /api/auth/google/2fa).
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -68,19 +76,42 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
           setAltFlow("verify-email");
         }
       }
+
+      // OAuth 2FA challenge (SEC-9): server redirects back with either
+      // `?oauth_2fa=1` (coordination contract) or the current oauth.ts shape
+      // `?oauth_2fa_required=<email>&temp_token=<token>`. Both are handled.
+      const oauth2faFlag = params.get("oauth_2fa");
+      const oauth2faEmail = params.get("oauth_2fa_required");
+      const oauthTempToken = params.get("temp_token");
+      if (oauth2faFlag === "1" || oauth2faFlag === "true" || oauth2faEmail) {
+        setAltFlow("oauth-2fa");
+        setTwoFactorEmail(oauth2faEmail || "");
+        setTwoFactorTempToken(oauthTempToken || null);
+        setTwoFactorCode("");
+        setErrMessage(null);
+        setSuccessMessage("Login Google berhasil diverifikasi, namun akun Anda terlindungi 2FA. Masukkan kode 6-digit dari aplikasi authenticator Anda.");
+        // Clean the URL so a refresh doesn't re-trigger the flow.
+        try { window.history.replaceState({}, document.title, window.location.pathname); } catch {}
+      }
+
       const oauthErr = params.get("oauth_error");
       if (oauthErr) {
-        setErrMessage("Login Google gagal: " + oauthErr + ". Silakan coba Email & Kata Sandi.");
+        // FUNC-24: friendly per-code mapping (raw server codes are cryptic).
+        const friendly: Record<string, string> = {
+          oauth_tidak_dikonfigurasi: "Google OAuth belum dikonfigurasi di server. Silakan gunakan Email & Kata Sandi.",
+          token_exchange_failed: "Gagal menukar token Google. Silakan coba lagi.",
+          no_tokens: "Google tidak mengembalikan token akses. Silakan coba lagi.",
+          missing_profile: "Profil Google tidak lengkap (email wajib). Silakan coba akun lain.",
+          email_not_verified: "Email Google Anda belum terverifikasi di sisi Google. Verifikasi email Google Anda dulu.",
+          two_factor_protected: "Akun email ini terlindungi 2FA. Nonaktifkan 2FA atau login dengan kata sandi untuk menautkan Google.",
+          server_error: "Kesalahan server saat proses login Google. Silakan coba lagi.",
+        };
+        setErrMessage(friendly[oauthErr] || `Login Google gagal: ${oauthErr}. Silakan coba Email & Kata Sandi.`);
         // Clean the URL so the error doesn't persist across reloads.
         try { window.history.replaceState({}, document.title, window.location.pathname); } catch {}
       }
     } catch {}
   }, []);
-
-  useEffect(() => {
-    // No-op cleanup — reCAPTCHA/phone auth disabled in this build.
-    return () => {};
-  }, [authMode]);
 
   // Handle traditional Email Password login. SEC2-AUTH: if the server responds
   // with requiresTwoFactor=true, switch to the 2FA challenge screen instead of
@@ -300,19 +331,99 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
     window.location.assign("/api/auth/google");
   };
 
-  // Handle Phone Number Submit (Send OTP SMS) — disabled gracefully.
-  // Server-side phone OTP not yet implemented; UI retained for visual continuity.
-  const handleSendOtp = async (e: React.FormEvent) => {
+  // FUNC-9 (backup-code login): recover access with a one-time 8-group backup
+  // code when the authenticator device is lost. Server contract (src/server/auth.ts ~751):
+  //   POST /api/auth/2fa/backup-login  { email, backupCode }
+  //   → 200 { success:true, user, message?, warning? }  (session cookie set)
+  //   → 400 { success:false, error } (2FA not active / no codes / bad input)
+  //   → 401 { success:false, error } (invalid or already-used code)
+  // The code hashes are single-use — a successful login consumes the code.
+  const handleBackupCodeLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setErrMessage("Otentikasi telepon akan segera tersedia. Silakan gunakan Email & Kata Sandi untuk saat ini.");
+    const trimmedEmail = (twoFactorEmail || email || "").trim().toLowerCase();
+    const trimmedCode = backupCode.trim();
+    if (!trimmedEmail) {
+      setErrMessage("Masukkan email akun Anda untuk login dengan kode cadangan.");
+      return;
+    }
+    if (trimmedCode.replace(/[^a-zA-Z0-9]/g, "").length < 8) {
+      setErrMessage("Kode cadangan tidak valid — salin lengkap dari daftar kode cadangan Anda (contoh: a1b2-c3d4-…).");
+      return;
+    }
+    setLoading(true);
+    setErrMessage(null);
     setSuccessMessage(null);
+    try {
+      const res = await fetch("/api/auth/2fa/backup-login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ email: trimmedEmail, backupCode: trimmedCode }),
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.success && data?.user) {
+        addExecutionLog(`[SECURITY] Login berhasil dengan kode cadangan untuk: ${data.user.email}`);
+        if (data.warning) {
+          // Low on backup codes — surface but proceed.
+          setSuccessMessage(`${data.message || "Login berhasil."} ${data.warning}`);
+        }
+        onAuthSuccess(data.user as AuthUser);
+      } else {
+        setErrMessage(data?.error || "Kode cadangan tidak valid atau sudah digunakan.");
+      }
+    } catch (err: any) {
+      console.error(err);
+      setErrMessage("Gagal terhubung ke server. Periksa koneksi Anda.");
+    } finally {
+      setLoading(false);
+    }
   };
 
-  // Handle Code verification (Confirm OTP) — disabled gracefully.
-  const handleVerifyOtp = async (e: React.FormEvent) => {
+  // SEC-9 (OAuth 2FA): complete a Google OAuth login on a 2FA-protected
+  // account. Server contract (src/server/oauth.ts + coordination brief):
+  //   POST /api/auth/google/2fa  { totp, tempToken? }
+  //   → 200 { success:true }   (session cookie set → verify via /api/auth/me)
+  //   → 401 { success:false }  → "Kode 2FA salah."
+  // The tempToken comes from the redirect URL (?temp_token=…); we also send it
+  // in the body so the backend can bind the verification to the pending login.
+  const handleOAuthTwoFactorVerify = async (e: React.FormEvent) => {
     e.preventDefault();
-    setErrMessage("Otentikasi telepon akan segera tersedia. Silakan gunakan Email & Kata Sandi untuk saat ini.");
+    if (!/^\d{6}$/.test(twoFactorCode)) {
+      setErrMessage("Kode 2FA harus 6 digit numerik.");
+      return;
+    }
+    setLoading(true);
+    setErrMessage(null);
     setSuccessMessage(null);
+    try {
+      const res = await fetch("/api/auth/google/2fa", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ totp: twoFactorCode, tempToken: twoFactorTempToken || undefined }),
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.success) {
+        // Session cookie is set — fetch the canonical user from /api/auth/me.
+        const me = await fetchCurrentUser();
+        if (me) {
+          addExecutionLog(`[SECURITY] Login Google 2FA berhasil untuk: ${me.email}`);
+          onAuthSuccess(me);
+        } else {
+          // Cookie set but /me failed — hard reload to re-run the boot auth check.
+          window.location.reload();
+        }
+      } else if (res.status === 401) {
+        setErrMessage("Kode 2FA salah.");
+      } else {
+        setErrMessage(data?.error || "Verifikasi 2FA Google gagal. Silakan coba login ulang.");
+      }
+    } catch (err: any) {
+      console.error(err);
+      setErrMessage("Gagal terhubung ke server. Periksa koneksi Anda.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -416,9 +527,11 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
               </div>
             </div>
 
-            {/* Tab Controls — hidden when an alternate flow (2FA, forgot, reset, verify-email) is active. */}
+            {/* Tab Controls — hidden when an alternate flow (2FA, backup, oauth-2fa,
+                forgot, reset, verify-email) is active. FUNC-11: the "OTP Seluler"
+                tab was REMOVED (server has no phone auth — honest removal). */}
             {!altFlow && (
-            <div className="grid grid-cols-3 bg-[#111A36] p-1 rounded-lg border border-slate-800">
+            <div className="grid grid-cols-2 bg-[#111A36] p-1 rounded-lg border border-slate-800">
               <button
                 onClick={() => { setAuthMode("login"); setErrMessage(null); setSuccessMessage(null); }}
                 className={`py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
@@ -438,16 +551,6 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                 }`}
               >
                 Daftar Akun
-              </button>
-              <button
-                onClick={() => { setAuthMode("phone"); setErrMessage(null); setSuccessMessage(null); }}
-                className={`py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
-                  authMode === "phone"
-                    ? "bg-amber-600 text-white shadow animate-pulse"
-                    : "text-slate-400 hover:text-slate-200"
-                }`}
-              >
-                OTP Seluler
               </button>
             </div>
             )}
@@ -589,6 +692,24 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
             >
               {loading ? "Memverifikasi Kode..." : "VERIFIKASI & MASUK"}
             </button>
+
+            {/* FUNC-9: recovery path for users who lost their authenticator device. */}
+            <div className="text-center pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setAltFlow("backup");
+                  setBackupCode("");
+                  setErrMessage(null);
+                  setSuccessMessage(null);
+                }}
+                className="text-[10px] text-slate-400 hover:text-amber-400 font-mono cursor-pointer underline inline-flex items-center gap-1"
+              >
+                <LifeBuoy className="w-3 h-3" />
+                Masuk dengan kode cadangan
+              </button>
+            </div>
+
             <button
               type="button"
               onClick={() => {
@@ -601,6 +722,126 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
               className="w-full text-center text-xs text-slate-400 hover:text-slate-200 cursor-pointer pt-2 underline block font-mono"
             >
               <ArrowLeft className="inline w-3 h-3 mr-1" /> Kembali ke Login
+            </button>
+          </form>
+        )}
+
+        {/* FUNC-9: backup-code login flow (POST /api/auth/2fa/backup-login).
+            One-time 8-group hex codes issued when 2FA was enabled — each code
+            can be used exactly once. */}
+        {altFlow === "backup" && (
+          <form onSubmit={handleBackupCodeLogin} className="space-y-4">
+            <div className="space-y-1">
+              <label className="text-[10px] uppercase font-mono font-bold text-slate-400 flex items-center gap-1">
+                <LifeBuoy className="w-3 h-3" /> Email Akun
+              </label>
+              <input
+                type="email"
+                required
+                value={twoFactorEmail || email}
+                onChange={(e) => {
+                  setTwoFactorEmail(e.target.value);
+                  setEmail(e.target.value);
+                }}
+                placeholder="namadepan@zaytrix.com"
+                className="w-full bg-[#0A0F1D] border border-slate-800 rounded-lg px-3 py-2.5 text-xs outline-none focus:border-amber-500 font-mono text-slate-100"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-[10px] uppercase font-mono font-bold text-slate-400 flex items-center gap-1">
+                <KeyRound className="w-3 h-3" /> Kode Cadangan Sekali Pakai
+              </label>
+              <input
+                type="text"
+                required
+                autoComplete="one-time-code"
+                spellCheck={false}
+                value={backupCode}
+                onChange={(e) => setBackupCode(e.target.value)}
+                placeholder="a1b2-c3d4-e5f6-…"
+                className="w-full text-center bg-[#0A0F1D] border border-slate-800 rounded-lg px-3 py-3 text-sm tracking-[0.2em] font-black outline-none focus:border-amber-500 font-mono text-slate-100"
+              />
+              <span className="block text-[9px] text-slate-500 leading-normal font-mono text-center">
+                Salin satu kode cadangan dari daftar yang Anda simpan saat mengaktifkan 2FA. Kode hanya bisa digunakan sekali.
+              </span>
+            </div>
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-gradient-to-r from-amber-600 to-orange-600 disabled:opacity-50 py-2.5 rounded-lg text-xs font-bold hover:shadow-lg hover:shadow-amber-500/20 active:scale-[0.98] transition-all cursor-pointer"
+            >
+              {loading ? "Memverifikasi Kode Cadangan..." : "MASUK DENGAN KODE CADANGAN"}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAltFlow("2fa");
+                setBackupCode("");
+                setErrMessage(null);
+                setSuccessMessage(null);
+              }}
+              className="w-full text-center text-xs text-slate-400 hover:text-slate-200 cursor-pointer pt-2 underline block font-mono"
+            >
+              <ArrowLeft className="inline w-3 h-3 mr-1" /> Kembali ke Kode 2FA
+            </button>
+          </form>
+        )}
+
+        {/* SEC-9: OAuth (Google) 2FA challenge — the OAuth callback redirected
+            back with ?oauth_2fa=1 / ?oauth_2fa_required=email&temp_token=…
+            because the account is 2FA-protected. Verified via
+            POST /api/auth/google/2fa { totp, tempToken }. */}
+        {altFlow === "oauth-2fa" && (
+          <form onSubmit={handleOAuthTwoFactorVerify} className="space-y-4">
+            <div className="flex items-center gap-2 mb-1">
+              <Chrome className="w-4 h-4 text-orange-500" />
+              <span className="text-[10px] uppercase font-mono font-bold text-slate-400">
+                Verifikasi 2FA — Login Google
+              </span>
+            </div>
+            {twoFactorEmail && (
+              <span className="block text-[9px] text-slate-500 font-mono">
+                Akun: {twoFactorEmail}
+              </span>
+            )}
+            <div className="space-y-1">
+              <label className="text-[10px] uppercase font-mono font-bold text-slate-400 flex items-center gap-1">
+                <KeyRound className="w-3 h-3" /> Kode Otentikasi 6-Digit
+              </label>
+              <input
+                type="text"
+                required
+                inputMode="numeric"
+                maxLength={6}
+                value={twoFactorCode}
+                onChange={(e) => setTwoFactorCode(e.target.value.replace(/\D/g, ""))}
+                placeholder="123456"
+                className="w-full text-center bg-[#0A0F1D] border border-slate-800 rounded-lg px-3 py-3 text-lg tracking-[0.5em] font-black outline-none focus:border-blue-500 font-mono text-slate-100"
+              />
+              <span className="block text-[9px] text-slate-500 leading-normal font-mono text-center">
+                Akun Anda dilindungi 2FA. Masukkan kode dari aplikasi authenticator Anda untuk menyelesaikan login Google.
+              </span>
+            </div>
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 disabled:opacity-50 py-2.5 rounded-lg text-xs font-bold hover:shadow-lg hover:shadow-blue-500/20 active:scale-[0.98] transition-all cursor-pointer"
+            >
+              {loading ? "Memverifikasi Kode..." : "VERIFIKASI & SELESAIKAN LOGIN GOOGLE"}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAltFlow(null);
+                setTwoFactorTempToken(null);
+                setTwoFactorCode("");
+                setErrMessage(null);
+                setSuccessMessage(null);
+                setAuthMode("login");
+              }}
+              className="w-full text-center text-xs text-slate-400 hover:text-slate-200 cursor-pointer pt-2 underline block font-mono"
+            >
+              <ArrowLeft className="inline w-3 h-3 mr-1" /> Batal & Login dengan Email
             </button>
           </form>
         )}
@@ -784,104 +1025,6 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
               {loading ? "Menyinkronkan Rekaman Akun..." : "DAFTAR SEBELUM AKSES"}
             </button>
           </form>
-        )}
-
-        {authMode === "phone" && !altFlow && (
-          <div className="space-y-4">
-            {!confirmationResult ? (
-              <form onSubmit={handleSendOtp} className="space-y-4">
-                <div className="space-y-1">
-                  <label className="text-[10px] uppercase font-mono font-bold text-slate-400 flex items-center gap-1">
-                    <Phone className="w-3 h-3" /> Nomor Seluler Seluruh Dunia
-                  </label>
-                  <input
-                    type="tel"
-                    required
-                    value={phoneNumber}
-                    onChange={(e) => setPhoneNumber(e.target.value)}
-                    placeholder="+628123456789"
-                    className="w-full bg-[#0A0F1D] border border-slate-800 rounded-lg px-3 py-2.5 text-xs outline-none focus:border-amber-500 font-mono text-slate-100 placeholder:opacity-50"
-                  />
-                  <span className="block text-[9px] text-slate-500 leading-normal font-mono">
-                    Wajib diawali dengan kode negara (e.g. +62 ...). Sistem akan mentransmisikan token keamanan secara real-time via pesan SMS.
-                  </span>
-                </div>
-
-                {/* Visible standard reCAPTCHA Box */}
-                <div id="recaptcha-container" className="flex justify-center my-2 p-1.5 bg-[#0A0F1D] border border-slate-800 rounded-lg"></div>
-
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="w-full bg-gradient-to-r from-amber-600 to-orange-600 disabled:opacity-50 py-2.5 rounded-lg text-xs font-bold hover:shadow-lg hover:shadow-amber-500/20 active:scale-[0.98] transition-all cursor-pointer flex items-center justify-center gap-1.5"
-                >
-                  <ShieldAlert className="w-3.5 h-3.5" />
-                  {loading ? "Menyiapkan Validasi Bot..." : "PANASAKAN & KIRIM TOKEN OTP SMS"}
-                </button>
-              </form>
-            ) : (
-              <form onSubmit={handleVerifyOtp} className="space-y-4">
-                <div className="space-y-1">
-                  <label className="text-[10px] uppercase font-mono font-bold text-slate-400">
-                    Masukkan Kode Verifikasi Komando OTP (6 Digit)
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    maxLength={6}
-                    value={otpCode}
-                    onChange={(e) => setOtpCode(e.target.value)}
-                    placeholder="123456"
-                    className="w-full text-center bg-[#0A0F1D] border border-slate-800 rounded-lg px-3 py-3 text-lg tracking-[0.5em] font-black outline-none focus:border-amber-500 font-mono text-slate-100"
-                  />
-                  <span className="block text-[9px] text-slate-500 leading-normal font-mono text-center">
-                    Cek SMS pada handphone Anda. Kode OTP hanya valid selama 5 menit.
-                  </span>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="w-full bg-gradient-to-r from-[#22C55E] to-[#15803D] disabled:opacity-50 py-2.5 rounded-lg text-xs font-bold hover:shadow-lg hover:shadow-emerald-500/20 active:scale-[0.98] transition-all cursor-pointer"
-                >
-                  {loading ? "Uji Validasi OTP..." : "VERIFIKASI OTP & LOGIN AMAN"}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => { setConfirmationResult(null); setOtpCode(""); }}
-                  className="w-full text-center text-xs text-slate-400 hover:text-slate-200 cursor-pointer pt-2 underline block font-mono"
-                >
-                  Ganti nomor seluler atau kirim ulang
-                </button>
-              </form>
-            )}
-          </div>
-        )}
-
-        {/* Separator — hidden during alternate flows */}
-        {!altFlow && (
-        <div className="relative py-2 flex items-center justify-center">
-          <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-slate-800"></div>
-          </div>
-          <span className="relative bg-[#0B1329] px-3 text-[10px] uppercase font-mono text-slate-500 font-bold">
-            Atau login cepat
-          </span>
-        </div>
-        )}
-
-        {/* Google Authentication Button — hidden during alternate flows */}
-        {!altFlow && (
-        <button
-          type="button"
-          disabled={loading}
-          onClick={handleGoogleSignIn}
-          className="w-full flex items-center justify-center gap-2 border border-slate-800 hover:border-slate-700 bg-[#090F1E] hover:bg-[#111A31] py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-sm text-slate-200 font-sans"
-        >
-          <Chrome className="w-4 h-4 text-orange-500" />
-          Masuk dengan Akun Google
-        </button>
         )}
 
         {/* Interactive security credential banner */}
