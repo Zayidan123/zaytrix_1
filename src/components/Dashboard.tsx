@@ -1531,7 +1531,7 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
               <div className="flex items-center gap-2">
                 <Sparkles className="w-5 h-5 text-purple-400 shrink-0 animate-pulse" />
                 <div>
-                  <h4 className="text-sm sm:text-base font-bold text-white">Laporan Analisis Berkala AI (Gemini)</h4>
+                  <h4 className="text-sm sm:text-base font-bold text-white">Laporan Analisis Berkala AI (OpenRouter)</h4>
                   <p className="text-[10px] text-slate-400">Dihasilkan otomatis secara berkala 10 menit oleh engine kognitif server</p>
                 </div>
               </div>
@@ -1568,7 +1568,7 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
                       <Sparkles className="w-4 h-4 text-purple-400 animate-pulse absolute" />
                     </div>
                     <span className="text-xs text-slate-400 font-mono font-bold animate-pulse">
-                      Gemini AI sedang mengolah metrik derivatif pasar...
+                      AI (OpenRouter) sedang mengolah metrik derivatif pasar...
                     </span>
                   </motion.div>
                 ) : autoError ? (

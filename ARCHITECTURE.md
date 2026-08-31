@@ -13,7 +13,7 @@
 |---|---|---|
 | **Database** | SQLite (single-file) | PostgreSQL (multi-tenant, HA) |
 | **Architecture** | Single-tenant | Multi-tenant with data isolation |
-| **AI** | Gemini only | 9router (primary) + Gemini (fallback) ✅ |
+| **AI** | Gemini only | OpenRouter (primary, cloud — migrasi dari 9router lokal) + Gemini (fallback) ✅ |
 | **Exchanges** | Binance only (read) | 15+ CEX + 5+ DEX (read + trade) |
 | **Assets** | Top 7 + stocks | Top 500 crypto only |
 | **Custody** | None | Fireblocks / MPC / HSM |
@@ -29,8 +29,8 @@
 
 ## 🗺️ Phased Roadmap
 
-### Phase 1: AI Foundation (CURRENT — 9router Integration) ✅
-- [x] 9router AI router service (OpenAI-compatible)
+### Phase 1: AI Foundation (OpenRouter Integration — migrasi 31 Ag 2026) ✅
+- [x] OpenRouter AI router service (cloud, OpenAI-compatible, tanpa server lokal)
 - [x] Gemini fallback chain
 - [x] AI health monitoring endpoint
 - [x] Audit logging for all AI calls
@@ -134,7 +134,7 @@
 │                    APPLICATION LAYER (Express)                       │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ │
 │  │ Auth     │ │ Portfolio│ │ Trade    │ │ Risk     │ │ AI Router│ │
-│  │ Service  │ │ Service  │ │ Service  │ │ Engine   │ │ (9router)│ │
+│  │ Service  │ │ Service  │ │ Service  │ │ Engine   │ │(OpenRtr) │ │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘ │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ │
 │  │ On-Chain │ │ Compliance│ │ Custody  │ │ Analytics│ │ Reporting│ │
@@ -245,14 +245,14 @@ enum PortfolioType { SPOT FUTURES DEFI CUSTODY OTC }
 
 ---
 
-## 🤖 AI Architecture (9router + Gemini)
+## 🤖 AI Architecture (OpenRouter + Gemini)
 
 ```
 ┌─────────────────────────────────────────────┐
 │              AI Router Service               │
 │                                              │
 │  ┌─────────────┐    ┌─────────────────┐     │
-│  │  9router     │    │  Gemini         │     │
+│  │  OpenRouter   │    │  Gemini         │     │
 │  │  (PRIMARY)   │───▶│  (FALLBACK)     │     │
 │  │              │    │                 │     │
 │  │  OpenAI-     │    │  @google/genai  │     │
@@ -350,8 +350,8 @@ enum PortfolioType { SPOT FUTURES DEFI CUSTODY OTC }
 
 ## 📋 Next Immediate Actions (Priority Order)
 
-1. **✅ 9router AI integration** — DONE (this commit)
-2. **Migrate existing Gemini endpoints to AI router** — use `callAI()` instead of direct Gemini calls
+1. **✅ OpenRouter AI integration** — DONE (migrasi dari 9router, 31 Ag 2026)
+2. **✅ Migrate existing Gemini endpoints to AI router** — DONE via `createOpenRouterCompatClient()` adapter (ronde #6): semua 9 endpoint Gemini langsung kini melayani lewat OpenRouter tanpa perubahan call-site
 3. **PostgreSQL setup** — provision database, update DATABASE_URL, run migrations
 4. **Multi-tenant schema** — add Organization, Subscription, RBAC models
 5. **Exchange connector framework** — unified interface for 15+ CEX

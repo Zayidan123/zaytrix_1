@@ -435,7 +435,7 @@ export default function AiSignals({ assets }: AiSignalsProps) {
           </div>
           <p className="text-xs text-slate-400 mt-1 max-w-3xl">
             Sistem pengawasan dan ramalan perdagangan yang mengikis (scrape) data ledger Blockchain harian 
-            lalu diolah menggunakan Google Gemini AI untuk mendeteksi konvergensi bursa, akumulasi paus, dan momentum sinyal trading optimal.
+            lalu diolah menggunakan AI multi-provider (OpenRouter → Gemini fallback) untuk mendeteksi konvergensi bursa, akumulasi paus, dan momentum sinyal trading optimal.
           </p>
         </div>
 
@@ -564,7 +564,7 @@ export default function AiSignals({ assets }: AiSignalsProps) {
               Fokus Isu Analisis AI
             </span>
             <p className="text-[10px] text-slate-500 leading-normal">
-              Masukkan petunjuk atau isu khusus agar analisis kecerdasan buatan Gemini AI fokus membedah aspek tersebut.
+              Masukkan petunjuk atau isu khusus agar analisis kecerdasan buatan fokus membedah aspek tersebut.
             </p>
             <textarea
               value={customFocus}
@@ -599,7 +599,7 @@ export default function AiSignals({ assets }: AiSignalsProps) {
               <Cpu className="w-12 h-12 text-amber-500 animate-spin" />
               <div>
                 <p className="text-slate-200 font-bold">Menghubungkan Scraper Onchain Ledger...</p>
-                <p className="text-xs text-slate-500 mt-1">Mengumpulkan volume bursa, netflow exchange, & mengaktifkan penasihat kuantitatif Google Gemini AI...</p>
+                <p className="text-xs text-slate-500 mt-1">Mengumpulkan volume bursa, netflow exchange, & mengaktifkan penasihat kuantitatif AI (OpenRouter)...</p>
               </div>
             </div>
           ) : error ? (
@@ -796,7 +796,7 @@ export default function AiSignals({ assets }: AiSignalsProps) {
                   <div className="flex items-center space-x-2">
                     <Sparkles className="w-4 h-4 text-amber-500" />
                     <span className="text-xs font-bold text-slate-100 uppercase tracking-wider font-sans">
-                      Hasil Evaluasi Kuantitatif & Sinyal AI Gemini
+                      Hasil Evaluasi Kuantitatif & Sinyal AI
                     </span>
                   </div>
                   
@@ -819,7 +819,7 @@ export default function AiSignals({ assets }: AiSignalsProps) {
                       <div>
                         <strong className="font-bold">Mode Prediksi Kuantitatif Lokal Aktif</strong>
                         <p className="mt-0.5 leading-relaxed text-slate-300">
-                          Kuota API gratis Gemini Anda sedang penuh hari ini. Sistem kami mengaktifkan Model Simulasi Perdagangan CFA on-chain hibrida lokal berdensitas tinggi agar audit sinyal dan taktis stop-loss tetap terbit seketika tanpa jeda delay!
+                          Kuota provider AI sedang penuh hari ini. Sistem kami mengaktifkan Model Simulasi Perdagangan CFA on-chain hibrida lokal berdensitas tinggi agar audit sinyal dan taktis stop-loss tetap terbit seketika tanpa jeda delay!
                         </p>
                       </div>
                     </div>

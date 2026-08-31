@@ -14,7 +14,7 @@
  *   - Loading + error states with graceful fallback when AI is unavailable
  *   - Persisted chat history to localStorage (per-user)
  *   - Auto-scroll to latest message
- *   - Provider badge (9router / Gemini / fallback)
+ *   - Provider badge (OpenRouter / Gemini / fallback)
  */
 
 import React, { useEffect, useState, useRef, useCallback } from "react";
@@ -227,7 +227,7 @@ ATURAN JAWABAN:
         const fallbackMsg: ChatMessage = {
           id: `a-${Date.now()}`,
           role: "assistant",
-          content: `Maaf, layanan AI sedang tidak tersedia saat ini (${data.error || "unknown error"}).\n\nNamun, berdasarkan data pasar live:\n- Fear & Greed: **${context?.fearGreedValue ?? "?"}/100** (${context?.fearGreedClass ?? "?"})\n- Top Gainer: ${context?.topGainer ?? "—"}\n- Top Loser: ${context?.topLoser ?? "—"}\n\nSilakan coba lagi nanti atau periksa koneksi 9router/Gemini di Settings.`,
+          content: `Maaf, layanan AI sedang tidak tersedia saat ini (${data.error || "unknown error"}).\n\nNamun, berdasarkan data pasar live:\n- Fear & Greed: **${context?.fearGreedValue ?? "?"}/100** (${context?.fearGreedClass ?? "?"})\n- Top Gainer: ${context?.topGainer ?? "—"}\n- Top Loser: ${context?.topLoser ?? "—"}\n\nSilakan coba lagi nanti atau periksa koneksi OpenRouter/Gemini di Settings.`,
           timestamp: Date.now(),
           isFallback: true,
           error: true,

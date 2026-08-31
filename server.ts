@@ -11,6 +11,7 @@ import fs from "fs";
 import crypto from "crypto";
 import { z } from "zod";
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
+import { createOpenRouterCompatClient, openRouterModelName } from "./src/server/aiRouter";
 import { createServer as createViteServer } from "vite";
 import { fetchLiveOnChainDataModular, isValidOnChainTransaction } from "./onchainDataHelper";
 import WebSocket from "ws";
@@ -188,9 +189,18 @@ async function generateContentWithRetry(aiClient: any, args: any, retries = 4, d
   throw lastError;
 }
 
-// Initialize Gemini safely
-let ai: GoogleGenAI | null = null;
-if (process.env.GEMINI_API_KEY) {
+// Initialize the AI client — OpenRouter FIRST (cloud aggregator, works with
+// NO local machine), direct Gemini second (legacy), none → honest degradation.
+// MIGRATION 2026-08: the old 9router local proxy (localhost:20128) required an
+// always-on machine the operator does not have — replaced by OpenRouter
+// (https://openrouter.ai), which is OpenAI-compatible and needs only a key.
+// The compat client mimics the GoogleGenAI `.models.generateContent()` shape
+// so every existing call site keeps working unchanged (see aiRouter.ts).
+let ai: any = null;
+if (process.env.OPENROUTER_API_KEY) {
+  ai = createOpenRouterCompatClient();
+  log.info(`[AI] Provider aktif: OpenRouter (model utama ${openRouterModelName()}, fallback Gemini) — cloud, tanpa server lokal.`);
+} else if (process.env.GEMINI_API_KEY) {
   ai = new GoogleGenAI({
     apiKey: process.env.GEMINI_API_KEY,
     httpOptions: {
@@ -199,9 +209,12 @@ if (process.env.GEMINI_API_KEY) {
       }
     }
   });
+  log.info("[AI] Provider aktif: Gemini langsung (GEMINI_API_KEY).");
+} else {
+  log.warn("[AI] Tidak ada provider AI terkonfigurasi (OPENROUTER_API_KEY / GEMINI_API_KEY kosong) — semua endpoint AI akan fallback jujur.");
 }
 
-function getAiClient(req: any): GoogleGenAI | null {
+function getAiClient(req: any): any {
   // FIX-ALL P0-3b: previously accepted arbitrary `x-gemini-key` headers from
   // the client, which let any authenticated user inject their own (or a stolen)
   // Gemini API key and burn quota attributed to that key. Now we only ever use
@@ -4970,19 +4983,19 @@ try {
   log.info("[liveData] router not yet available:", e?.message || e);
 }
 
-// ─── AI Router (9router primary + Gemini fallback) ────────────────────
+// ─── AI Router (OpenRouter primary + Gemini fallback) ────────────────────
 try {
-  const { callAI, getAIProviderHealth, test9RouterConnection } = await import("./src/server/aiRouter");
+  const { callAI, getAIProviderHealth, testOpenRouterConnection } = await import("./src/server/aiRouter");
 
   // GET /api/ai/health — AI provider health status (public, for monitoring)
   app.get("/api/ai/health", (req, res) => {
     res.json({ success: true, health: getAIProviderHealth() });
   });
 
-  // POST /api/ai/test — test 9router connectivity (requireAuth)
+  // POST /api/ai/test — test OpenRouter connectivity (requireAuth)
   app.post("/api/ai/test", requireAuth, async (req: any, res) => {
-    const result = await test9RouterConnection();
-    res.json({ success: result.success, latencyMs: result.latencyMs, error: result.error });
+    const result = await testOpenRouterConnection();
+    res.json({ success: result.success, latencyMs: result.latencyMs, model: result.model, error: result.error });
   });
 
   // POST /api/ai/chat — generic AI chat with automatic fallback
@@ -5001,7 +5014,7 @@ try {
     res.json(result);
   });
 
-  log.info("[aiRouter] 9router + Gemini fallback endpoints mounted.");
+  log.info("[aiRouter] OpenRouter + Gemini fallback endpoints mounted.");
 } catch (e: any) {
   log.info("[aiRouter] not available:", e?.message || e);
 }

@@ -135,6 +135,22 @@ git add .github/ && git commit -m "ci: activate pipeline" && git push
 
 ---
 
+### 🧪 Ronde QA Runtime #6 (31 Ag — MIGRASI AI OPENROUTER + perbaikan bug auth)
+
+**Migrasi provider AI (permintaan operator):**
+- **9router DIHAPUS → OpenRouter** (`src/server/aiRouter.ts` ditulis ulang): 9router adalah proxy **lokal** (`localhost:20128`) yang butuh mesin/server 24/7 — tidak cocok untuk deployment cloud. OpenRouter (https://openrouter.ai) adalah agregator **cloud**: satu key `sk-or-v1-...` membuka 100+ model, tanpa infrastruktur lokal sama sekali.
+- **Rantai ketahanan 4 lapis**: model utama (`z-ai/glm-4.5-air` — murah, cepat, Bahasa Indonesia bagus) → model fallback (`meta-llama/llama-3.3-70b-instruct`, `google/gemma-3-27b-it`; semua teruji) → Gemini langsung (`GEMINI_API_KEY`) → fallback jujur berlabel. Model reasoning (GLM) dikunci `reasoning: {enabled: false}` agar token tidak habis untuk chain-of-thought.
+- **Adapter compat Gemini** (`createOpenRouterCompatClient()`): meniru bentuk `.models.generateContent()` SDK Google — seluruh 9 endpoint AI lama (`/api/gemini/analyze`, `news-sentiment`, `analyze-onchain`, `automated-analysis`, `trading-signals`, dll.) mendapat OpenRouter **tanpa mengubah satu baris pun di call-site** (risiko refactor nol).
+- **Keamanan key**: `OPENROUTER_API_KEY` hanya hidup di `.env` (gitignored); sanitasi error upstream (redaksi `Bearer`/`sk-or-v1-...` sebelum sampai ke klien, pola FIX-B-6); audit log `AI_CALL_OPENROUTER` per panggilan; header atribusi `HTTP-Referer` + `X-Title: ZAYTRIX`.
+- Endpoint `POST /api/ai/test` kini menguji OpenRouter dan melaporkan model yang sehat; `GET /api/ai/health` menampilkan health + fallback model.
+
+**1 bug nyata ditemukan via browser QA & diperbaiki:**
+- **QA6-1**: *Register dengan email yang sudah terdaftar → "ghost shell"* — server membalas 201 generik (anti-enumeration FIX-C-1, TANPA cookie sesi), tetapi AuthScreen tetap membuka app shell dengan user ter-redact → semua fetch auth 401 (dashboard kosong, chat gagal). → Kini UI mengarahkan ke tab LOGIN dengan email terisi + pesan generik yang sama (enumeration tetap mustahil).
+
+**Verifikasi ronde:** tsc 0 error · vitest 37/37 · smoke 15/15 (0 page error, 0 console error) · **AI LIVE terverifikasi end-to-end**: `/api/ai/test` OK (667ms), `/api/ai/chat` respons nyata provider `openrouter` (114 token, 1.4s), `/api/gemini/analyze` analisis markdown nyata (bukan fallback), `news-sentiment` JSON valid (BULLISH/85), **AI Market Chat di browser**: jawaban AI berbasis data pasar live (Fear&Greed 62/100, HEMI +38.97%, NFP −65.85%) + badge `• openrouter`; laporan `automated-analysis.json` kini berisi analisis OpenRouter NYATA setiap 10 menit. Teks UI lama "Google Gemini AI" dibersihkan menjadi provider-netral.
+
+---
+
 ## 🚀 Fitur Utama
 
 ### 🔒 Keamanan Enterprise
@@ -152,7 +168,7 @@ git add .github/ && git commit -m "ci: activate pipeline" && git push
 - Binance WS (likuidasi + ticker), Binance Futures (funding/OI/LSR), CoinGecko (rankings+7d+sparkline), Coinpaprika, Alternative.me (Fear&Greed), Mempool.space, Blockchain.info, Coinmetrics, Santiment, CFTC, Yahoo Finance (IDX), RSS news, open.er-api (kurs USD/IDR live)
 - **Badge transparansi**: `isStale` / `EST` / `OFFLINE` / `isSimulation` / `isFallback` tampil di UI kapan pun data tidak 100% live
 
-### 🖥️ On-Chain Terminal (9 tab) · 📊 Trading & Portfolio (Backtester, DCA, Tax PMK-68, Risk VaR/CVaR, Rebalancing, Correlation) · 🤖 AI (Gemini + 9router fallback) · 🔔 Price Alerts + Telegram/Discord/WhatsApp
+### 🖥️ On-Chain Terminal (9 tab) · 📊 Trading & Portfolio (Backtester, DCA, Tax PMK-68, Risk VaR/CVaR, Rebalancing, Correlation) · 🤖 AI (OpenRouter + Gemini fallback) · 🔔 Price Alerts + Telegram/Discord/WhatsApp
 
 ---
 
@@ -164,7 +180,7 @@ git add .github/ && git commit -m "ci: activate pipeline" && git push
 | Build produksi | ✅ `bun run build` → `dist/server.mjs` (ESM) |
 | Boot server | ✅ semua router mount, WS Binance connect, live sync |
 | Data fabrication | **0 tersisa** — semua sumber gagal → 503 + UI jujur |
-| AI (Gemini/9router) | Aktif jika `GEMINI_API_KEY`/`NINEROUTER_API_KEY` diisi; tanpa kunci → fallback berlabel, tanpa klaim palsu |
+| AI (OpenRouter) | Aktif jika `OPENROUTER_API_KEY` diisi — **cloud, tanpa server lokal** (migrasi dari 9router yang butuh mesin 24/7). Fallback otomatis: model cadangan → Gemini (`GEMINI_API_KEY`) → fallback berlabel jujur |
 | Email verifikasi/reset | Butuh SMTP; tanpa SMTP di dev → `EMAIL_DEV_MODE=true` mencetak token ke log server |
 | Google OAuth | Butuh `GOOGLE_CLIENT_ID/SECRET`; tanpa itu tombol menampilkan pesan ramah |
 | Test suite | **Self-booting (ronde QA #2)** — `bun run test` spawn server sendiri + `.env` sementara otomatis (37/37 PASS); override port via `ZAYTRIX_TEST_PORT` |
@@ -189,7 +205,7 @@ Database lama (`db/custom.db`) pernah ter-commit publik berisi email, hash bcryp
 - **Database**: Prisma ORM + SQLite (`db/custom.db`, tidak di-track)
 - **State**: Zustand + TanStack Query
 - **Auth**: JWT httpOnly + bcrypt + 2FA TOTP + WebAuthn + OAuth (CSRF enforced)
-- **AI**: Gemini 2.5-flash + 9router (OpenAI-compatible fallback)
+- **AI**: OpenRouter (`z-ai/glm-4.5-air` + fallback model `llama-3.3-70b` / `gemma-3-27b`) → Gemini 2.5-flash (fallback)
 - **Real-time**: Binance WebSocket
 - **DevOps**: Graceful shutdown, 30s timeout, upstream health checker, Sentry (PII scrubbed)
 

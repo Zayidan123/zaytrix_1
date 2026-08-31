@@ -783,7 +783,7 @@ export default function Settings() {
               <div className="p-5 rounded-xl border border-slate-800 bg-[#0A0F1D]/60 space-y-4">
                 <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
                   <Cpu className="w-4 h-4 text-amber-500 animate-pulse" />
-                  <h3 className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider">Parameter Model AI (Google Gemini 3.5 Flash)</h3>
+                  <h3 className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider">Parameter Model AI (OpenRouter · Gemini)</h3>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -812,7 +812,7 @@ export default function Settings() {
                   <div className="space-y-2 bg-slate-950/40 p-4 rounded-lg border border-slate-900">
                     <span className="text-xs font-bold text-slate-200 block">Mode Penalaran AI (Thinking)</span>
                     <p className="text-[10px] text-slate-500 leading-snug">
-                      Mengatur kedalaman berfikir analitik model Gemini 3.5 Flash terbaru.
+                      Mengatur kedalaman penalaran analitik (berlaku penuh saat provider Gemini aktif; mode OpenRouter dioptimalkan server).
                     </p>
                     <select
                       value={settings.aiThinkingMode || 'high'}

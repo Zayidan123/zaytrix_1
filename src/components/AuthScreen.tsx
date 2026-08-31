@@ -304,10 +304,20 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
 
     try {
       const result = await registerUser(email, password, displayName);
-      if (result.success && result.user) {
+      if (result.success && result.user && result.user.id) {
         addExecutionLog(`[SECURITY] Pendaftaran akun baru diverifikasi untuk: ${email}`);
         setSuccessMessage("Akun berhasil dibuat! Mengalihkan ke Dashboard ZAYTRIX...");
         onAuthSuccess(result.user);
+      } else if (result.success && result.user && result.user.id === null) {
+        // FIX (QA ronde 6): email sudah terdaftar → server membalas 201 generik
+        // (anti-enumeration, FIX-C-1) TANPA cookie sesi. Sebelumnya UI tetap
+        // membuka app shell dengan user ter-redact → semua fetch auth 401
+        // (ghost-anonymous shell, ditemukan browser QA). Sekarang: alihkan ke
+        // tab LOGIN + pesan generik yang sama (enumeration tetap mustahil).
+        addExecutionLog(`[SECURITY] Registrasi diproses — lanjutkan dengan login: ${email}`);
+        setSuccessMessage(result.message || "Silakan masuk dengan email dan kata sandi Anda untuk melanjutkan.");
+        setAuthMode("login");
+        setEmail(email);
       } else {
         setErrMessage(result.error || "Gagal memproses pendaftaran akun.");
       }

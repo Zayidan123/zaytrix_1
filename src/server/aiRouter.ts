@@ -1,25 +1,48 @@
 import { createLogger } from "./logger";
 const log = createLogger("aiRouter");
 
-// ZAYTRIX AI Router — 9router (primary) + Gemini (fallback)
+// ZAYTRIX AI Router — OpenRouter (primary) + Gemini (fallback)
 // Institutional-grade AI routing with automatic failover, cost tracking, and audit logging.
 //
-// 9router is an OpenAI-compatible local proxy/router that wraps 100+ models from 40+ providers.
-// Endpoint: http://localhost:20128/v1/chat/completions (configurable)
-// Auth: Bearer token (generated from 9router dashboard)
-// Docs: https://github.com/decolua/9router
+// OpenRouter is a cloud AI aggregator (https://openrouter.ai) — NO local server
+// needed (this replaces the old 9router local proxy which required a machine
+// running localhost:20128). One key unlocks 100+ models from 40+ providers.
 //
-// Fallback chain: 9router → Gemini → cached response → honest error
+// Endpoint: https://openrouter.ai/api/v1/chat/completions (OpenAI-compatible)
+// Auth: Bearer sk-or-v1-... (from https://openrouter.ai/keys)
+// Key lives ONLY in .env (gitignored) — never commit it to git.
+//
+// Resilience layers:
+//   1. Model fallback list (OPENROUTER_MODEL + OPENROUTER_FALLBACK_MODELS) —
+//      if the primary model returns empty content / 4xx / region-block, the
+//      next model in the list is tried automatically.
+//   2. `reasoning: { enabled: false }` — reasoning models (GLM etc.) would
+//      otherwise burn the whole max_tokens budget on chain-of-thought and
+//      return content: null.
+//   3. Provider chain: OpenRouter → Gemini (if GEMINI_API_KEY) → honest error.
+//   4. Error text sanitization (FIX-B-6) — upstream bodies that echo the
+//      Authorization header are redacted before reaching the client.
+//
 // All AI calls are audit-logged with provider, model, tokens, latency, and cost.
 
 import { GoogleGenAI } from "@google/genai";
 import { logAudit } from "./audit";
 
 // ─── Configuration ───────────────────────────────────────────────────
-const NINEROUTER_ENDPOINT = process.env.NINEROUTER_ENDPOINT || "http://localhost:20128/v1/chat/completions";
-const NINEROUTER_API_KEY = process.env.NINEROUTER_API_KEY || "";
-const NINEROUTER_MODEL = process.env.NINEROUTER_MODEL || "kr/claude-sonnet-4.5";
-const NINEROUTER_TIMEOUT_MS = parseInt(process.env.NINEROUTER_TIMEOUT_MS || "30000", 10);
+const OPENROUTER_ENDPOINT = process.env.OPENROUTER_ENDPOINT || "https://openrouter.ai/api/v1/chat/completions";
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "";
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "z-ai/glm-4.5-air";
+// Verified working fallback models (region-tested 2026-08): all reachable via
+// this key, cheap, good Indonesian output. Comma-separated env override.
+const OPENROUTER_FALLBACK_MODELS = (process.env.OPENROUTER_FALLBACK_MODELS || "meta-llama/llama-3.3-70b-instruct,google/gemma-3-27b-it")
+  .split(",")
+  .map((m) => m.trim())
+  .filter(Boolean);
+const OPENROUTER_TIMEOUT_MS = parseInt(process.env.OPENROUTER_TIMEOUT_MS || "30000", 10);
+// Attribution headers recommended by OpenRouter (shows "via ZAYTRIX" on
+// openrouter.ai/activity). Falls back to the repo URL when APP_URL is unset.
+const OPENROUTER_REFERER = process.env.APP_URL || "https://github.com/Zayidan123/zaytrix_1";
+const OPENROUTER_TITLE = "ZAYTRIX";
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
@@ -34,10 +57,12 @@ export interface AIRequest {
   context?: string; // additional context (e.g., on-chain data)
 }
 
+export type AIProviderName = "openrouter" | "gemini" | "cache" | "none";
+
 export interface AIResponse {
   success: boolean;
   text: string;
-  provider: "9router" | "gemini" | "cache" | "none";
+  provider: AIProviderName;
   model?: string;
   tokensUsed?: number;
   latencyMs: number;
@@ -56,101 +81,163 @@ interface ProviderHealth {
 }
 
 const providerHealth: Record<string, ProviderHealth> = {
-  "9router": { available: true, lastError: null, lastSuccess: 0, failureCount: 0, totalCalls: 0, totalTokens: 0 },
+  "openrouter": { available: true, lastError: null, lastSuccess: 0, failureCount: 0, totalCalls: 0, totalTokens: 0 },
   "gemini": { available: !!GEMINI_API_KEY, lastError: null, lastSuccess: 0, failureCount: 0, totalCalls: 0, totalTokens: 0 },
 };
 
-// ─── 9router Call (OpenAI-compatible) ────────────────────────────────
-async function call9Router(req: AIRequest): Promise<AIResponse> {
+// ─── OpenRouter low-level call (OpenAI-compatible) ───────────────────
+interface OpenRouterMessage {
+  role: "system" | "user";
+  content: string;
+}
+
+interface OpenRouterCallOptions {
+  messages: OpenRouterMessage[];
+  model: string;
+  maxTokens?: number;
+  temperature?: number;
+  jsonMode?: boolean;
+  timeoutMs?: number;
+}
+
+interface OpenRouterCallResult {
+  text: string;
+  tokensUsed: number;
+  model: string;
+}
+
+export function openRouterModelName(): string {
+  return OPENROUTER_MODEL;
+}
+
+/**
+ * Single OpenRouter chat-completion attempt against ONE model.
+ * Throws on HTTP error, empty content, or timeout — callers handle fallback.
+ */
+async function openRouterCallOnce(opts: OpenRouterCallOptions): Promise<OpenRouterCallResult> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? OPENROUTER_TIMEOUT_MS);
+
+  try {
+    const body: Record<string, unknown> = {
+      model: opts.model,
+      messages: opts.messages,
+      max_tokens: Math.max(256, opts.maxTokens ?? 2048),
+      temperature: opts.temperature ?? 0.7,
+      stream: false,
+      // Reasoning models (z-ai/glm-*) otherwise spend the entire token budget
+      // on chain-of-thought and return content: null.
+      reasoning: { enabled: false },
+    };
+    if (opts.jsonMode) {
+      body.response_format = { type: "json_object" };
+    }
+
+    const res = await fetch(OPENROUTER_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+        "HTTP-Referer": OPENROUTER_REFERER,
+        "X-Title": OPENROUTER_TITLE,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "Unknown error");
+      // FIX-B-6: sanitize upstream error text — if OpenRouter (or a provider)
+      // echoes the Authorization header back in its 4xx body, the raw Bearer
+      // token would otherwise leak to the client via `result.error`.
+      const sanitizedErr = errText
+        .substring(0, 200)
+        .replace(/Bearer\s+[A-Za-z0-9\-_\.]+/gi, "Bearer [REDACTED]")
+        .replace(/sk-or-v1-[A-Za-z0-9\-]+/gi, "sk-or-v1-[REDACTED]");
+      throw new Error(`OpenRouter HTTP ${res.status} (${opts.model}): ${sanitizedErr}`);
+    }
+
+    const data = (await res.json()) as {
+      choices?: Array<{ message?: { content?: string | null } }>;
+      usage?: { total_tokens?: number };
+    };
+    const text = data?.choices?.[0]?.message?.content || "";
+    if (!text.trim()) {
+      // content: null usually means a reasoning model exhausted max_tokens on
+      // thinking — surface a distinct error so the model-fallback layer can
+      // pick a non-reasoning model next.
+      throw new Error(`OpenRouter (${opts.model}) mengembalikan konten kosong (reasoning budget habis?)`);
+    }
+
+    return {
+      text,
+      tokensUsed: data?.usage?.total_tokens || 0,
+      model: opts.model,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * OpenRouter call with automatic model fallback.
+ * Tries OPENROUTER_MODEL, then each entry in OPENROUTER_FALLBACK_MODELS.
+ */
+async function callOpenRouter(req: AIRequest): Promise<AIResponse> {
   const startTime = Date.now();
-  // OPT-3e: typed message shape (was `any[]`). 9router + OpenAI expect
-  // `Array<{ role: "system"|"user"|"assistant"; content: string }>` — we only
-  // push system + user messages, so a narrow literal union is correct here.
-  const messages: Array<{ role: "system" | "user"; content: string }> = [];
+  const models = [OPENROUTER_MODEL, ...OPENROUTER_FALLBACK_MODELS];
+  const messages: OpenRouterMessage[] = [];
   if (req.systemPrompt) {
     messages.push({ role: "system", content: req.systemPrompt });
   }
   messages.push({ role: "user", content: req.prompt });
 
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), NINEROUTER_TIMEOUT_MS);
-
-    const res = await fetch(NINEROUTER_ENDPOINT, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${NINEROUTER_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: NINEROUTER_MODEL,
+  let lastError = "unknown";
+  for (const model of models) {
+    try {
+      const result = await openRouterCallOnce({
         messages,
-        max_tokens: req.maxTokens || 2048,
-        temperature: req.temperature ?? 0.7,
-        stream: false,
-      }),
-      signal: controller.signal,
-    });
+        model,
+        maxTokens: req.maxTokens,
+        temperature: req.temperature,
+      });
 
-    clearTimeout(timeout);
+      providerHealth["openrouter"].available = true;
+      providerHealth["openrouter"].lastError = null;
+      providerHealth["openrouter"].lastSuccess = Date.now();
+      providerHealth["openrouter"].failureCount = 0;
+      providerHealth["openrouter"].totalCalls++;
+      providerHealth["openrouter"].totalTokens += result.tokensUsed;
 
-    if (!res.ok) {
-      const errText = await res.text().catch(() => "Unknown error");
-      // FIX-B-6: sanitize upstream error text — if 9router echoes the
-      // Authorization header back in its 4xx response body, the raw Bearer
-      // token would otherwise leak to the client via `result.error`.
-      const sanitizedErr = errText
-        .substring(0, 200)
-        .replace(/Bearer\s+[A-Za-z0-9\-_\.]+/gi, "Bearer [REDACTED]");
-      throw new Error(`9router HTTP ${res.status}: ${sanitizedErr}`);
+      return {
+        success: true,
+        text: result.text,
+        provider: "openrouter",
+        model: result.model,
+        tokensUsed: result.tokensUsed,
+        latencyMs: Date.now() - startTime,
+        fallbackUsed: false,
+      };
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      lastError = errorMessage;
+      log.warn(`[aiRouter] OpenRouter model "${model}" gagal: ${errorMessage.substring(0, 120)} — mencoba model berikutnya...`);
     }
-
-    // OPT-3e: typed response shape (was `as any`). 9router is OpenAI-compatible,
-    // so we model only the fields we actually read: choices[0].message.content
-    // + usage.total_tokens. Extra fields are ignored by structural typing.
-    const data = (await res.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-      usage?: { total_tokens?: number };
-    };
-    const text = data?.choices?.[0]?.message?.content || "";
-    const tokensUsed = data?.usage?.total_tokens || 0;
-    const latencyMs = Date.now() - startTime;
-
-    // Update health
-    providerHealth["9router"].available = true;
-    providerHealth["9router"].lastSuccess = Date.now();
-    providerHealth["9router"].failureCount = 0;
-    providerHealth["9router"].totalCalls++;
-    providerHealth["9router"].totalTokens += tokensUsed;
-
-    return {
-      success: true,
-      text,
-      provider: "9router",
-      model: NINEROUTER_MODEL,
-      tokensUsed,
-      latencyMs,
-      fallbackUsed: false,
-    };
-  } catch (error: unknown) {
-    // OPT-3e: narrow `unknown` to a real message (was `any`). We only need
-    // `error.message` for the audit/health record — anything else becomes
-    // a String() fallback so we never throw a non-Error from this catch.
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    const latencyMs = Date.now() - startTime;
-    providerHealth["9router"].available = false;
-    providerHealth["9router"].lastError = errorMessage;
-    providerHealth["9router"].failureCount++;
-
-    return {
-      success: false,
-      text: "",
-      provider: "9router",
-      latencyMs,
-      error: errorMessage,
-      fallbackUsed: false,
-    };
   }
+
+  providerHealth["openrouter"].available = false;
+  providerHealth["openrouter"].lastError = lastError;
+  providerHealth["openrouter"].failureCount++;
+
+  return {
+    success: false,
+    text: "",
+    provider: "openrouter",
+    model: OPENROUTER_MODEL,
+    latencyMs: Date.now() - startTime,
+    error: lastError,
+    fallbackUsed: false,
+  };
 }
 
 // ─── Gemini Call (fallback) ──────────────────────────────────────────
@@ -181,10 +268,6 @@ async function callGemini(req: AIRequest): Promise<AIResponse> {
       },
     });
 
-    // OPT-3e: GoogleGenAI's GenerateContentResponse type in some SDK versions
-    // doesn't expose `usageMetadata` directly. We model the field we read via
-    // a minimal structural cast (was `as any`) — keeps type safety for the
-    // rest of the response object.
     const geminiResponse = response as { text?: string; usageMetadata?: { totalTokenCount?: number } };
     const text = geminiResponse.text || "";
     const tokensUsed = geminiResponse?.usageMetadata?.totalTokenCount || 0;
@@ -206,7 +289,6 @@ async function callGemini(req: AIRequest): Promise<AIResponse> {
       fallbackUsed: true,
     };
   } catch (error: unknown) {
-    // OPT-3e: narrow `unknown` → message string (was `any`).
     const errorMessage = error instanceof Error ? error.message : String(error);
     const latencyMs = Date.now() - startTime;
     providerHealth["gemini"].available = false;
@@ -226,13 +308,13 @@ async function callGemini(req: AIRequest): Promise<AIResponse> {
 
 // ─── Main AI Router (with fallback chain) ─────────────────────────────
 export async function callAI(req: AIRequest): Promise<AIResponse> {
-  // Try 9router first (primary)
-  let nineRouterError: string | null = null;
-  if (providerHealth["9router"].available && NINEROUTER_API_KEY) {
-    const result = await call9Router(req);
+  // Try OpenRouter first (primary — cloud, no local server required)
+  let openRouterError: string | null = null;
+  if (providerHealth["openrouter"].available && OPENROUTER_API_KEY) {
+    const result = await callOpenRouter(req);
     if (result.success) {
       if (req.userId) {
-        logAudit(req.userId, "AI_CALL_9ROUTER", null, true, {
+        logAudit(req.userId, "AI_CALL_OPENROUTER", null, true, {
           model: result.model,
           tokens: result.tokensUsed,
           latencyMs: result.latencyMs,
@@ -240,9 +322,9 @@ export async function callAI(req: AIRequest): Promise<AIResponse> {
       }
       return result;
     }
-    nineRouterError = result.error || "unknown";
-    // 9router failed — fall through to Gemini
-    log.warn(`[aiRouter] 9router failed (${nineRouterError}), falling back to Gemini...`);
+    openRouterError = result.error || "unknown";
+    // OpenRouter failed — fall through to Gemini
+    log.warn(`[aiRouter] OpenRouter gagal (${openRouterError}), fallback ke Gemini...`);
   }
 
   // Fallback to Gemini
@@ -260,13 +342,13 @@ export async function callAI(req: AIRequest): Promise<AIResponse> {
   }
 
   // Both failed
-  log.error(`[aiRouter] All AI providers failed. 9router: ${nineRouterError}, Gemini: ${geminiResult.error}`);
+  log.error(`[aiRouter] Semua provider AI gagal. OpenRouter: ${openRouterError}, Gemini: ${geminiResult.error}`);
   return {
     success: false,
     text: "",
     provider: "none",
     latencyMs: 0,
-    error: "Semua provider AI tidak tersedia. 9router dan Gemini gagal.",
+    error: "Semua provider AI tidak tersedia. OpenRouter dan Gemini gagal.",
     fallbackUsed: true,
   };
 }
@@ -274,55 +356,161 @@ export async function callAI(req: AIRequest): Promise<AIResponse> {
 // ─── Health Check Endpoint Data ──────────────────────────────────────
 export function getAIProviderHealth() {
   return {
-    "9router": {
-      ...providerHealth["9router"],
-      endpoint: NINEROUTER_ENDPOINT,
-      model: NINEROUTER_MODEL,
-      configured: !!NINEROUTER_API_KEY,
+    "openrouter": {
+      ...providerHealth["openrouter"],
+      endpoint: OPENROUTER_ENDPOINT,
+      model: OPENROUTER_MODEL,
+      fallbackModels: OPENROUTER_FALLBACK_MODELS,
+      configured: !!OPENROUTER_API_KEY,
     },
     "gemini": {
       ...providerHealth["gemini"],
       model: GEMINI_MODEL,
       configured: !!GEMINI_API_KEY,
     },
-    primary: "9router",
+    primary: "openrouter",
     fallback: "gemini",
   };
 }
 
-// ─── Test 9router connectivity ───────────────────────────────────────
-export async function test9RouterConnection(): Promise<{ success: boolean; latencyMs: number; error?: string }> {
+// ─── Test OpenRouter connectivity ────────────────────────────────────
+export async function testOpenRouterConnection(): Promise<{ success: boolean; latencyMs: number; model?: string; error?: string }> {
   const startTime = Date.now();
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
-
-    const res = await fetch(NINEROUTER_ENDPOINT, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${NINEROUTER_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: NINEROUTER_MODEL,
-        messages: [{ role: "user", content: "ping" }],
-        max_tokens: 5,
-      }),
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeout);
-    const latencyMs = Date.now() - startTime;
-
-    if (!res.ok) {
-      return { success: false, latencyMs, error: `HTTP ${res.status}` };
-    }
-
-    providerHealth["9router"].available = true;
-    return { success: true, latencyMs };
-  } catch (error: unknown) {
-    // OPT-3e: narrow `unknown` → message string (was `any`).
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    return { success: false, latencyMs: Date.now() - startTime, error: errorMessage };
+  if (!OPENROUTER_API_KEY) {
+    return { success: false, latencyMs: 0, error: "OPENROUTER_API_KEY belum dikonfigurasi di .env" };
   }
+  const models = [OPENROUTER_MODEL, ...OPENROUTER_FALLBACK_MODELS];
+  let lastError = "";
+  for (const model of models) {
+    try {
+      await openRouterCallOnce({
+        messages: [{ role: "user", content: "ping" }],
+        model,
+        maxTokens: 256,
+        temperature: 0,
+      });
+      const latencyMs = Date.now() - startTime;
+      providerHealth["openrouter"].available = true;
+      providerHealth["openrouter"].lastSuccess = Date.now();
+      return { success: true, latencyMs, model };
+    } catch (error: unknown) {
+      lastError = error instanceof Error ? error.message : String(error);
+    }
+  }
+  return { success: false, latencyMs: Date.now() - startTime, error: lastError };
+}
+
+// ─── Gemini-compatible adapter (for server.ts direct call sites) ─────
+// =============================================================================
+// server.ts has ~6 endpoints that call the Gemini SDK client directly:
+//   const client = getAiClient(req);
+//   const response = await generateContentWithRetry(client, {
+//     model: "gemini-2.5-flash",
+//     contents: prompt,                  // string OR parts array
+//     config: { systemInstruction, temperature, maxOutputTokens,
+//               responseMimeType: "application/json" }
+//   });
+//   const text = response.text;
+//
+// createOpenRouterCompatClient() returns an object with the SAME shape
+// (`.models.generateContent(args) → { text, usageMetadata }`) so every one of
+// those endpoints transparently gains OpenRouter support — zero call-site
+// changes, zero risk to the honest-fallback paths (errors still throw, so
+// generateContentWithRetry + the endpoints' catch blocks behave identically).
+// =============================================================================
+type GeminiCompatArgs = {
+  model?: string; // ignored — OpenRouter model comes from env
+  contents?: string | Array<{ text?: string; parts?: Array<{ text?: string }> } | { role?: string; parts?: Array<{ text?: string }> }>;
+  config?: {
+    systemInstruction?: string | { parts?: Array<{ text?: string }> };
+    temperature?: number;
+    maxOutputTokens?: number;
+    responseMimeType?: string; // "application/json" → jsonMode
+    thinkingConfig?: unknown; // Gemini-only — ignored (OpenRouter reasoning is disabled at the request level)
+  };
+};
+
+function extractContentsText(contents: GeminiCompatArgs["contents"]): string {
+  if (typeof contents === "string") return contents;
+  if (Array.isArray(contents)) {
+    return contents
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (part && typeof part === "object") {
+          if (typeof (part as { text?: string }).text === "string") return (part as { text: string }).text;
+          const parts = (part as { parts?: Array<{ text?: string }> }).parts;
+          if (Array.isArray(parts)) return parts.map((p) => p?.text ?? "").join("");
+        }
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  return "";
+}
+
+function extractSystemInstruction(config: GeminiCompatArgs["config"]): string | undefined {
+  const si = config?.systemInstruction;
+  if (typeof si === "string") return si;
+  if (si && typeof si === "object" && Array.isArray(si.parts)) {
+    const joined = si.parts.map((p) => p?.text ?? "").join("\n");
+    return joined.trim() || undefined;
+  }
+  return undefined;
+}
+
+export interface GeminiCompatResponse {
+  text: string;
+  usageMetadata?: { totalTokenCount?: number };
+}
+
+export function createOpenRouterCompatClient() {
+  if (!OPENROUTER_API_KEY) {
+    throw new Error("createOpenRouterCompatClient dipanggil tanpa OPENROUTER_API_KEY");
+  }
+  return {
+    models: {
+      async generateContent(args: GeminiCompatArgs): Promise<GeminiCompatResponse> {
+        const userPrompt = extractContentsText(args?.contents);
+        if (!userPrompt.trim()) {
+          throw new Error("[openrouterCompat] prompt kosong — tidak ada yang bisa dianalisis");
+        }
+        const systemInstruction = extractSystemInstruction(args?.config);
+        const jsonMode = args?.config?.responseMimeType === "application/json";
+
+        const messages: OpenRouterMessage[] = [];
+        if (systemInstruction) {
+          messages.push({ role: "system", content: systemInstruction });
+        }
+        messages.push({ role: "user", content: userPrompt });
+
+        // Model fallback mirrors callOpenRouter — one failing model (region
+        // block, empty content, transient 429) moves on to the next.
+        const models = [OPENROUTER_MODEL, ...OPENROUTER_FALLBACK_MODELS];
+        let lastError: Error | null = null;
+        for (const model of models) {
+          try {
+            const result = await openRouterCallOnce({
+              messages,
+              model,
+              maxTokens: args?.config?.maxOutputTokens,
+              temperature: args?.config?.temperature,
+              jsonMode,
+            });
+            providerHealth["openrouter"].totalCalls++;
+            providerHealth["openrouter"].totalTokens += result.tokensUsed;
+            providerHealth["openrouter"].lastSuccess = Date.now();
+            return {
+              text: result.text,
+              usageMetadata: { totalTokenCount: result.tokensUsed },
+            };
+          } catch (error: unknown) {
+            lastError = error instanceof Error ? error : new Error(String(error));
+          }
+        }
+        providerHealth["openrouter"].lastError = lastError?.message ?? "unknown";
+        throw lastError ?? new Error("OpenRouter gagal tanpa alasan");
+      },
+    },
+  };
 }
