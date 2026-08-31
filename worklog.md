@@ -3062,3 +3062,26 @@ Stage Summary:
 - 26/37 tests pass (11 fail due to sandbox server persistence, not code bugs)
 - App verified: register → dashboard with live data (BTC $62,185 +0.5%), NaN gone, no errors
 - PostCSS error permanently fixed (gitignored)
+
+---
+Task ID: QA-round-6
+Agent: main-orchestrator (lanjutan kampanye)
+Task: Migrasi AI 9router → OpenRouter (permintaan operator) + purge SEC-1 + QA browser
+
+Work Log:
+- Operator melaporkan: AI sulit dipakai karena 9router butuh server lokal (localhost:20128) yang tidak dimiliki; minta ganti OpenRouter dengan key yang diberikan (key disimpan HANYA di .env gitignored — diverifikasi TIDAK PERNAH masuk git history/blob manapun).
+- Uji key via curl: valid, tier gratis; openai/anthropic/google-gemini model region-blocked (403); model yang bekerja: z-ai/glm-4.5-air, meta-llama/llama-3.3-70b-instruct, google/gemma-3-27b-it, amazon/nova-micro-v1.
+- src/server/aiRouter.ts DITULIS ULANG: OpenRouter primary (fallback model chain + reasoning disabled + jsonMode + timeout + sanitasi error + atribusi header) → Gemini fallback → error jujur. test9RouterConnection → testOpenRouterConnection.
+- createOpenRouterCompatClient() adapter bentuk .models.generateContent() → seluruh 9 endpoint Gemini langsung di server.ts melayani via OpenRouter TANPA perubahan call-site.
+- server.ts: init AI OpenRouter-first; /api/ai/test menguji OpenRouter + melaporkan model sehat.
+- .env.example: blok NINEROUTER_* diganti OPENROUTER_* (API_KEY/MODEL/FALLBACK_MODELS/TIMEOUT_MS) + dokumentasi.
+- QA browser menemukan QA6-1 register-existing-email ghost shell (server 201 anti-enumeration tanpa session, AuthScreen tetap buka shell → semua fetch 401) → FIX: alihkan ke tab LOGIN + email terisi + pesan generik sama.
+- Teks UI "Google Gemini AI" dibersihkan jadi provider-netral (AiSignals, Settings, Dashboard, MarketSentimentChat).
+- Styling: badge provider chat berwarna (openrouter=emerald ⚡+nama model, gemini=sky ✦, lainnya slate) + tooltip model.
+- SEC-1 SELESAI: git filter-repo purge db/ + .env dari SELURUH history (40 commit ditulis ulang, .git dibackup ke /tmp/zaytrix-git-backup), verifikasi 0 blob db/.env + 0 secret string, remote dipasang ulang, force-push 81bc10a sukses.
+- Verifikasi lengkap: tsc 0 error · vitest 37/37 · smoke 15/15 (0 page/console error) · AI LIVE: /api/ai/test 667ms, /api/ai/chat provider openrouter (114 tok, 1.4s), /api/gemini/analyze analisis nyata, news-sentiment JSON BULLISH/85, AI Market Chat browser: jawaban berbasis data live (F&G 62/100, HEMI +38.97%) + badge ⚡ openrouter · glm-4.5-air, automated-analysis.json kini berisi analisis OpenRouter nyata per 10 menit.
+
+Stage Summary:
+- Fitur AI 100% hidup tanpa infrastruktur lokal (cloud OpenRouter).
+- History git dibersihkan dari db/custom.db (PII 102 email) + .env placeholder; GitHub pada commit 81bc10a.
+- Sisa risiko: GitHub menyimpan blob lama di reflog internal ~90 hari (hubungi GitHub Support untuk GC dini); rotasi password user DB lama + 3 secret .env tetap jadi tanggung jawab operator; key OpenRouter jangan pernah di-commit (sudah di .env gitignored, contoh .env.example berisi placeholder kosong).

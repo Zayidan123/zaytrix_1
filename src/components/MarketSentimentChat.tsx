@@ -39,6 +39,7 @@ interface ChatMessage {
   content: string;
   timestamp: number;
   provider?: string;
+  model?: string;
   isFallback?: boolean;
   error?: boolean;
 }
@@ -219,6 +220,7 @@ ATURAN JAWABAN:
           content: data.text || data.response || "Tidak ada respons dari AI.",
           timestamp: Date.now(),
           provider: data.provider || "unknown",
+          model: data.model || undefined,
           isFallback: data.fallbackUsed,
         };
         setMessages((prev) => [...prev, assistantMsg]);
@@ -402,8 +404,19 @@ ATURAN JAWABAN:
                     })}
                   </span>
                   {msg.provider && msg.provider !== "unknown" && (
-                    <span className="text-[8px] text-slate-500 font-mono">
-                      • {msg.provider}
+                    <span
+                      className={
+                        "text-[8px] font-mono px-1.5 py-0.5 rounded border flex items-center gap-0.5 " +
+                        (msg.provider === "openrouter"
+                          ? "text-emerald-300 bg-emerald-500/10 border-emerald-500/25"
+                          : msg.provider === "gemini"
+                            ? "text-sky-300 bg-sky-500/10 border-sky-500/25"
+                            : "text-slate-400 bg-slate-500/10 border-slate-600/30")
+                      }
+                      title={`Penyedia AI: ${msg.provider}${msg.model ? ` · model ${msg.model}` : ""}`}
+                    >
+                      {msg.provider === "openrouter" ? "⚡" : msg.provider === "gemini" ? "✦" : "•"} {msg.provider}
+                      {msg.model ? ` · ${msg.model.split("/").pop()}` : ""}
                     </span>
                   )}
                   {msg.isFallback && (
