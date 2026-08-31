@@ -1769,5 +1769,96 @@ liveDataRouter.get("/api/live/dominance-history", async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// 15. GET /api/live/whale-trades?symbols=BTC,ETH&minUsd=250000&limit=50
+//     Source: src/server/whaleStream.ts — a PERSISTENT Binance spot aggTrade
+//     WebSocket that aggregates REAL large fills into a rolling buffer
+//     (30-minute window, deduped, boot-time REST backfill). QA5-F1: replaces
+//     the purely deterministic `whaleTransactions24h` estimate with a REAL
+//     feed. This endpoint is a read-only projection of that buffer.
+//     Honesty contract:
+//       - success:true  + isEstimated:false → REAL Binance fills.
+//       - Empty-but-connected buffer → success:true, trades:[] (whales are
+//         rare; "menunggu whale berikutnya" is a live state, not an error).
+//       - WS disconnected → success:false + last REAL snapshot still served
+//         via streamConnected:false (UI shows the stale banner).
+// ---------------------------------------------------------------------------
+import { getWhaleSnapshot, getWhaleStreamStatus } from "./whaleStream";
+
+liveDataRouter.get("/api/live/whale-trades", async (req, res) => {
+  // FIX-B-4 style hardening: never interpolate raw query params into
+  // upstream URLs. Symbols are matched against the stream's whitelist,
+  // minUsd is clamped to the captured floor (50K) and the row limit is
+  // capped server-side.
+  const rawSymbols = typeof req.query.symbols === "string" ? req.query.symbols.split(",") : [];
+  const symbols = rawSymbols
+    .map((s) => (typeof s === "string" ? s.toUpperCase().trim() : ""))
+    .filter((s) => ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA"].includes(s))
+    .slice(0, 5);
+  const symbolList = symbols.length > 0 ? symbols : ["BTC", "ETH", "SOL"];
+
+  const minUsd = Math.min(Math.max(parseInt(String(req.query.minUsd || "250000"), 10) || 250000, 50_000), 5_000_000);
+  const limit = Math.min(Math.max(parseInt(String(req.query.limit || "50"), 10) || 50, 10), 100);
+
+  const status = getWhaleStreamStatus();
+  const trades = getWhaleSnapshot(symbolList, minUsd, limit);
+  const buyWhales = trades.filter((t) => t.side === "BUY");
+  const sellWhales = trades.filter((t) => t.side === "SELL");
+
+  const base = {
+    trades,
+    symbols: symbolList,
+    minUsd,
+    stream: {
+      connected: status.connected,
+      bufferedCount: status.bufferedCount,
+      capturedCount: status.capturedCount,
+      receivedCount: status.receivedCount,
+      lastMessageAt: status.lastMessageAt,
+      minCaptureUsd: status.minCaptureUsd,
+      windowMinutes: 30,
+    },
+    source: status.connected ? "binance-spot-ws-live" : "binance-spot-ws-stale",
+    lastUpdated: new Date().toISOString(),
+  };
+
+  if (trades.length > 0) {
+    return res.json({
+      ...base,
+      success: true,
+      isEstimated: false,
+      stats: {
+        count: trades.length,
+        buyCount: buyWhales.length,
+        sellCount: sellWhales.length,
+        buyNotionalUsd: Math.round(buyWhales.reduce((s, t) => s + t.notionalUsd, 0)),
+        sellNotionalUsd: Math.round(sellWhales.reduce((s, t) => s + t.notionalUsd, 0)),
+        largestUsd: Math.round(trades[0]?.notionalUsd || 0),
+      },
+    });
+  }
+
+  // Empty result — distinguish the three honest states:
+  if (status.connected) {
+    // Stream live, buffer may simply not have a whale ≥ minUsd for these
+    // symbols yet, or the requested symbols have nothing in the 30-min window.
+    return res.json({
+      ...base,
+      success: true,
+      isEstimated: false,
+      stats: null,
+      info: `Stream live tersambung — belum ada transaksi ≥ $${minUsd.toLocaleString("en-US")} untuk simbol terpilih dalam jendela 30 menit (buffer: ${status.bufferedCount} transaksi ≥$50K). Whale memang jarang; menunggu whale berikutnya.`,
+    });
+  }
+  return res.json({
+    ...base,
+    success: false,
+    isEstimated: true,
+    stats: null,
+    error:
+      "Stream transaksi Binance sedang terputus dari server ini. Tidak ada data whale yang bisa ditampilkan secara jujur (tidak ada data palsu).",
+  });
+});
+
 // Default export for clarity — server.ts reads `liveDataRouter` named export.
 export default liveDataRouter;

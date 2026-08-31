@@ -32,7 +32,9 @@ import {
   Skull,
   BarChart,
   GitCommit,
-  Coins
+  Coins,
+  Radar,
+  Fish
 } from "lucide-react";
 import { 
   ResponsiveContainer, 
@@ -109,7 +111,7 @@ export interface OnChainTx {
   sizeBytes: number;
 }
 
-type TabType = "derivatives" | "liquidations" | "volume" | "funding" | "orderbook" | "onchain" | "macro" | "tokenterminal" | "ai_analysis";
+type TabType = "derivatives" | "liquidations" | "volume" | "funding" | "orderbook" | "onchain" | "macro" | "tokenterminal" | "whale-feed" | "ai_analysis";
 
 export default function OnChainData() {
   const [activeTab, setActiveTab] = useState<TabType>("derivatives");
@@ -225,6 +227,17 @@ export default function OnChainData() {
   const [liveEtfFlows, setLiveEtfFlows] = useState<any[]>([]);
   // Live CME Open Interest (REAL from CFTC CoT weekly report). history:[{date,isoDate,openInterest,openInterestBtc,dealerLong,...}]
   const [liveCmeOi, setLiveCmeOi] = useState<any[]>([]);
+
+  // === QA5-F1 WHALE RADAR (REAL Binance spot aggTrades — /api/live/whale-trades) ===
+  // Whale feed shape: {success, isEstimated, trades:[{symbol,tradeId,price,qty,
+  // notionalUsd,side,time,exchange}], stats:{count,buyCount,sellCount,
+  // buyNotionalUsd,sellNotionalUsd,largestUsd}, source, fetchedSymbols, lastUpdated}.
+  const [whaleFeed, setWhaleFeed] = useState<any>(null);
+  const [whaleLoading, setWhaleLoading] = useState<boolean>(false);
+  const [whaleError, setWhaleError] = useState<string>("");
+  const [whaleMinUsd, setWhaleMinUsd] = useState<number>(100000);
+  const [whaleSymbols, setWhaleSymbols] = useState<string[]>(["BTC", "ETH", "SOL"]);
+  const [whaleLastFetched, setWhaleLastFetched] = useState<string>("");
 
   const selectedPrice = useMemo(() => {
     if (selectedAiSymbol === "BTC") return livePriceBtc;
@@ -1034,6 +1047,47 @@ export default function OnChainData() {
     return () => clearInterval(interval);
   }, []);
 
+  // === QA5-F1 Whale Radar fetch — REAL Binance spot aggTrades ===
+  // Polls every 30s ONLY while the Whale Radar tab is active (the endpoint is
+  // cached 45s server-side; polling only-when-visible conserves the shared
+  // /api/live rate-limit budget of 120 req/min). Honesty contract: success=true
+  // renders real trades; success=false renders the honest degraded state
+  // (emptyWindow vs unreachable) — never fabricated rows.
+  useEffect(() => {
+    if (activeTab !== "whale-feed") return;
+    let cancelled = false;
+    const fetchWhales = async () => {
+      if (cancelled) return;
+      setWhaleLoading(true);
+      try {
+        const url = `/api/live/whale-trades?symbols=${whaleSymbols.join(",")}&minUsd=${whaleMinUsd}&limit=50`;
+        const r = await fetch(url);
+        const json = await r.json();
+        if (cancelled) return;
+        if (json?.success && Array.isArray(json.trades)) {
+          setWhaleFeed(json);
+          setWhaleError("");
+        } else {
+          // Keep the last REAL snapshot visible (stale-but-real beats blank)
+          // and record the honest reason for the failure.
+          setWhaleError(json?.error || "Whale feed tidak tersedia saat ini.");
+        }
+        setWhaleLastFetched(json?.lastUpdated || new Date().toISOString());
+      } catch (e: any) {
+        if (!cancelled) setWhaleError(e?.message || "Gagal menghubungi server whale feed.");
+      } finally {
+        if (!cancelled) setWhaleLoading(false);
+      }
+    };
+    fetchWhales();
+    const interval = setInterval(fetchWhales, 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+    // Re-fetch when the operator changes filters, not just on tab entry.
+  }, [activeTab, whaleSymbols, whaleMinUsd]);
+
   // Tabs layout configurations
   const tabs = [
     { id: "derivatives", name: "Derivatif & OI", icon: Activity, count: 6 },
@@ -1042,6 +1096,7 @@ export default function OnChainData() {
     { id: "funding", name: "Settlement Funding", icon: Coins, count: 3 },
     { id: "orderbook", name: "Orderbook Depth", icon: Layers, count: 3 },
     { id: "onchain", name: "Arus On-Chain", icon: Wallet, count: 11 },
+    { id: "whale-feed", name: "Whale Radar", icon: Radar, count: 50, highlight: true },
     { id: "macro", name: "Valuasi & Makro", icon: Compass, count: 16 },
     { id: "tokenterminal", name: "Token Terminal", icon: BarChart, count: 35 },
     { id: "ai_analysis", name: "Analisis AI", icon: Sparkles, count: 4, highlight: true }
@@ -2947,6 +3002,289 @@ export default function OnChainData() {
         {activeTab === "tokenterminal" && (
           <TokenTerminalExplorer />
         )}
+
+        {/* =========================================================================
+            TAB 8.5: WHALE RADAR — REAL Binance spot aggTrades (QA5-F1)
+            Every row is a REAL aggregated trade from Binance's public order
+            flow, filtered by USD notional. NO estimates, NO fabrication —
+            when upstream is unreachable we degrade honestly (banner + reason).
+            ========================================================================= */}
+        {activeTab === "whale-feed" && (
+          <div id="tab-whale-feed" className="space-y-5 animate-fadeIn text-slate-200">
+            {/* Header — live status + provenance */}
+            <div className="bg-slate-900/60 border border-emerald-500/20 rounded-xl p-4 shadow-md flex flex-col md:flex-row md:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="relative flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-500/10 border border-emerald-500/30">
+                  <Radar className="w-5 h-5 text-emerald-400" />
+                  <span className="absolute -top-0.5 -right-0.5 flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
+                  <span className="absolute -top-0.5 -right-0.5 flex h-2.5 w-2.5 rounded-full bg-emerald-500 animate-ping" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    Whale Radar — Transaksi Besar Live
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 tracking-wider">
+                      100% REAL
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Aliran order spot Binance — agregat fill terbaru, disaring menurut nominal USD.
+                    Polling 30 detik (cache server 45 dtk).
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 text-[11px] text-slate-500">
+                <span className="px-2 py-1 rounded-md bg-slate-950/60 border border-slate-800 font-mono">
+                  src: {whaleFeed?.source || "—"}
+                </span>
+                <span className="px-2 py-1 rounded-md bg-slate-950/60 border border-slate-800 font-mono">
+                  upd: {whaleLastFetched ? new Date(whaleLastFetched).toLocaleTimeString("id-ID") : "—"}
+                </span>
+                <span
+                  className={`px-2 py-1 rounded-md font-mono border flex items-center gap-1.5 ${
+                    whaleFeed?.stream?.connected
+                      ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                      : "bg-amber-500/10 border-amber-500/30 text-amber-300"
+                  }`}
+                  title={whaleFeed?.stream?.connected ? "WebSocket Binance aggTrade tersambung — buffer real-time" : "Stream terputus — snapshot real terakhir (bukan data palsu)"}
+                >
+                  <span className={`inline-block w-1.5 h-1.5 rounded-full ${whaleFeed?.stream?.connected ? "bg-emerald-400 animate-pulse" : "bg-amber-400"}`} />
+                  {whaleFeed?.stream?.connected ? "WS LIVE" : "WS PUTUS"}
+                </span>
+                <button
+                  onClick={() => {
+                    fetch(`/api/live/whale-trades?symbols=${whaleSymbols.join(",")}&minUsd=${whaleMinUsd}&limit=50`)
+                      .then((r) => r.json())
+                      .then((json) => {
+                        if (json?.success) {
+                          setWhaleFeed(json);
+                          setWhaleError("");
+                        } else {
+                          setWhaleError(json?.error || "Whale feed tidak tersedia.");
+                        }
+                        setWhaleLastFetched(json?.lastUpdated || new Date().toISOString());
+                      })
+                      .catch((e) => setWhaleError(e?.message || "Gagal memuat ulang."));
+                  }}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-800/60 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-white transition-colors"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${whaleLoading ? "animate-spin" : ""}`} />
+                  Muat Ulang
+                </button>
+              </div>
+            </div>
+
+            {/* Honest degraded banner — only when the last fetch failed.
+                If we still have a stale-but-real snapshot, it stays visible below. */}
+            {whaleError && (
+              <div className="border border-amber-500/30 bg-amber-500/5 rounded-xl p-3 flex items-start gap-3">
+                <ShieldAlert className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
+                <div className="text-xs text-amber-200/90 leading-relaxed">
+                  <span className="font-semibold">Sumber live tidak tersedia saat ini.</span>{" "}
+                  {whaleError}
+                  {whaleFeed && (
+                    <span className="block mt-1 text-amber-300/70">
+                      Snapshot real terakhir tetap ditampilkan di bawah (bukan data palsu).
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Stats — real aggregates of the current feed window */}
+            {whaleFeed?.stats && (
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5">
+                  <span className="text-slate-500 text-[10px] uppercase tracking-wider">Whale Terdeteksi</span>
+                  <p className="font-mono font-bold text-white text-xl mt-1">{whaleFeed.stats.count}</p>
+                  <p className="text-[10px] text-slate-500 mt-0.5">{whaleFeed.fetchedSymbols} simbol diambil</p>
+                </div>
+                <div className="bg-slate-900 border border-emerald-500/20 rounded-xl p-3.5">
+                  <span className="text-slate-500 text-[10px] uppercase tracking-wider">Tekanan BELI</span>
+                  <p className="font-mono font-bold text-emerald-400 text-xl mt-1">{formatUsd(whaleFeed.stats.buyNotionalUsd, true)}</p>
+                  <p className="text-[10px] text-slate-500 mt-0.5">{whaleFeed.stats.buyCount} transaksi beli</p>
+                </div>
+                <div className="bg-slate-900 border border-rose-500/20 rounded-xl p-3.5">
+                  <span className="text-slate-500 text-[10px] uppercase tracking-wider">Tekanan JUAL</span>
+                  <p className="font-mono font-bold text-rose-400 text-xl mt-1">{formatUsd(whaleFeed.stats.sellNotionalUsd, true)}</p>
+                  <p className="text-[10px] text-slate-500 mt-0.5">{whaleFeed.stats.sellCount} transaksi jual</p>
+                </div>
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5">
+                  <span className="text-slate-500 text-[10px] uppercase tracking-wider">Whale Terbesar</span>
+                  <p className="font-mono font-bold text-white text-xl mt-1">{formatUsd(whaleFeed.stats.largestUsd, true)}</p>
+                  <p className="text-[10px] text-slate-500 mt-0.5">
+                    {whaleFeed.trades?.[0]?.side === "BUY" ? "Beli agresif" : "Jual agresif"} · {whaleFeed.trades?.[0]?.symbol}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Buy/Sell pressure bar — real ratio from stats */}
+            {whaleFeed?.stats && (whaleFeed.stats.buyNotionalUsd + whaleFeed.stats.sellNotionalUsd) > 0 && (
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                <div className="flex items-center justify-between text-[11px] mb-2">
+                  <span className="text-slate-500 uppercase tracking-wider">Rasio Tekanan Order (jendela saat ini)</span>
+                  <span className="font-mono text-slate-400">
+                    <span className="text-emerald-400">{Math.round(
+                      (whaleFeed.stats.buyNotionalUsd /
+                        (whaleFeed.stats.buyNotionalUsd + whaleFeed.stats.sellNotionalUsd)) * 100
+                    )}%</span>
+                    {" beli / "}
+                    <span className="text-rose-400">{Math.round(
+                      (whaleFeed.stats.sellNotionalUsd /
+                        (whaleFeed.stats.buyNotionalUsd + whaleFeed.stats.sellNotionalUsd)) * 100
+                    )}%</span>
+                    {" jual"}
+                  </span>
+                </div>
+                <div className="h-3 rounded-full overflow-hidden bg-slate-950 flex border border-slate-800">
+                  <div
+                    className="bg-gradient-to-r from-emerald-600 to-emerald-400 h-full transition-all duration-700"
+                    style={{
+                      width: `${(whaleFeed.stats.buyNotionalUsd /
+                        (whaleFeed.stats.buyNotionalUsd + whaleFeed.stats.sellNotionalUsd)) * 100}%`,
+                    }}
+                  />
+                  <div className="flex-1 bg-gradient-to-r from-rose-500 to-rose-600 h-full" />
+                </div>
+              </div>
+            )}
+
+            {/* Controls — symbol whitelist + whale threshold */}
+            <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-3.5 flex flex-col md:flex-row md:items-center gap-3 md:gap-4">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[10px] uppercase tracking-wider text-slate-500 mr-1">Simbol</span>
+                {["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA"].map((sym) => {
+                  const active = whaleSymbols.includes(sym);
+                  return (
+                    <button
+                      key={sym}
+                      onClick={() => {
+                        setWhaleSymbols((prev) => {
+                          const next = prev.includes(sym) ? prev.filter((s) => s !== sym) : [...prev, sym];
+                          // Never allow an empty selection; cap at 5 (server cap).
+                          if (next.length === 0) return prev;
+                          return next.slice(0, 5);
+                        });
+                      }}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-bold font-mono border transition-all ${
+                        active
+                          ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-300"
+                          : "bg-slate-950/60 border-slate-800 text-slate-500 hover:text-slate-300 hover:border-slate-700"
+                      }`}
+                      aria-pressed={active}
+                    >
+                      {sym}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="flex items-center gap-2 md:ml-auto">
+                <span className="text-[10px] uppercase tracking-wider text-slate-500">Ambang Whale</span>
+                <select
+                  value={whaleMinUsd}
+                  onChange={(e) => setWhaleMinUsd(Number(e.target.value))}
+                  className="bg-slate-950 border border-slate-800 rounded-md px-2 py-1 text-[11px] font-mono text-slate-200 focus:outline-none focus:border-emerald-500/50"
+                >
+                  <option value={100000}>≥ $100K</option>
+                  <option value={250000}>≥ $250K</option>
+                  <option value={500000}>≥ $500K</option>
+                  <option value={1000000}>≥ $1M</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Feed — real whale rows (max 50), relative notional bars */}
+            {whaleLoading && !whaleFeed && (
+              <div className="space-y-2">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div key={i} className="bg-slate-900 border border-slate-800 rounded-lg p-3 h-12 animate-pulse" />
+                ))}
+              </div>
+            )}
+            {!whaleLoading && !whaleFeed && !whaleError && (
+              <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-8 text-center text-slate-500 text-sm">
+                <Fish className="w-8 h-8 mx-auto mb-2 text-slate-600" />
+                Menyiapkan radar whale…
+              </div>
+            )}
+            {whaleFeed?.trades && whaleFeed.trades.length > 0 && (
+              <div className="bg-slate-900/60 border border-slate-800 rounded-xl overflow-hidden">
+                <div className="grid grid-cols-[auto_1fr_auto] md:grid-cols-[auto_1.2fr_1fr_auto_auto] gap-x-3 px-4 py-2.5 border-b border-slate-800 bg-slate-950/50 text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
+                  <span>Sisi</span>
+                  <span>Aset & Harga</span>
+                  <span className="hidden md:block">Nominal</span>
+                  <span className="hidden md:block">Waktu</span>
+                  <span className="text-right">ID</span>
+                </div>
+                <div className="max-h-[28rem] overflow-y-auto divide-y divide-slate-800/70">
+                  {whaleFeed.trades.map((t: any, i: number) => {
+                    const maxNotional = whaleFeed.stats?.largestUsd || t.notionalUsd;
+                    const barPct = Math.max(4, Math.round((t.notionalUsd / maxNotional) * 100));
+                    return (
+                      <motion.div
+                        key={`${t.symbol}-${t.tradeId}`}
+                        initial={{ opacity: 0, x: -8 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ duration: 0.25, delay: Math.min(i * 0.02, 0.4) }}
+                        className="grid grid-cols-[auto_1fr_auto] md:grid-cols-[auto_1.2fr_1fr_auto_auto] gap-x-3 px-4 py-2.5 items-center hover:bg-slate-900/80 transition-colors relative"
+                      >
+                        {/* Relative notional bar (background layer) */}
+                        <div
+                          className={`absolute inset-y-0 left-0 ${t.side === "BUY" ? "bg-emerald-500/5" : "bg-rose-500/5"}`}
+                          style={{ width: `${barPct}%` }}
+                          aria-hidden="true"
+                        />
+                        <span
+                          className={`relative z-10 px-1.5 py-0.5 rounded text-[10px] font-bold border tracking-wider ${
+                            t.side === "BUY"
+                              ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
+                              : "bg-rose-500/15 text-rose-300 border-rose-500/30"
+                          }`}
+                        >
+                          {t.side}
+                        </span>
+                        <div className="relative z-10 min-w-0">
+                          <span className="font-bold text-white text-sm mr-2">{t.symbol}</span>
+                          <span className="font-mono text-xs text-slate-400">
+                            {t.price < 1 ? t.price.toFixed(4) : t.price.toLocaleString("en-US")} × {t.qty < 1 ? t.qty.toFixed(4) : Math.round(t.qty).toLocaleString("en-US")}
+                          </span>
+                          <span className="md:hidden ml-2 font-mono text-xs text-amber-300">{formatUsd(t.notionalUsd, true)}</span>
+                        </div>
+                        <span className="relative z-10 hidden md:block font-mono font-bold text-amber-300 text-sm">
+                          {formatUsd(t.notionalUsd)}
+                        </span>
+                        <span className="relative z-10 hidden md:block font-mono text-xs text-slate-500">
+                          {new Date(t.time).toLocaleTimeString("id-ID")}
+                        </span>
+                        <span className="relative z-10 text-right font-mono text-[10px] text-slate-600" title={`${t.exchange} · aggTrade #${t.tradeId}`}>
+                          #{t.tradeId}
+                        </span>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+                <div className="px-4 py-2 border-t border-slate-800 bg-slate-950/50 text-[10px] text-slate-500 flex items-center justify-between">
+                  <span>Terurut nominal terbesar · jendela aggTrades terbaru Binance (spot)</span>
+                  <span className="font-mono">{whaleFeed.trades.length} baris</span>
+                </div>
+              </div>
+            )}
+            {!whaleLoading && whaleFeed && (!whaleFeed.trades || whaleFeed.trades.length === 0) && (
+              <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-8 text-center">
+                <Fish className="w-8 h-8 mx-auto mb-2 text-slate-600" />
+                <p className="text-slate-400 text-sm">Belum ada whale pada ambang ≥ {formatUsd(whaleMinUsd)} (jendela 30 menit).</p>
+                <p className="text-slate-500 text-xs mt-1 max-w-md mx-auto leading-relaxed">
+                  {whaleFeed.info ||
+                    `Stream live tersambung dan terus mengumpulkan transaksi — whale memang jarang lewat. Buffer menampung ${whaleFeed.stream?.bufferedCount ?? 0} transaksi ≥$50K. Coba turunkan ambang atau tunggu whale berikutnya.`}
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* =========================================================================
+            TAB 8.7: AI ON-CHAIN ANALYSIS & ADVISOR
+            ========================================================================= */}
 
         {/* =========================================================================
             TAB 8: AI ON-CHAIN ANALYSIS & ADVISOR

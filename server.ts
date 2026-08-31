@@ -5,6 +5,7 @@
 // dotenv.config() di body (setelah import) selalu terlambat.
 import "dotenv/config";
 import express from "express";
+import http from "http";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
@@ -5060,9 +5061,19 @@ app.use("/api", apiNotFound);
 
 // Setup dev and production modes
 async function startServer() {
+  // QA5-1: create the HTTP server object up-front so the dev-mode Vite HMR
+  // websocket can attach to the SAME origin/port (hmr.server). Previously,
+  // middleware-mode Vite silently opened a SECOND listener on :24678 — so two
+  // concurrent dev instances (e.g. the long-running :4100 + the smoke test's
+  // self-booted :4180) fought over that single port, and the second
+  // instance's browser client failed with "[vite] failed to connect to
+  // websocket (WebSocket closed without opened)" (smoke FAIL: 2 console
+  // errors). Same-origin HMR also works behind a reverse proxy that forwards
+  // a single port, and removes an unnecessary open port from the process.
+  const httpServer = http.createServer(app);
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, hmr: { server: httpServer } },
       appType: "spa",
     });
     app.use(vite.middlewares);
@@ -5087,7 +5098,7 @@ async function startServer() {
   // OPT-1d: graceful shutdown — drain in-flight requests before exit, then
   // disconnect Prisma. Prevents abrupt WebSocket drops + cancelled requests
   // when the process receives SIGTERM (container stop) or SIGINT (Ctrl-C).
-  const server = app.listen(PORT, "0.0.0.0", () => {
+  const server = httpServer.listen(PORT, "0.0.0.0", () => {
     log.info(`Financial Modelling Server running on port ${PORT}`);
   });
 

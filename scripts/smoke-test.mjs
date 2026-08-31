@@ -212,8 +212,13 @@ async function main() {
 
   // 2. Server health (optionally self-boot)
   let base = BASE;
+  // QA5-2: record the ACTUAL browser target (BASE stays the --url default
+  // 3000; --boot overrides it with the self-booted port). Previously the
+  // report showed the unmodified BASE constant, which was misleading when
+  // triaging a failure from a self-booted run.
   if (BOOT) {
     base = `http://localhost:${BOOT_PORT}`;
+    result.base = base;
     console.error(`[smoke] booting server on :${BOOT_PORT} …`);
     // CI/fresh-checkout support (QA4-F2): the server refuses to boot without
     // .env (dataRetention validates ENCRYPTION_KEY at module-load — see

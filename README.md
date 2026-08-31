@@ -122,6 +122,17 @@ git add .github/ && git commit -m "ci: activate pipeline" && git push
 
 - **Smoke test mode CI**: `scripts/smoke-test.mjs --boot` kini membuat `.env` sementara dengan secret acak bila tidak ada (fresh checkout/CI), dan menghapusnya saat teardown — terverifikasi penuh tanpa `.env`: 15/15 tab PASS.
 
+### 🧪 Ronde QA Runtime #5 (31 Ag — whale radar real-time + command palette)
+
+**1 bug dev-infra ditemukan & diperbaiki:**
+- **QA5-1**: *Konflik port HMR Vite* — middleware-mode Vite diam-diam membuka listener kedua di `:24678`; dua instance dev yang berjalan bersamaan (server `:4100` + smoke test `:4180`) berebut port itu → browser client instance kedua gagal dengan `[vite] failed to connect to websocket` (smoke FAIL: 2 console error). → HMR websocket kini attach ke **origin/port yang sama** dengan app (`hmr.server` + `http.createServer`), kompatibel reverse-proxy single-port; smoke 15/15 PASS 0 error dengan server berjalan bersamaan.
+
+**2 fitur besar (rekomendasi ronde #4):**
+- **QA5-F1 — Whale Radar real-time** (`src/server/whaleStream.ts` + tab baru "Whale Radar" di On-Chain Data): agregator **WebSocket Binance spot aggTrade** yang berjalan terus-menerus (7 simbol, buffer 30 menit, dedup by trade-id, REST backfill saat boot, socket `unref` agar tidak menghalangi exit) + endpoint `GET /api/live/whale-trades` (filter simbol/ambang, statistik buy/sell, status stream jujur). Setiap baris di UI adalah **fill Binance NYATA** — badge "100% REAL", chip `WS LIVE`, bar tekanan beli/jual, baris dengan bar nominal relatif, dan 3 state jujur (live / menunggu whale berikutnya / stream putus → snapshot terakhir tetap real, tidak pernah difabrikasi). Menggantikan angka estimasi deterministik `whaleTransactions24h`.
+- **QA5-F2 — Command Palette global** (`src/components/CommandPalette.tsx`, `Ctrl+K`/`Cmd+K`): navigasi keyboard-first untuk seluruh 15 tab + aksi (9 tema, glassmorphism toggle, reload, logout) — fuzzy matching buatan sendiri (subsequence + bonus run/boundary, tanpa dependensi `cmdk`), grup "TERBARU" via localStorage, navigasi arrow/Home/End, highlight karakter yang cocok, ARIA combobox/listbox lengkap. Tombol pemicu di header (badge `CTRL K`) untuk discoverability.
+
+**Verifikasi ronde:** tsc 0 error · vitest 37/37 · smoke 15/15 (0 page error, 0 console error) · browser QA manual: whale radar live 5 transaksi real (BUY $290K, SELL $374K dst.), command palette terverifikasi (search → navigasi, tema switch `theme-hacker` aktif).
+
 ---
 
 ## 🚀 Fitur Utama

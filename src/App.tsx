@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { 
   Bell, 
   HelpCircle, 
@@ -13,11 +13,27 @@ import {
   Menu,
   TrendingUp,
   TrendingDown,
-  RefreshCw
+  RefreshCw,
+  Command,
+  LayoutDashboard,
+  Layers,
+  Newspaper,
+  Coins,
+  Radar,
+  LineChart,
+  MessageCircle,
+  Files,
+  BarChart3,
+  Cpu,
+  Wallet,
+  Settings as SettingsIcon,
+  Palette,
+  LogOut,
+  RotateCw
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useGlobalStore } from "./store";
-import { Asset, PortfolioAsset, AlertConfig } from "./types";
+import { Asset, PortfolioAsset, AlertConfig, AppSettings } from "./types";
 import { safeLocalStorage } from "./utils/safeStorage";
 import Sidebar from "./components/Sidebar";
 import Dashboard from "./components/Dashboard";
@@ -42,6 +58,9 @@ import { fetchCurrentUser } from "./lib/auth";
 import { fetchPortfolioFromServer, schedulePortfolioSync, markAlertSynced } from "./lib/portfolioSync";
 import AuthScreen from "./components/AuthScreen";
 import SplashScreen from "./components/SplashScreen";
+// QA5-F2: global Ctrl+K command palette — keyboard-first navigation + actions.
+import CommandPalette, { PaletteItem } from "./components/CommandPalette";
+import { logoutUser } from "./lib/auth";
 
 export default function App() {
   const [activeTab, setActiveTab ] = useState("dashboard");
@@ -54,6 +73,26 @@ export default function App() {
     }
   });
   const [utcTime, setUtcTime] = useState(() => new Date().toISOString().substring(11, 19));
+
+  // === QA5-F2 Command Palette (Ctrl+K / Cmd+K) ===
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const updateSettings = useGlobalStore(state => state.updateSettings);
+
+  // Global keybinding: open with Ctrl+K (Windows/Linux) or Cmd+K (Mac).
+  // Registered on window (capture) so it works regardless of which inner
+  // component holds focus. The palette itself handles Esc/Enter/arrows.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen(prev => !prev);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
+
+
 
   // Quick Action state variables and handlers
   const [selectedQuickAsset, setSelectedQuickAsset] = useState<Asset | null>(null);
@@ -371,6 +410,82 @@ export default function App() {
   const updateTrxPrice = useGlobalStore(state => state.updateTrxPrice);
   const updateHypePrice = useGlobalStore(state => state.updateHypePrice);
   const setTickerSource = useGlobalStore(state => state.setTickerSource);
+
+  // === QA5-F2 palette items: navigation (15 tabs) + actions + themes ===
+  // Built with useMemo so the palette's own memo/keyboard nav doesn't re-run
+  // on unrelated re-renders. `setActiveTab` closes the mobile sidebar too,
+  // matching the standard sidebar click behaviour.
+  const paletteItems = useMemo<PaletteItem[]>(() => {
+    const navItems: PaletteItem[] = [
+      { id: "nav-dashboard", name: "Dashboard", group: "NAVIGASI", icon: LayoutDashboard, hint: "ringkasan", action: () => { setActiveTab("dashboard"); setIsMobileSidebarOpen(false); } },
+      { id: "nav-coins", name: "Coins Rankings", group: "NAVIGASI", icon: Layers, hint: "100 koin", keywords: "ranking coin market cap", action: () => { setActiveTab("coins"); setIsMobileSidebarOpen(false); } },
+      { id: "nav-news", name: "Newsroom Feed", group: "NAVIGASI", icon: Newspaper, hint: "berita", keywords: "berita news the block", action: () => { setActiveTab("news"); setIsMobileSidebarOpen(false); } },
+      { id: "nav-assets", name: "Crypto Hub", group: "NAVIGASI", icon: Coins, hint: "aset", keywords: "aset portfolio crypto hub wallet", action: () => { setActiveTab("assets"); setIsMobileSidebarOpen(false); } },
+      { id: "nav-whale", name: "On-Chain Data & Whale Radar", group: "NAVIGASI", icon: Radar, hint: "whale", keywords: "onchain on-chain whale radar radar whale binance aggtrades", action: () => { setActiveTab("whale-tracker"); setIsMobileSidebarOpen(false); } },
+      { id: "nav-ai-signals", name: "AI Trade Signals", group: "NAVIGASI", icon: LineChart, hint: "sinyal", keywords: "ai sinyal signal trading", action: () => { setActiveTab("ai-signals"); setIsMobileSidebarOpen(false); } },
+      { id: "nav-market-chat", name: "AI Market Chat", group: "NAVIGASI", icon: MessageCircle, hint: "chat", keywords: "ai chat percakapan gemini", action: () => { setActiveTab("market-chat"); setIsMobileSidebarOpen(false); } },
+      { id: "nav-multi-doc", name: "AI Multi-Doc Compare", group: "NAVIGASI", icon: Files, hint: "dokumen", keywords: "dokumen document compare multi doc vip", action: () => { setActiveTab("multi-doc"); setIsMobileSidebarOpen(false); } },
+      { id: "nav-projections", name: "Profit Projections", group: "NAVIGASI", icon: TrendingUp, hint: "proyeksi", keywords: "proyeksi profit projection dca", action: () => { setActiveTab("projections"); setIsMobileSidebarOpen(false); } },
+      { id: "nav-backtester", name: "Strategy Backtester", group: "NAVIGASI", icon: BarChart3, hint: "backtest", keywords: "backtest strategi strategy tester", action: () => { setActiveTab("backtester"); setIsMobileSidebarOpen(false); } },
+      { id: "nav-technical", name: "Technical Terminal", group: "NAVIGASI", icon: LineChart, hint: "teknikal", keywords: "teknikal technical terminal chart", action: () => { setActiveTab("technical"); setIsMobileSidebarOpen(false); } },
+      { id: "nav-automation", name: "Trade Automation", group: "NAVIGASI", icon: Cpu, hint: "otomasi", keywords: "otomasi automation trading bot", action: () => { setActiveTab("automation"); setIsMobileSidebarOpen(false); } },
+      { id: "nav-ledger", name: "Ledger History & Tax", group: "NAVIGASI", icon: Wallet, hint: "pajak", keywords: "ledger riwayat history pajak tax pnl", action: () => { setActiveTab("ledger"); setIsMobileSidebarOpen(false); } },
+      { id: "nav-security", name: "Security & 2FA", group: "NAVIGASI", icon: ShieldCheck, hint: "keamanan", keywords: "keamanan security 2fa webauthn", action: () => { setActiveTab("security"); setIsMobileSidebarOpen(false); } },
+      { id: "nav-settings", name: "Settings Hub", group: "NAVIGASI", icon: SettingsIcon, hint: "pengaturan", keywords: "pengaturan settings konfigurasi log", action: () => { setActiveTab("settings"); setIsMobileSidebarOpen(false); } },
+    ];
+    const themeLabels: { key: AppSettings["theme"]; label: string }[] = [
+      { key: "glass-3d", label: "Glass 3D" },
+      { key: "liquid-glass", label: "Liquid Glass" },
+      { key: "cyber-3d", label: "Cyber 3D" },
+      { key: "aurora-synth", label: "Aurora Synth" },
+      { key: "holo-glass", label: "Holo Glass" },
+      { key: "bloomberg", label: "Bloomberg" },
+      { key: "hacker", label: "Hacker" },
+      { key: "dark", label: "Dark" },
+      { key: "light", label: "Light" },
+    ];
+    const themeItems: PaletteItem[] = themeLabels.map((t) => ({
+      id: `theme-${t.key}`,
+      name: `Tema: ${t.label}`,
+      group: "TEMA",
+      icon: Palette,
+      hint: settings.theme === t.key ? "aktif" : undefined,
+      keywords: `tema theme tampilan ${t.key}`,
+      action: () => updateSettings({ theme: t.key }),
+    }));
+    const actionItems: PaletteItem[] = [
+      {
+        id: "action-reload",
+        name: "Muat Ulang Aplikasi",
+        group: "AKSI",
+        icon: RotateCw,
+        hint: "refresh",
+        keywords: "muat ulang reload refresh hard reset",
+        action: () => window.location.reload(),
+      },
+      {
+        id: "action-glass",
+        name: `${settings.glassmorphism ? "Matikan" : "Aktifkan"} Efek Glassmorphism`,
+        group: "AKSI",
+        icon: Sparkles,
+        keywords: "glass glassmorphism efek blur transparan",
+        action: () => updateSettings({ glassmorphism: !settings.glassmorphism }),
+      },
+      {
+        id: "action-logout",
+        name: "Keluar (Logout)",
+        group: "AKSI",
+        icon: LogOut,
+        hint: "session",
+        keywords: "keluar logout log out signout sesi",
+        action: () => { logoutUser(); },
+      },
+    ];
+    return [...navItems, ...themeItems, ...actionItems];
+  }, [setActiveTab, settings.theme, settings.glassmorphism, updateSettings]);
+
+  const closePalette = useCallback(() => setPaletteOpen(false), []);
+
 
   // Ref tracking the WS reconnect timeout so it can be cleared on unmount (prevents memory leak)
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -962,8 +1077,11 @@ export default function App() {
     );
   }
 
+
   return (
-    <div className={`flex h-screen bg-[#05070A] text-slate-200 font-sans overflow-hidden relative theme-${settings.theme} ${settings.glassmorphism ? 'glassmorphism-active' : ''}`} id="zaytrix-app-root">
+  <div className={`flex h-screen bg-[#05070A] text-slate-200 font-sans overflow-hidden relative theme-${settings.theme} ${settings.glassmorphism ? 'glassmorphism-active' : ''}`} id="zaytrix-app-root">
+      {/* QA5-F2: global command palette overlay (Ctrl+K / Cmd+K) */}
+      <CommandPalette open={paletteOpen} onClose={closePalette} items={paletteItems} />
       
       {/* High-tech sweep scanning telemetry line */}
       <div className="tech-sweep-line" />
@@ -1029,6 +1147,20 @@ export default function App() {
               title={isSidebarCollapsed ? "Buka Sidebar" : "Tutup Sidebar"}
             >
               <Menu className="w-4 h-4" />
+            </button>
+            {/* QA5-F2: command palette trigger — discoverable entry point for the
+                Ctrl+K overlay. Sits next to the sidebar toggle in the header. */}
+            <button
+              onClick={() => setPaletteOpen(true)}
+              id="command-palette-trigger"
+              className="flex items-center gap-1.5 p-1.5 text-slate-400 hover:text-emerald-300 focus:outline-none rounded hover:bg-slate-800 shrink-0 cursor-pointer border border-[#1E293B] bg-slate-900/60 transition-colors"
+              title="Command Palette (Ctrl+K)"
+              aria-label="Buka command palette (Ctrl+K)"
+            >
+              <Command className="w-4 h-4" />
+              <kbd className="hidden lg:inline text-[9px] font-mono text-slate-500 border border-slate-700 bg-slate-800/70 rounded px-1 py-px leading-none">
+                CTRL K
+              </kbd>
             </button>
             <div className="hidden sm:flex items-center space-x-2 border-r border-[#1E293B] pr-4 select-none shrink-0 z-20 bg-[#0F172A]">
               <span className="text-[10px] font-mono font-bold text-amber-500 flex items-center">
