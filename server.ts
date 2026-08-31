@@ -4985,7 +4985,7 @@ try {
 
 // ─── AI Router (OpenRouter primary + Gemini fallback) ────────────────────
 try {
-  const { callAI, getAIProviderHealth, testOpenRouterConnection } = await import("./src/server/aiRouter");
+  const { callAI, callAIStream, getAIUsage, getAIProviderHealth, testOpenRouterConnection } = await import("./src/server/aiRouter");
 
   // GET /api/ai/health — AI provider health status (public, for monitoring)
   app.get("/api/ai/health", (req, res) => {
@@ -5009,12 +5009,88 @@ try {
       maxTokens,
       temperature,
       userId: req.user?.sub,
+      endpoint: "chat",
     });
 
     res.json(result);
   });
 
-  log.info("[aiRouter] OpenRouter + Gemini fallback endpoints mounted.");
+  // POST /api/ai/chat-stream — QA7-F1: token-by-token SSE streaming chat.
+  // Same auth + prompt contract as /api/ai/chat; response is an
+  // text/event-stream of JSON events: {type:"start"|"token"|"done"|"error", ...}.
+  // Client disconnect aborts the upstream OpenRouter fetch (no orphan streams).
+  app.post("/api/ai/chat-stream", requireAuth, async (req: any, res) => {
+    const { prompt, systemPrompt, maxTokens, temperature } = req.body;
+    if (!prompt) return res.status(400).json({ success: false, error: "Prompt wajib diisi." });
+
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      // Disable proxy buffering (Caddy/nginx) so tokens arrive immediately.
+      "X-Accel-Buffering": "no",
+    });
+
+    let clientClosed = false;
+    const clientAbort = new AbortController();
+    req.on("close", () => {
+      clientClosed = true;
+      clientAbort.abort();
+    });
+
+    const send = (obj: unknown) => {
+      if (clientClosed || res.writableEnded) return;
+      try {
+        res.write(`data: ${JSON.stringify(obj)}\n\n`);
+      } catch {
+        clientClosed = true;
+      }
+    };
+
+    // Keep-alive comment every 15s so proxies don't time the stream out
+    // while the model is thinking (first token can take seconds).
+    const keepAlive = setInterval(() => {
+      if (clientClosed || res.writableEnded) return;
+      try {
+        res.write(": keep-alive\n\n");
+      } catch {
+        clientClosed = true;
+      }
+    }, 15_000);
+
+    try {
+      await callAIStream(
+        {
+          prompt,
+          systemPrompt,
+          maxTokens,
+          temperature,
+          userId: req.user?.sub,
+          endpoint: "chat-stream",
+          abortSignal: clientAbort.signal,
+        },
+        (ev) => send(ev)
+      );
+    } catch (e: any) {
+      send({ type: "error", error: String(e?.message || e).substring(0, 150) });
+    } finally {
+      clearInterval(keepAlive);
+      if (!res.writableEnded) {
+        try {
+          res.end();
+        } catch {}
+      }
+    }
+  });
+
+  // GET /api/ai/usage — QA7-F2: operator token/cost usage panel data
+  // (requireAuth — no admin gate: the panel lives in each user's Settings;
+  // records contain NO prompt content, only metadata).
+  app.get("/api/ai/usage", requireAuth, (_req: any, res) => {
+    res.json({ success: true, usage: getAIUsage() });
+  });
+
+  log.info("[aiRouter] OpenRouter + Gemini fallback endpoints mounted (chat, chat-stream SSE, usage).");
 } catch (e: any) {
   log.info("[aiRouter] not available:", e?.message || e);
 }

@@ -149,6 +149,23 @@ git add .github/ && git commit -m "ci: activate pipeline" && git push
 
 **Verifikasi ronde:** tsc 0 error · vitest 37/37 · smoke 15/15 (0 page error, 0 console error) · **AI LIVE terverifikasi end-to-end**: `/api/ai/test` OK (667ms), `/api/ai/chat` respons nyata provider `openrouter` (114 token, 1.4s), `/api/gemini/analyze` analisis markdown nyata (bukan fallback), `news-sentiment` JSON valid (BULLISH/85), **AI Market Chat di browser**: jawaban AI berbasis data pasar live (Fear&Greed 62/100, HEMI +38.97%, NFP −65.85%) + badge `• openrouter`; laporan `automated-analysis.json` kini berisi analisis OpenRouter NYATA setiap 10 menit. Teks UI lama "Google Gemini AI" dibersihkan menjadi provider-netral.
 
+### 🧪 Ronde QA Runtime #7 (31 Ag — AI STREAMING SSE + panel pemakaian AI + smoke deep-check)
+
+**Fitur baru:**
+- **QA7-F1: AI Chat Streaming (SSE)** — jawaban AI kini **mengalir token demi token** alih-alih menunggu respons penuh:
+  - `callAIStream()` di `src/server/aiRouter.ts`: OpenRouter `stream:true`, parser SSE toleran (skip keep-alive comment & chunk malformed), **fallback model hanya SEBELUM token pertama** (retry mid-stream akan menduplikasi teks parsial — begitu konten mengalir, kami berkomitmen ke model itu; putus mid-stream = catatan jujur di akhir jawaban, konten parsial dipertahankan).
+  - Endpoint `POST /api/ai/chat-stream`: `text/event-stream` + `X-Accel-Buffering: no` (proxy tidak mem-buffer) + keep-alive comment tiap 15 dtk saat model berpikir + **abort propagation** (client disconnect → upstream fetch di-abort, tidak ada stream yatim).
+  - Frontend `MarketSentimentChat.tsx`: bubble asisten muncul seketika + **kursor terminal berkedip** (CSS steps animation) + chip `streaming`; selesai → meta `N tok · X.Xs` + badge provider. **Degradasi otomatis**: bila SSE gagal (proxy/404 server lama) → fallback transparan ke `/api/ai/chat` non-streaming.
+- **QA7-F2: Panel Pemakaian AI (Token & Biaya)** — operator kini melihat pembakaran token tanpa baca log:
+  - Ring buffer in-memory 300 panggilan terakhir di `aiRouter.ts` — **metadata saja, TANPA isi prompt** (privasi): endpoint, model, tokens, latensi, sukses/gagal, `costUsd` (angka **nyata** dari chunk `usage.cost` OpenRouter, bukan estimasi).
+  - Endpoint `GET /api/ai/usage` + komponen `AiUsagePanel.tsx` di Settings Hub → Log Sistem: 4 kartu statistik, agregat per-model dengan bar proporsional animasi, agregat per-endpoint, 25 panggilan terakhir (scrollable), auto-refresh 30 dtk, label jujur "ring buffer di-reset saat restart".
+- **QA7-F3: Smoke deep-check baru (18 langkah)** — dua langkah otomatis menjaga regresi fitur bernilai tinggi: (1) Whale Radar — poll ≤14 dtk hingga chip `WS LIVE` (menerima `PUTUS` akan false-pass saat feed null); (2) AI chat streaming — ketik prompt sungguhan via keyboard event → assert bubble streaming + badge provider muncul.
+
+**1 bug honesty ditemukan & diperbaiki:**
+- **QA7-1**: *Chip Whale Radar menyala "WS PUTUS" saat memuat* — `whaleFeed` null (fetch pertama berjalan) dirender sebagai "PUTUS", menyesatkan (stream tidak putus, hanya belum termuat). → Kini 3 state jujur: `WS LIVE` / `MEMUAT…` / `WS PUTUS` (stale-but-real snapshot tetap tampil saat benar-benar putus).
+
+**Verifikasi ronde:** tsc 0 error · vitest 37/37 · **smoke 18/18 PASS** (15 tab 0 error + whale WS LIVE + streaming bubble; 2 bug skrip smoke diperbaiki: hasil eval ter-quote JSON + regex double-escape) · **streaming live di browser**: jawaban mengalir → `350 tok · 11.8s` + badge `⚡ openrouter · glm-4.5-air`, 0 console error · **/api/ai/usage**: 1 panggilan · 350 token · **$0.00013271** biaya nyata OpenRouter · panel pemakaian AI live di Settings Hub.
+
 ---
 
 ## 🚀 Fitur Utama
@@ -168,7 +185,7 @@ git add .github/ && git commit -m "ci: activate pipeline" && git push
 - Binance WS (likuidasi + ticker), Binance Futures (funding/OI/LSR), CoinGecko (rankings+7d+sparkline), Coinpaprika, Alternative.me (Fear&Greed), Mempool.space, Blockchain.info, Coinmetrics, Santiment, CFTC, Yahoo Finance (IDX), RSS news, open.er-api (kurs USD/IDR live)
 - **Badge transparansi**: `isStale` / `EST` / `OFFLINE` / `isSimulation` / `isFallback` tampil di UI kapan pun data tidak 100% live
 
-### 🖥️ On-Chain Terminal (9 tab) · 📊 Trading & Portfolio (Backtester, DCA, Tax PMK-68, Risk VaR/CVaR, Rebalancing, Correlation) · 🤖 AI (OpenRouter + Gemini fallback) · 🔔 Price Alerts + Telegram/Discord/WhatsApp
+### 🖥️ On-Chain Terminal (9 tab) · 📊 Trading & Portfolio (Backtester, DCA, Tax PMK-68, Risk VaR/CVaR, Rebalancing, Correlation) · 🤖 AI Streaming SSE (OpenRouter + Gemini fallback, panel token/biaya) · 🔔 Price Alerts + Telegram/Discord/WhatsApp
 
 ---
 

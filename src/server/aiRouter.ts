@@ -55,6 +55,8 @@ export interface AIRequest {
   temperature?: number;
   userId?: string; // for audit logging
   context?: string; // additional context (e.g., on-chain data)
+  endpoint?: string; // usage attribution label (e.g. "chat-stream", "gemini-compat")
+  abortSignal?: AbortSignal; // client disconnect propagation (streaming)
 }
 
 export type AIProviderName = "openrouter" | "gemini" | "cache" | "none";
@@ -84,6 +86,85 @@ const providerHealth: Record<string, ProviderHealth> = {
   "openrouter": { available: true, lastError: null, lastSuccess: 0, failureCount: 0, totalCalls: 0, totalTokens: 0 },
   "gemini": { available: !!GEMINI_API_KEY, lastError: null, lastSuccess: 0, failureCount: 0, totalCalls: 0, totalTokens: 0 },
 };
+
+// ─── Per-Call Usage Tracking (QA7-F2) ─────────────────────────────
+// Ring buffer of the last N AI calls (in-memory, privacy-safe: NO prompt
+// content stored — only metadata). Powers the operator "AI Usage" panel
+// (GET /api/ai/usage) so token burn / latency / model mix is visible
+// without reading server logs.
+interface AIUsageRecord {
+  ts: number;
+  endpoint: string; // e.g. "chat", "chat-stream", "gemini-compat"
+  provider: AIProviderName;
+  model: string;
+  tokens: number;
+  latencyMs: number;
+  success: boolean;
+  streamed: boolean;
+  costUsd?: number; // OpenRouter reports this in the final stream chunk
+  error?: string;
+}
+
+const usageRecords: AIUsageRecord[] = [];
+const MAX_USAGE_RECORDS = 300;
+
+function recordUsage(rec: AIUsageRecord): void {
+  usageRecords.push(rec);
+  if (usageRecords.length > MAX_USAGE_RECORDS) {
+    usageRecords.splice(0, usageRecords.length - MAX_USAGE_RECORDS);
+  }
+}
+
+export interface AIUsageSummary {
+  windowRecords: number;
+  totalCalls: number;
+  totalTokens: number;
+  failures: number;
+  totalCostUsd: number;
+  byModel: Array<{ model: string; calls: number; tokens: number; failures: number; avgLatencyMs: number; costUsd: number }>;
+  byEndpoint: Array<{ endpoint: string; calls: number; tokens: number; failures: number; avgLatencyMs: number; costUsd: number }>;
+  recent: AIUsageRecord[];
+  windowStart: number;
+}
+
+export function getAIUsage(): AIUsageSummary {
+  const byModel = new Map<string, { model: string; calls: number; tokens: number; failures: number; avgLatencyMs: number; costUsd: number }>();
+  const byEndpoint = new Map<string, { endpoint: string; calls: number; tokens: number; failures: number; avgLatencyMs: number; costUsd: number }>();
+  let totalTokens = 0;
+  let totalCalls = 0;
+  let failures = 0;
+  let totalCostUsd = 0;
+
+  for (const r of usageRecords) {
+    totalTokens += r.tokens;
+    totalCalls++;
+    if (!r.success) failures++;
+    totalCostUsd += r.costUsd ?? 0;
+
+    const m = byModel.get(r.model) || { model: r.model, calls: 0, tokens: 0, failures: 0, avgLatencyMs: 0, costUsd: 0 };
+    m.calls++; m.tokens += r.tokens; if (!r.success) m.failures++; m.avgLatencyMs += r.latencyMs; m.costUsd += r.costUsd ?? 0;
+    byModel.set(r.model, m);
+
+    const e = byEndpoint.get(r.endpoint) || { endpoint: r.endpoint, calls: 0, tokens: 0, failures: 0, avgLatencyMs: 0, costUsd: 0 };
+    e.calls++; e.tokens += r.tokens; if (!r.success) e.failures++; e.avgLatencyMs += r.latencyMs; e.costUsd += r.costUsd ?? 0;
+    byEndpoint.set(r.endpoint, e);
+  }
+
+  const fin = <T extends { calls: number; avgLatencyMs: number }>(arr: T[]) =>
+    arr.map((v) => ({ ...v, avgLatencyMs: Math.round(v.avgLatencyMs / Math.max(1, v.calls)) }));
+
+  return {
+    windowRecords: usageRecords.length,
+    totalCalls,
+    totalTokens,
+    failures,
+    totalCostUsd,
+    byModel: fin(Array.from(byModel.values())),
+    byEndpoint: fin(Array.from(byEndpoint.values())),
+    recent: usageRecords.slice(-25).reverse(), // newest first
+    windowStart: usageRecords.length ? usageRecords[0].ts : 0,
+  };
+}
 
 // ─── OpenRouter low-level call (OpenAI-compatible) ───────────────────
 interface OpenRouterMessage {
@@ -209,6 +290,17 @@ async function callOpenRouter(req: AIRequest): Promise<AIResponse> {
       providerHealth["openrouter"].totalCalls++;
       providerHealth["openrouter"].totalTokens += result.tokensUsed;
 
+      recordUsage({
+        ts: Date.now(),
+        endpoint: req.endpoint || "chat",
+        provider: "openrouter",
+        model: result.model,
+        tokens: result.tokensUsed,
+        latencyMs: Date.now() - startTime,
+        success: true,
+        streamed: false,
+      });
+
       return {
         success: true,
         text: result.text,
@@ -228,6 +320,18 @@ async function callOpenRouter(req: AIRequest): Promise<AIResponse> {
   providerHealth["openrouter"].available = false;
   providerHealth["openrouter"].lastError = lastError;
   providerHealth["openrouter"].failureCount++;
+
+  recordUsage({
+    ts: Date.now(),
+    endpoint: req.endpoint || "chat",
+    provider: "openrouter",
+    model: OPENROUTER_MODEL,
+    tokens: 0,
+    latencyMs: Date.now() - startTime,
+    success: false,
+    streamed: false,
+    error: lastError.substring(0, 150),
+  });
 
   return {
     success: false,
@@ -278,6 +382,17 @@ async function callGemini(req: AIRequest): Promise<AIResponse> {
     providerHealth["gemini"].failureCount = 0;
     providerHealth["gemini"].totalCalls++;
     providerHealth["gemini"].totalTokens += tokensUsed;
+
+    recordUsage({
+      ts: Date.now(),
+      endpoint: req.endpoint || "chat",
+      provider: "gemini",
+      model: GEMINI_MODEL,
+      tokens: tokensUsed,
+      latencyMs,
+      success: true,
+      streamed: false,
+    });
 
     return {
       success: true,
@@ -351,6 +466,225 @@ export async function callAI(req: AIRequest): Promise<AIResponse> {
     error: "Semua provider AI tidak tersedia. OpenRouter dan Gemini gagal.",
     fallbackUsed: true,
   };
+}
+
+// ─── Streaming (SSE) — QA7-F1 ────────────────────────────────────────
+// Streams OpenRouter responses token-by-token. Model fallback only applies
+// BEFORE the first token is emitted (retrying mid-stream would duplicate
+// partial text, so once content flows we commit to that model).
+// Gemini has no streaming path here — callers degrade to non-streaming.
+export interface AIStreamEvent {
+  type: "start" | "token" | "done" | "error";
+  model?: string;
+  provider?: AIProviderName;
+  text?: string; // token delta
+  tokensUsed?: number;
+  latencyMs?: number;
+  error?: string;
+}
+
+const OPENROUTER_STREAM_TIMEOUT_MS = Math.max(OPENROUTER_TIMEOUT_MS, 90_000);
+
+export async function callAIStream(
+  req: AIRequest,
+  onEvent: (ev: AIStreamEvent) => void
+): Promise<void> {
+  const startTime = Date.now();
+
+  if (OPENROUTER_API_KEY && providerHealth["openrouter"].available) {
+    const models = [OPENROUTER_MODEL, ...OPENROUTER_FALLBACK_MODELS];
+    const messages: OpenRouterMessage[] = [];
+    if (req.systemPrompt) messages.push({ role: "system", content: req.systemPrompt });
+    messages.push({ role: "user", content: req.prompt });
+
+    let lastError = "unknown";
+
+    for (const model of models) {
+      let gotAnyToken = false;
+      let tokensUsed = 0;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), OPENROUTER_STREAM_TIMEOUT_MS);
+      // Abort the upstream fetch when the client disconnects mid-stream.
+      const onClientClose = () => controller.abort();
+      req.abortSignal?.addEventListener("abort", onClientClose, { once: true });
+
+      try {
+        const res = await fetch(OPENROUTER_ENDPOINT, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+            "HTTP-Referer": OPENROUTER_REFERER,
+            "X-Title": OPENROUTER_TITLE,
+          },
+          body: JSON.stringify({
+            model,
+            messages,
+            max_tokens: Math.max(256, req.maxTokens ?? 2048),
+            temperature: req.temperature ?? 0.7,
+            stream: true,
+            reasoning: { enabled: false },
+          }),
+          signal: controller.signal,
+        });
+
+        if (!res.ok) {
+          const errText = await res.text().catch(() => "Unknown error");
+          const sanitized = errText
+            .substring(0, 200)
+            .replace(/Bearer\s+[A-Za-z0-9\-_\.]+/gi, "Bearer [REDACTED]")
+            .replace(/sk-or-v1-[A-Za-z0-9\-]+/gi, "sk-or-v1-[REDACTED]");
+          throw new Error(`OpenRouter HTTP ${res.status} (${model}): ${sanitized}`);
+        }
+        if (!res.body) {
+          throw new Error(`OpenRouter (${model}) tidak mengembalikan body stream`);
+        }
+
+        onEvent({ type: "start", model, provider: "openrouter" });
+
+        // Parse SSE: lines of "data: {json}" separated by newlines; the
+        // terminal sentinel is "data: [DONE]". The final data chunk may
+        // carry `usage` for accounting.
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let streamError: string | null = null;
+        let streamCostUsd: number | undefined;
+
+        readLoop:
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? ""; // keep trailing partial line
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith("data:")) continue;
+            const payload = trimmed.slice(5).trim();
+            if (!payload || payload === "[DONE]") continue;
+            let json: any;
+            try {
+              json = JSON.parse(payload);
+            } catch {
+              continue; // tolerate malformed chunk (keep-alive comments etc.)
+            }
+            // Mid-stream provider error: {"error": {"message": ...}}
+            if (json?.error) {
+              const msg = typeof json.error === "string" ? json.error : json.error.message || "upstream stream error";
+              streamError = String(msg).substring(0, 200);
+              break readLoop;
+            }
+            const delta = json?.choices?.[0]?.delta?.content;
+            if (typeof delta === "string" && delta) {
+              gotAnyToken = true;
+              onEvent({ type: "token", text: delta, model, provider: "openrouter" });
+            }
+            if (typeof json?.usage?.total_tokens === "number") {
+              tokensUsed = json.usage.total_tokens;
+            }
+            if (typeof json?.usage?.cost === "number") {
+              streamCostUsd = json.usage.cost;
+            }
+          }
+        }
+
+        if (streamError) {
+          throw new Error(`OpenRouter stream error (${model}): ${streamError}`);
+        }
+        if (!gotAnyToken) {
+          // Empty stream (e.g. moderation filter) — safe to try the next model.
+          throw new Error(`OpenRouter (${model}) stream kosong`);
+        }
+
+        providerHealth["openrouter"].available = true;
+        providerHealth["openrouter"].lastError = null;
+        providerHealth["openrouter"].lastSuccess = Date.now();
+        providerHealth["openrouter"].failureCount = 0;
+        providerHealth["openrouter"].totalCalls++;
+        providerHealth["openrouter"].totalTokens += tokensUsed;
+
+        const latencyMs = Date.now() - startTime;
+        recordUsage({
+          ts: Date.now(),
+          endpoint: req.endpoint || "chat-stream",
+          provider: "openrouter",
+          model,
+          tokens: tokensUsed,
+          latencyMs,
+          success: true,
+          streamed: true,
+          costUsd: streamCostUsd,
+        });
+        if (req.userId) {
+          logAudit(req.userId, "AI_CALL_OPENROUTER_STREAM", null, true, {
+            model,
+            tokens: tokensUsed,
+            latencyMs,
+          }).catch(() => {});
+        }
+        onEvent({ type: "done", model, provider: "openrouter", tokensUsed, latencyMs });
+        return;
+      } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        lastError = errorMessage;
+        if (gotAnyToken) {
+          // Partial content already delivered — do NOT retry with another
+          // model (would duplicate text). End the stream honestly instead.
+          log.warn(`[aiRouter] stream error setelah ${model} mengirim konten parsial: ${errorMessage.substring(0, 120)}`);
+          recordUsage({
+            ts: Date.now(),
+            endpoint: req.endpoint || "chat-stream",
+            provider: "openrouter",
+            model,
+            tokens: 0,
+            latencyMs: Date.now() - startTime,
+            success: false,
+            streamed: true,
+            error: errorMessage.substring(0, 150),
+          });
+          onEvent({ type: "error", error: `Stream terputus: ${errorMessage.substring(0, 120)}` });
+          return;
+        }
+        log.warn(`[aiRouter] stream model "${model}" gagal: ${errorMessage.substring(0, 120)} — mencoba model berikutnya...`);
+      } finally {
+        clearTimeout(timeout);
+        req.abortSignal?.removeEventListener("abort", onClientClose);
+      }
+    }
+
+    providerHealth["openrouter"].available = false;
+    providerHealth["openrouter"].lastError = lastError;
+    providerHealth["openrouter"].failureCount++;
+    recordUsage({
+      ts: Date.now(),
+      endpoint: req.endpoint || "chat-stream",
+      provider: "openrouter",
+      model: OPENROUTER_MODEL,
+      tokens: 0,
+      latencyMs: Date.now() - startTime,
+      success: false,
+      streamed: true,
+      error: lastError.substring(0, 150),
+    });
+  }
+
+  // Degrade gracefully: non-streaming callAI (OpenRouter retry or Gemini),
+  // emitted as a single token so the client UI behaves identically.
+  const result = await callAI(req);
+  if (result.success) {
+    onEvent({ type: "start", model: result.model, provider: result.provider });
+    onEvent({ type: "token", text: result.text, model: result.model, provider: result.provider });
+    onEvent({
+      type: "done",
+      model: result.model,
+      provider: result.provider,
+      tokensUsed: result.tokensUsed,
+      latencyMs: result.latencyMs,
+    });
+  } else {
+    onEvent({ type: "error", error: result.error || "Semua provider AI gagal." });
+  }
 }
 
 // ─── Health Check Endpoint Data ──────────────────────────────────────

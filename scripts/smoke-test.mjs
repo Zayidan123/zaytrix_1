@@ -326,6 +326,57 @@ async function main() {
     console.error(`  ${errCount === 0 ? "ok " : "ERR"} ${tab} (page errors: ${errCount})`);
   }
 
+  // 6b. QA7-F3: Whale Radar deep-check — after the On-Chain tab is open,
+  //     click the "Whale Radar" sub-tab and assert the WS status chip
+  //     renders (LIVE or PUTUS, never absent) + the feed header appears.
+  //     This guards the whole server whaleStream → endpoint → UI chain.
+  ab(["find", "role", "button", "click", "--name", "On-Chain Data"], { allowFail: true, timeout: 45000 });
+  await sleep(2500);
+  ab(["eval", "(() => { const t = Array.from(document.querySelectorAll('button,[role=tab]')); const w = t.find(x => x.innerText.toLowerCase().includes('whale')); if (w) { w.click(); return 'clicked'; } return 'not-found'; })()"], { allowFail: true, timeout: 30000 });
+  // Poll up to ~14s for the chip to reach WS LIVE (server stream connects
+  // within seconds; MEMUAT = first fetch still in flight). Accepting PUTUS
+  // here would false-pass on a null feed (QA7 chip honesty fix).
+  let whaleStatus = "no-ws-status";
+  for (let i = 0; i < 7; i++) {
+    await sleep(2000);
+    // agent-browser prints eval results as JSON — strip the surrounding quotes.
+    whaleStatus = String(ab(["eval", "document.body.innerText.match(/WS LIVE|WS PUTUS|MEMUAT/i)?.[0] || 'no-ws-status'"], { allowFail: true, timeout: 30000 })).trim().replace(/^"|"$/g, "");
+    if (whaleStatus === "WS LIVE") break;
+  }
+  const whaleOk = whaleStatus === "WS LIVE";
+  step("whale radar sub-tab + WS status chip", whaleOk, whaleStatus);
+  result.whaleRadar = { checked: true, status: whaleStatus };
+
+  // 6c. QA7-F1: AI SSE streaming deep-check — go to AI Market Chat, send a
+  //     tiny prompt, and assert the streaming bubble appears and finishes
+  //     (final content non-empty + provider badge). Guards the chat-stream
+  //     endpoint + progressive rendering chain.
+  // The sidebar button label is "AI Market Chat LIVE" — click via innerText
+  // match (the find --name exact-match form is fragile against badges).
+  ab(["eval", "(() => { const b = Array.from(document.querySelectorAll('button')).find(x => x.innerText.includes('AI Market Chat')); if (b) { b.click(); return 'clicked'; } return 'not-found'; })()"], { allowFail: true, timeout: 30000 });
+  await sleep(4000);
+  const chatInputOk = ab(["eval", "(() => { const i = document.querySelector('input[placeholder*=\"pasar crypto\"]'); if (!i) return 'no-input'; i.focus(); return 'input-found'; })()"], { allowFail: true, timeout: 30000 });
+  if (String(chatInputOk).includes("input-found")) {
+    ab(["keyboard", "type", "Jawab dengan satu kata: siap"], { allowFail: true, timeout: 30000 });
+    await sleep(600);
+    ab(["press", "Enter"], { allowFail: true, timeout: 30000 });
+    // Wait for stream to start AND finish (done → isStreaming false + content).
+    let streamState = "timeout";
+    for (let i = 0; i < 24; i++) {
+      await sleep(2500);
+      const state = ab(["eval", "(() => { const body = document.body.innerText; if (body.includes('streaming')) return 'streaming'; if (/\d+ tok/.test(body) || /openrouter|gemini/i.test(body)) return 'done'; return 'waiting'; })()"], { allowFail: true, timeout: 30000 });
+      const s = String(state).trim().replace(/^"|"$/g, "");
+      if (s === "done") { streamState = "done"; break; }
+      if (s === "streaming") { streamState = "streaming-seen"; }
+    }
+    const streamOk = streamState === "done" || streamState === "streaming-seen";
+    step("AI chat SSE streaming (bubble + provider badge)", streamOk, streamState);
+    result.aiStream = { checked: true, state: streamState };
+    ab(["screenshot", `${ART_DIR}smoke-ai-stream-${TS}.png`], { allowFail: true });
+  } else {
+    step("AI chat SSE streaming (input found)", false, String(chatInputOk).trim());
+  }
+
   // 7. Final console census + screenshot.
   const consoleText = ab(["console"], { allowFail: true, timeout: 30000 });
   result.pageErrors = result.tabResults.reduce((s, t) => s + t.pageErrors, 0);

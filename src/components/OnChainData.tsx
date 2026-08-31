@@ -3039,17 +3039,32 @@ export default function OnChainData() {
                 <span className="px-2 py-1 rounded-md bg-slate-950/60 border border-slate-800 font-mono">
                   upd: {whaleLastFetched ? new Date(whaleLastFetched).toLocaleTimeString("id-ID") : "—"}
                 </span>
-                <span
-                  className={`px-2 py-1 rounded-md font-mono border flex items-center gap-1.5 ${
-                    whaleFeed?.stream?.connected
-                      ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
-                      : "bg-amber-500/10 border-amber-500/30 text-amber-300"
-                  }`}
-                  title={whaleFeed?.stream?.connected ? "WebSocket Binance aggTrade tersambung — buffer real-time" : "Stream terputus — snapshot real terakhir (bukan data palsu)"}
-                >
-                  <span className={`inline-block w-1.5 h-1.5 rounded-full ${whaleFeed?.stream?.connected ? "bg-emerald-400 animate-pulse" : "bg-amber-400"}`} />
-                  {whaleFeed?.stream?.connected ? "WS LIVE" : "WS PUTUS"}
-                </span>
+                {(() => {
+                  // QA7-FIX: 3 honest states — LIVE (ws connected), MEMUAT
+                  // (first fetch in flight, no snapshot yet), PUTUS (ws down,
+                  // stale-but-real snapshot). Previously the initial load
+                  // wrongly displayed "PUTUS".
+                  const wsConnected = whaleFeed?.stream?.connected === true;
+                  const loadingState = !whaleFeed && (whaleLoading || !whaleError);
+                  const cls = wsConnected
+                    ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                    : loadingState
+                      ? "bg-slate-500/10 border-slate-600/40 text-slate-400"
+                      : "bg-amber-500/10 border-amber-500/30 text-amber-300";
+                  const label = wsConnected ? "WS LIVE" : loadingState ? "MEMUAT…" : "WS PUTUS";
+                  const tip = wsConnected
+                    ? "WebSocket Binance aggTrade tersambung — buffer real-time"
+                    : loadingState
+                      ? "Mengambil snapshot whale pertama…"
+                      : "Stream terputus — snapshot real terakhir (bukan data palsu)";
+                  const dot = wsConnected ? "bg-emerald-400 animate-pulse" : loadingState ? "bg-slate-400 animate-pulse" : "bg-amber-400";
+                  return (
+                    <span className={`px-2 py-1 rounded-md font-mono border flex items-center gap-1.5 ${cls}`} title={tip}>
+                      <span className={`inline-block w-1.5 h-1.5 rounded-full ${dot}`} />
+                      {label}
+                    </span>
+                  );
+                })()}
                 <button
                   onClick={() => {
                     fetch(`/api/live/whale-trades?symbols=${whaleSymbols.join(",")}&minUsd=${whaleMinUsd}&limit=50`)

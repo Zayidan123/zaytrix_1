@@ -42,6 +42,11 @@ interface ChatMessage {
   model?: string;
   isFallback?: boolean;
   error?: boolean;
+  /** QA7-F1: true while SSE tokens are still arriving */
+  isStreaming?: boolean;
+  /** QA7-F2: token accounting from the final stream chunk */
+  tokensUsed?: number;
+  latencyMs?: number;
 }
 
 interface MarketContext {
@@ -178,6 +183,99 @@ ATURAN JAWABAN:
 6. Maksimal 300 kata kecuali diminta lebih detail.`;
   };
 
+  /**
+   * QA7-F1: stream the answer token-by-token over SSE. Appends (and mutates)
+   * the assistant bubble itself. Returns true when a terminal state was
+   * reached via streaming — false when the caller should fall back to the
+   * non-streaming /api/ai/chat call.
+   */
+  const streamChat = async (content: string, systemPrompt: string): Promise<boolean> => {
+    const res = await fetch("/api/ai/chat-stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt: content,
+        systemPrompt,
+        maxTokens: 1000,
+        temperature: 0.7,
+      }),
+    });
+    if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+
+    const streamId = `a-${Date.now()}`;
+    setMessages((prev) => [
+      ...prev,
+      { id: streamId, role: "assistant", content: "", timestamp: Date.now(), provider: "openrouter", isStreaming: true },
+    ]);
+
+    let gotAnyToken = false;
+    let streamError: string | null = null;
+    const finalMeta: Partial<ChatMessage> = {};
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue; // skips keep-alive comments too
+        try {
+          const ev = JSON.parse(trimmed.slice(5).trim());
+          if (ev.type === "start") {
+            if (ev.model) {
+              setMessages((prev) => prev.map((m) => (m.id === streamId ? { ...m, model: ev.model, provider: ev.provider || "openrouter" } : m)));
+            }
+          } else if (ev.type === "token" && typeof ev.text === "string" && ev.text) {
+            gotAnyToken = true;
+            const chunk = ev.text;
+            setMessages((prev) => prev.map((m) => (m.id === streamId ? { ...m, content: m.content + chunk } : m)));
+          } else if (ev.type === "done") {
+            finalMeta.tokensUsed = ev.tokensUsed;
+            finalMeta.latencyMs = ev.latencyMs;
+            if (ev.model) finalMeta.model = ev.model;
+            if (ev.provider) finalMeta.provider = ev.provider;
+          } else if (ev.type === "error") {
+            streamError = ev.error || "stream error";
+          }
+        } catch {
+          // tolerate malformed SSE line
+        }
+      }
+    }
+
+    if (streamError && !gotAnyToken) {
+      // Nothing arrived — remove the empty bubble and let the caller
+      // decide (non-streaming fallback or honest unavailable message).
+      setMessages((prev) => prev.filter((m) => m.id !== streamId));
+      return false;
+    }
+
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === streamId
+          ? { ...m, ...finalMeta, isStreaming: false, error: streamError ? true : m.error }
+          : m
+      )
+    );
+    if (streamError && gotAnyToken) {
+      // Partial answer + honest disconnect note (content is preserved).
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === streamId
+            ? { ...m, content: `${m.content}\n\n> ⚠️ ${streamError}` }
+            : m
+        )
+      );
+    }
+    return true;
+  };
+
   const sendMessage = async (text?: string) => {
     const content = (text ?? input).trim();
     if (!content || loading) return;
@@ -195,13 +293,23 @@ ATURAN JAWABAN:
     try {
       // Ensure context is fresh before sending
       if (!context) await fetchContext();
+      const systemPrompt = buildSystemPrompt();
+
+      // QA7-F1: try SSE streaming first — token-by-token display.
+      try {
+        const handled = await streamChat(content, systemPrompt);
+        if (handled) return;
+      } catch {
+        // SSE transport failed (proxy, 404 on older server) — fall through
+        // to the non-streaming call below.
+      }
 
       const res = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           prompt: content,
-          systemPrompt: buildSystemPrompt(),
+          systemPrompt,
           maxTokens: 1000,
           temperature: 0.7,
         }),
@@ -287,8 +395,14 @@ ATURAN JAWABAN:
                 LIVE
               </span>
             </div>
-            <p className="text-[10px] text-slate-400 font-mono">
+            <p className="text-[10px] text-slate-400 font-mono flex items-center gap-1.5">
               Tanya jawab tentang pasar crypto
+              <span
+                className="text-[8px] px-1 py-px rounded bg-violet-950/60 text-violet-300 border border-violet-800/50"
+                title="Jawaban mengalir token demi token (SSE) dari OpenRouter"
+              >
+                STREAM
+              </span>
             </p>
           </div>
         </div>
@@ -392,6 +506,13 @@ ATURAN JAWABAN:
                 {msg.role === "assistant" ? (
                   <div className="text-xs leading-relaxed prose prose-sm prose-invert max-w-none [&_p]:my-1 [&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-xs [&_strong]:text-white [&_ul]:my-1 [&_li]:my-0.5">
                     <Markdown>{msg.content}</Markdown>
+                    {msg.isStreaming && (
+                      <span
+                        className="zx-stream-cursor"
+                        aria-label="AI sedang menulis"
+                        title="AI sedang menulis…"
+                      />
+                    )}
                   </div>
                 ) : (
                   <p className="text-xs leading-relaxed">{msg.content}</p>
@@ -424,6 +545,24 @@ ATURAN JAWABAN:
                       <Zap className="w-2 h-2" /> fallback
                     </span>
                   )}
+                  {msg.isStreaming && (
+                    <span className="text-[8px] text-violet-400 font-mono flex items-center gap-0.5">
+                      <span className="w-1 h-1 rounded-full bg-violet-400 animate-pulse" /> streaming
+                    </span>
+                  )}
+                  {!msg.isStreaming && typeof msg.tokensUsed === "number" && msg.tokensUsed > 0 && (
+                    <span
+                      className="text-[8px] text-slate-500 font-mono"
+                      title={`Konsumsi token: ${msg.tokensUsed}`}
+                    >
+                      · {msg.tokensUsed} tok
+                    </span>
+                  )}
+                  {!msg.isStreaming && typeof msg.latencyMs === "number" && msg.latencyMs > 0 && (
+                    <span className="text-[8px] text-slate-600 font-mono" title="Latensi respons">
+                      · {(msg.latencyMs / 1000).toFixed(1)}s
+                    </span>
+                  )}
                 </div>
               </div>
               {msg.role === "user" && (
@@ -435,8 +574,9 @@ ATURAN JAWABAN:
           ))}
         </AnimatePresence>
 
-        {/* Loading indicator */}
-        {loading && (
+        {/* Loading indicator — hidden once stream tokens are flowing
+            (the streaming bubble + cursor replaces the three dots). */}
+        {loading && !(messages.length > 0 && messages[messages.length - 1]?.isStreaming) && (
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -507,6 +647,22 @@ ATURAN JAWABAN:
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(139,92,246,0.3); border-radius: 2px; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(139,92,246,0.5); }
+        /* QA7-F1: terminal-style blinking caret shown while AI tokens stream */
+        .zx-stream-cursor {
+          display: inline-block;
+          width: 7px;
+          height: 13px;
+          margin-left: 2px;
+          vertical-align: text-bottom;
+          border-radius: 1.5px;
+          background: linear-gradient(180deg, #a78bfa, #7c3aed);
+          box-shadow: 0 0 8px rgba(139, 92, 246, 0.65);
+          animation: zx-caret-blink 0.85s steps(1) infinite;
+        }
+        @keyframes zx-caret-blink {
+          0%, 55% { opacity: 1; }
+          56%, 100% { opacity: 0; }
+        }
       `}</style>
     </motion.div>
   );
