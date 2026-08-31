@@ -525,6 +525,28 @@ export default function App() {
     const connectWebSocket = () => {
       try {
         ws = new WebSocket("wss://stream.binance.com:9443/stream?streams=btcusdt@ticker/ethusdt@ticker/bnbusdt@ticker/xrpusdt@ticker/solusdt@ticker/trxusdt@ticker");
+
+        // QA-FIX (render storm): Binance mengirim pesan ticker per simbol tiap
+        // ~1 dtk; 6 stream interleaved memicu burst Zustand set() → render
+        // storm yang sempat memicu "Maximum update depth exceeded" di chart
+        // recharts (tertangkap ErrorBoundary). Throttle per-simbol 1000ms —
+        // pesan antar-jendela di-drop (nilai berikutnya selalu lebih segar),
+        // tekanan render turun drastis tanpa mengurangi rasa "live".
+        const lastTickerUpdate = new Map<string, number>();
+        const TICKER_THROTTLE_MS = 1000;
+        const throttledTickerUpdate = (
+          key: string,
+          price: number,
+          changePercent: number,
+          updater: (p: number, c?: number) => void
+        ) => {
+          const now = Date.now();
+          const last = lastTickerUpdate.get(key) ?? 0;
+          if (now - last >= TICKER_THROTTLE_MS) {
+            lastTickerUpdate.set(key, now);
+            updater(price, changePercent);
+          }
+        };
         
         ws.onopen = () => {
           isWsActive = true;
@@ -554,17 +576,17 @@ export default function App() {
               const changePercent = parseFloat(data.P);
               
               if (streamName === "btcusdt@ticker" && !isNaN(price)) {
-                updateBtcPrice(price, changePercent);
+                throttledTickerUpdate("BTC", price, changePercent, updateBtcPrice);
               } else if (streamName === "ethusdt@ticker" && !isNaN(price)) {
-                updateEthPrice(price, changePercent);
+                throttledTickerUpdate("ETH", price, changePercent, updateEthPrice);
               } else if (streamName === "bnbusdt@ticker" && !isNaN(price)) {
-                updateBnbPrice(price, changePercent);
+                throttledTickerUpdate("BNB", price, changePercent, updateBnbPrice);
               } else if (streamName === "xrpusdt@ticker" && !isNaN(price)) {
-                updateXrpPrice(price, changePercent);
+                throttledTickerUpdate("XRP", price, changePercent, updateXrpPrice);
               } else if (streamName === "solusdt@ticker" && !isNaN(price)) {
-                updateSolPrice(price, changePercent);
+                throttledTickerUpdate("SOL", price, changePercent, updateSolPrice);
               } else if (streamName === "trxusdt@ticker" && !isNaN(price)) {
-                updateTrxPrice(price, changePercent);
+                throttledTickerUpdate("TRX", price, changePercent, updateTrxPrice);
               }
             }
           } catch (e) {
@@ -1123,9 +1145,9 @@ export default function App() {
               <span>UTC: {utcTime}</span>
             </div>
 
-            <div className="hidden md:flex items-center space-x-2 bg-blue-500/10 text-blue-400 border border-blue-500/20 px-2.5 py-1 rounded text-[10px] font-semibold">
-              <ShieldCheck className="w-3.5 h-3.5 text-blue-400" />
-              <span>E2EE SANDBOX (DEMO)</span>
+            <div className="hidden md:flex items-center space-x-2 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2.5 py-1 rounded text-[10px] font-semibold">
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+              <span>VAULT AES-256-GCM</span>
             </div>
           </div>
         </header>

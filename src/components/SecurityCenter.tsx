@@ -410,14 +410,14 @@ export default function SecurityCenter({ twoFactorEnabled, setTwoFactorEnabled }
             <div>
               <h2 className="text-xl font-bold text-slate-100 flex items-center gap-2">
                 Security Center
-                <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-blue-950 text-blue-400 border border-blue-800/60">
-                  2FA + E2EE
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-emerald-950 text-emerald-400 border border-emerald-800/60">
+                  2FA SERVER-SIDE
                 </span>
               </h2>
             </div>
           </div>
           <p className="text-sm text-slate-400 mt-1 max-w-2xl">
-            Lindungi portofolio finansial Anda dengan Otentikasi Dua Faktor (2FA) tingkat perbankan dan enkripsi pertukaran data end-to-end (E2EE).
+            Lindungi portofolio finansial Anda dengan Otentikasi Dua Faktor (2FA) tingkat perbankan — diverifikasi penuh di server (RFC 6238) dengan kunci TOTP terenkripsi at-rest dan 8 kode cadangan sekali-pakai.
           </p>
         </div>
       </motion.div>
@@ -660,14 +660,17 @@ export default function SecurityCenter({ twoFactorEnabled, setTwoFactorEnabled }
           </div>
         </div>
 
-        {/* Right column: E2EE Interactive Simulator */}
+        {/* Right column: educational AES-GCM cipher demo (Web Crypto API).
+            Reframed honestly: this is a standalone educational simulator —
+            application data itself is protected by server-side AES-256-GCM
+            (API key vault) and TLS, not by this demo. */}
         <div className="bg-[#0F172A] border border-slate-800 rounded-2xl p-6 flex flex-col justify-between">
           <div className="space-y-4">
             <h3 className="text-md font-bold text-slate-200 flex items-center gap-2">
-              <Lock className="w-4 h-4 text-blue-500" /> Simulator Enkripsi End-to-End (E2EE)
+              <Lock className="w-4 h-4 text-blue-500" /> Simulator Edukasi Enkripsi AES-256-GCM
             </h3>
             <p className="text-xs text-slate-400 leading-relaxed">
-              Privasi data pribadi dijamin sepenuhnya. Di bawah standar enkripsi militer AES-256 GCM, data sensitif Anda disandikan langsung di browser sebelum dikirim melalui internet. Coba simulasikan enkripsi E2EE secara langsung di bawah:
+              Demonstrasi edukatif cara kerja cipher AES-GCM 256-bit langsung di browser (Web Crypto API) — memahami mengapa vault kunci bursa Anda aman. Catatan: simulator ini alat belajar; data aplikasi Anda sendiri dilindungi TLS + enkripsi server-side AES-256-GCM.
             </p>
 
             {/* Simulated plain text inputs */}
@@ -755,8 +758,8 @@ export default function SecurityCenter({ twoFactorEnabled, setTwoFactorEnabled }
           </div>
 
           <div className="text-[10px] text-slate-500 uppercase font-mono mt-4 border-t border-slate-800 pt-4 flex justify-between items-center">
-            <span>Standar Enkripsi: AES-256-GCM (Simulator E2EE)</span>
-            <span className="text-blue-400 font-semibold">CLIENT-SIDE TOTP + E2EE DEMO</span>
+            <span>Standar Enkripsi: AES-256-GCM (Demo Edukasi)</span>
+            <span className="text-emerald-400 font-semibold">2FA DIVERIFIKASI SERVER-SIDE</span>
           </div>
         </div>
 

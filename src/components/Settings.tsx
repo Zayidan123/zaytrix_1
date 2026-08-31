@@ -1026,14 +1026,15 @@ export default function Settings() {
                   )}
                 </div>
 
-                {/* E2EE Crypter Simulator */}
+                {/* Educational AES-GCM cipher demo (Web Crypto API) — honestly
+                    framed as a learning tool, not an application data feature. */}
                 <div className="bg-[#0A0F1D]/60 border border-slate-800 rounded-xl p-5 space-y-4">
                   <h3 className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
                     <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                    Enkripsi End-to-End (E2EE AES-GCM)
+                    Simulator Edukasi Enkripsi AES-256-GCM
                   </h3>
                   <p className="text-xs text-slate-400 leading-relaxed">
-                    Uji kekuatan sandi pengacak data militer Z-Capital. Sandbox melakukan komputasi sandi murni di dalam client.
+                    Demonstrasi edukatif cipher AES-GCM di browser (Web Crypto API) — pahami mengapa vault kunci bursa Anda aman dienkripsi. Ini alat belajar, bukan fitur penyimpanan data aplikasi.
                   </p>
 
                   <div className="space-y-2">
@@ -1638,7 +1639,7 @@ export default function Settings() {
                   {[
                     {
                       q: "Bagaimana cara kerja keamanan siber enkripsi di Z-Capital?",
-                      a: "Z-Capital menerapkan perlindungan berlapis. Pada tingkat peramban client, sandbox E2EE menggunakan AES-256 GCM untuk demonstrasi enkripsi. API Key bursa disimpan plaintext di localStorage peramban Anda dan tidak ditransmisikan ke server. Untuk penyimpanan terenkripsi, gunakan fitur E2EE AES-GCM di tab Api Automation dengan Master PIN Anda sendiri."
+                      a: "ZAYTRIX menerapkan perlindungan berlapis: kunci API bursa disimpan di vault server dengan enkripsi AES-256-GCM (ENCRYPTION_KEY) — tidak lagi plaintext di localStorage. Transport dilindungi HTTPS/TLS. Simulator AES di tab ini hanyalah alat edukasi cara kerja cipher."
                     },
                     {
                       q: "Bagaimana cara mendaftarkan nomor telepon untuk menerima alarm target harga?",
@@ -1678,7 +1679,7 @@ export default function Settings() {
                   <span className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider block border-b border-slate-800 pb-2">Kebijakan Privasi (Privacy Policy)</span>
                   <div className="h-44 overflow-y-auto text-[11px] text-slate-500 leading-relaxed font-sans pr-2 space-y-2">
                     <p><strong>1. Pengumpulan Informasi:</strong> Z-Capital tidak mengumpulkan, menjual, atau mentransfer data kredensial, API key bursa, atau nomor telepon Anda ke pihak luar. Data profil disimpan lokal di browser Anda; kunci API bursa disimpan terenkripsi AES-256-GCM di vault server.</p>
-                    <p><strong>2. Keamanan Kunci:</strong> API Key disimpan plaintext di peramban lokal (localStorage). Enkripsi E2EE AES-GCM 256-bit tersedia opsional di tab Api Automation dengan Master PIN pengguna.</p>
+                    <p><strong>2. Keamanan Kunci:</strong> API Key bursa disimpan terenkripsi AES-256-GCM di vault server (lihat tab Otomasi Trade) dan hanya dipakai untuk menandatangani order; browser tidak menyimpan kunci plaintext.</p>
                     <p><strong>3. Hak Pengguna:</strong> Anda memiliki hak penuh untuk mengekstrak data Anda sendiri atau menghapusnya secara permanen setiap saat sesuai standar GDPR.</p>
                   </div>
                 </div>

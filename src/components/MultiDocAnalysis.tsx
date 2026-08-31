@@ -656,8 +656,8 @@ export default function MultiDocAnalysis() {
                   <span className="text-amber-400 font-bold">{uploadedFiles.length} Dokumen</span>
                 </div>
                 <div className="flex items-center justify-between border-t border-slate-900 mt-2 pt-2">
-                  <span>E2EE Tunnel:</span>
-                  <span className="text-emerald-400 font-bold">✓ Secured</span>
+                  <span>Transport:</span>
+                  <span className="text-emerald-400 font-bold">✓ HTTPS/TLS + Auth Session</span>
                 </div>
               </div>
             </div>

@@ -1492,6 +1492,176 @@ portfolioRouter.get("/risk-score", async (req: Request, res: Response) => {
   }
 });
 
+// Yahoo Finance chart API for stock prices (same upstream the /api/assets
+// refresher uses). Short in-module cache; null on failure (never fabricated).
+const STOCK_PRICE_CACHE_TTL = 120 * 1000;
+const stockPriceCache = new Map<string, { price: number; ts: number }>();
+async function fetchStockPrice(symbol: string): Promise<number | null> {
+  const now = Date.now();
+  const cached = stockPriceCache.get(symbol);
+  if (cached && now - cached.ts < STOCK_PRICE_CACHE_TTL) return cached.price;
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}.JK?range=1d&interval=1d`;
+    const res = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
+      signal: AbortSignal.timeout(6000),
+    });
+    if (!res.ok) return cached?.price ?? null;
+    const data = (await res.json()) as any;
+    const price = parseFloat(data?.chart?.result?.[0]?.meta?.regularMarketPrice);
+    if (!Number.isFinite(price) || price <= 0) return cached?.price ?? null;
+    stockPriceCache.set(symbol, { price, ts: now });
+    return price;
+  } catch {
+    return cached?.price ?? null;
+  }
+}
+
+// ============================================================================
+// NEW FEATURE (Roadmap #25): Portfolio Performance Attribution
+// ----------------------------------------------------------------------------
+// GET /api/portfolio/attribution
+// Answers: "aset mana yang paling berkontribusi terhadap gain/loss portofolio?"
+// For each holding (live prices) we compute:
+//   - costBasis  = purchasePrice × quantity
+//   - currentValue = livePrice × quantity
+//   - gainLoss & gainLossPct (absolute + relative per asset)
+//   - weightPct   = share of current portfolio value
+//   - contributionPct = share of TOTAL portfolio P&L (signed)
+// Price sources are honest: crypto = live Binance; stock = last-synced price
+// from the client sync layer (flagged) — we never fabricate prices.
+// ============================================================================
+portfolioRouter.get("/attribution", async (req: Request, res: Response) => {
+  try {
+    const holdings = await prisma.portfolioHolding.findMany({
+      where: { userId: req.user!.sub },
+    });
+
+    if (holdings.length === 0) {
+      return res.json({
+        success: true,
+        attribution: {
+          totalValue: 0,
+          totalCost: 0,
+          totalGainLoss: 0,
+          totalGainLossPct: 0,
+          holdings: [],
+          best: null,
+          worst: null,
+          summary: "Belum ada holding. Tambahkan aset di Crypto Hub untuk melihat atribusi kinerja.",
+        },
+      });
+    }
+
+    interface AttributionRow {
+      id: string;
+      symbol: string;
+      category: string;
+      quantity: number;
+      purchasePrice: number;
+      livePrice: number;
+      priceSource: "live" | "last-synced" | "purchase-price";
+      costBasis: number;
+      currentValue: number;
+      gainLoss: number;
+      gainLossPct: number;
+      weightPct: number;
+      contributionPct: number;
+    }
+
+    const rows: AttributionRow[] = [];
+    let totalValue = 0;
+    let totalCost = 0;
+
+    for (const h of holdings) {
+      const qty = h.quantity > 0 ? h.quantity : 0;
+      const cost = (h.purchasePrice || 0) * qty;
+
+      let livePrice = 0;
+      let priceSource: AttributionRow["priceSource"] = "purchase-price";
+      if (h.category === "crypto") {
+        const { price } = await fetchAssetVolatility(h.symbol, h.category);
+        if (price > 0) {
+          livePrice = price;
+          priceSource = "live";
+        }
+      } else {
+        // Stocks: Yahoo Finance live quote (same upstream as /api/assets).
+        const price = await fetchStockPrice(h.symbol);
+        if (price !== null && price > 0) {
+          livePrice = price;
+          priceSource = "live";
+        }
+      }
+      // Honest fallback — flagged, never fabricated:
+      if (livePrice <= 0 && (h.purchasePrice || 0) > 0) {
+        livePrice = h.purchasePrice;
+        priceSource = "purchase-price";
+      }
+
+      const value = livePrice * qty;
+      const gainLoss = value - cost;
+      const gainLossPct = cost > 0 ? (gainLoss / cost) * 100 : 0;
+
+      rows.push({
+        id: h.id,
+        symbol: h.symbol,
+        category: h.category,
+        quantity: qty,
+        purchasePrice: h.purchasePrice || 0,
+        livePrice,
+        priceSource,
+        costBasis: cost,
+        currentValue: value,
+        gainLoss,
+        gainLossPct,
+        weightPct: 0, // filled after totals
+        contributionPct: 0, // filled after totals
+      });
+      totalValue += value;
+      totalCost += cost;
+    }
+
+    const totalGainLoss = totalValue - totalCost;
+    const totalGainLossPct = totalCost > 0 ? (totalGainLoss / totalCost) * 100 : 0;
+
+    for (const r of rows) {
+      r.weightPct = totalValue > 0 ? (r.currentValue / totalValue) * 100 : 0;
+      // Contribution: share of the TOTAL P&L (signed — a losing asset inside a
+      // winning portfolio shows negative contribution).
+      r.contributionPct = totalGainLoss !== 0 ? (r.gainLoss / totalGainLoss) * 100 : 0;
+    }
+
+    // Rank by absolute P&L impact (largest movers first).
+    rows.sort((a, b) => Math.abs(b.gainLoss) - Math.abs(a.gainLoss));
+    const best = rows.find((r) => r.gainLoss > 0) ?? null;
+    const worst = rows.find((r) => r.gainLoss < 0) ?? null;
+
+    const staleCount = rows.filter((r) => r.priceSource !== "live").length;
+    const summary = `${holdings.length} holding dianalisis. Total return ${totalGainLossPct.toFixed(2)}%` +
+      (best ? ` • kontributor terbaik ${best.symbol} (+${best.gainLossPct.toFixed(1)}%)` : "") +
+      (worst ? ` • terburuk ${worst.symbol} (${worst.gainLossPct.toFixed(1)}%)` : "") +
+      (staleCount > 0 ? ` • ${staleCount} aset memakai harga non-live (berlabel)` : "");
+
+    return res.json({
+      success: true,
+      attribution: {
+        totalValue,
+        totalCost,
+        totalGainLoss,
+        totalGainLossPct,
+        holdings: rows,
+        best: best ? { symbol: best.symbol, gainLoss: best.gainLoss, gainLossPct: best.gainLossPct } : null,
+        worst: worst ? { symbol: worst.symbol, gainLoss: worst.gainLoss, gainLossPct: worst.gainLossPct } : null,
+        summary,
+      },
+    });
+  } catch (e: any) {
+    console.error("[attribution] error:", e?.message || e);
+    res.status(500).json({ success: false, error: "Gagal menghitung atribusi kinerja." });
+  }
+});
+
 // ============================================================================
 // NEW FEATURE: Portfolio Rebalancing Suggestions
 // ----------------------------------------------------------------------------

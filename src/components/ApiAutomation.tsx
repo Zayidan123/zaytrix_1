@@ -444,7 +444,7 @@ export default function ApiAutomation() {
                   {connectionStatus === "failed" && "Konektivitas / Kunci Tidak Sah"}
                 </p>
                 <p className="text-[10px] text-slate-400 leading-normal">
-                  {connectionStatus === "not_tested" && "Kunci bursa tersimpan rahasia di client-side. Klik tombol verifikasi di bawah untuk membuktikannya langsung."}
+                  {connectionStatus === "not_tested" && "Kunci (bila tersimpan) berada terenkripsi di vault server AES-256-GCM. Klik tombol verifikasi untuk menguji ticker & saldo bursa."}
                   {connectionStatus === "checking" && "Mengirimkan hash bertanda tangan SHA256 melintasi proxy bursa riil..."}
                   {connectionStatus === "connected" && (statusDetails || "Otentikasi sukses. Ticker harga & saldo saat ini telah disinkronkan.")}
                   {connectionStatus === "failed" && (statusDetails || "Pastikan kunci sandi Master PIN Anda benar dan bursa mengizinkan pemanggilan.")}

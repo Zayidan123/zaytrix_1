@@ -29,3 +29,9 @@ skills/
 # FUNC-13: dead artifacts removed from tracking
 mini-services/
 # runtime artifacts
+
+# SEC-1: user databases are NEVER tracked (db/custom.db pernah berisi
+# kredensial nyata — purge 2026, rotasi semua secret).
+db/
+db/custom.db
+.zscripts/

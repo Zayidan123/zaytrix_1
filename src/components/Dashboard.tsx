@@ -52,6 +52,8 @@ import RiskScoreWidget from "./RiskScoreWidget";
 import RebalanceWidget from "./RebalanceWidget";
 import CorrelationMatrixWidget from "./CorrelationMatrixWidget";
 import DCACalculator from "./DCACalculator";
+// NEW (Roadmap #25): performance attribution widget
+import PerformanceAttributionWidget from "./PerformanceAttributionWidget";
 import { SectionErrorBoundary } from "./SectionErrorBoundary"; // OPT-2b: per-section crash isolation
 // OPT-7: Firebase removed — profile data is read from localStorage
 // (key `z_profile_${user.uid}`, written by Profile.tsx). Previously this hit
@@ -1176,6 +1178,11 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
       {/* NEW FEATURE: Portfolio Rebalancing Advisor */}
       <SectionErrorBoundary sectionName="Rebalance Advisor">
         <RebalanceWidget />
+      </SectionErrorBoundary>
+
+      {/* NEW FEATURE (Roadmap #25): Portfolio Performance Attribution */}
+      <SectionErrorBoundary sectionName="Performance Attribution">
+        <PerformanceAttributionWidget />
       </SectionErrorBoundary>
 
       {/* NEW FEATURE: Multi-asset Correlation Matrix */}
