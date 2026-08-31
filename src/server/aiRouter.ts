@@ -1,3 +1,6 @@
+import { createLogger } from "./logger";
+const log = createLogger("aiRouter");
+
 // ZAYTRIX AI Router — 9router (primary) + Gemini (fallback)
 // Institutional-grade AI routing with automatic failover, cost tracking, and audit logging.
 //
@@ -239,7 +242,7 @@ export async function callAI(req: AIRequest): Promise<AIResponse> {
     }
     nineRouterError = result.error || "unknown";
     // 9router failed — fall through to Gemini
-    console.warn(`[aiRouter] 9router failed (${nineRouterError}), falling back to Gemini...`);
+    log.warn(`[aiRouter] 9router failed (${nineRouterError}), falling back to Gemini...`);
   }
 
   // Fallback to Gemini
@@ -257,7 +260,7 @@ export async function callAI(req: AIRequest): Promise<AIResponse> {
   }
 
   // Both failed
-  console.error(`[aiRouter] All AI providers failed. 9router: ${nineRouterError}, Gemini: ${geminiResult.error}`);
+  log.error(`[aiRouter] All AI providers failed. 9router: ${nineRouterError}, Gemini: ${geminiResult.error}`);
   return {
     success: false,
     text: "",

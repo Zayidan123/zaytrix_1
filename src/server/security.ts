@@ -1,3 +1,6 @@
+import { createLogger } from "./logger";
+const log = createLogger("security");
+
 // ZAYTRIX backend security middleware (SEC-BACKEND + SEC2-AUTH).
 //
 // applySecurityMiddleware(app) installs, in order:
@@ -137,7 +140,20 @@ export const authLimiter = rateLimit({
   },
   // FIX-ALL M8: skip rate limiting entirely in vitest runs so auth integration
   // tests (which fire >5 requests to /api/auth/* within 60s) don't all 429.
-  skip: () => process.env.NODE_ENV === "test",
+  //
+  // QA3-4: also skip the two harmless GET probes — /api/auth/me (session
+  // reflection: returns the CALLER's own cookie state; brute-forcing it gains
+  // an attacker nothing) and /api/auth/csrf-token (issues a random
+  // double-submit token; requires no secrets). Counting them meant the SPA
+  // itself could exhaust the 5/min budget before the user ever attempted a
+  // login: each page mount fires /me (twice under React StrictMode in dev),
+  // so an unlucky reload made the NEXT login/register 429 with a confusing
+  // "too many authentication attempts" error (self-DoS). Attack surface is
+  // unchanged: the actual attempt endpoints (login, register, 2FA, password
+  // reset) remain fully limited.
+  skip: (req: Request) =>
+    process.env.NODE_ENV === "test" ||
+    (req.method === "GET" && /\/(me|csrf-token)$/.test(req.path || "")),
   message: { success: false, error: "Terlalu banyak percobaan autentikasi. Coba lagi dalam 1 menit." },
 });
 
@@ -390,7 +406,7 @@ async function getCsrfTokenModule(): Promise<CsrfTokenModule> {
     };
     return _csrfTokenModule;
   } catch (e: any) {
-    console.error("[csrf] failed to load CSRF token helpers from auth.ts:", e?.message || e);
+    log.error("[csrf] failed to load CSRF token helpers from auth.ts:", e?.message || e);
     // Fail-closed fallback: nothing can be issued or verified.
     _csrfTokenModule = {
       makeCsrfToken: () => {
@@ -421,7 +437,7 @@ export const csrfMiddleware: RequestHandler = async (req: Request, res: Response
     } catch (e: any) {
       // Missing SESSION_SECRET/CSRF_SECRET — auth flows will refuse to work
       // anyway (auth.ts throws). Never block the response for the seed itself.
-      console.error("[csrf] failed to seed CSRF cookie:", e?.message || e);
+      log.error("[csrf] failed to seed CSRF cookie:", e?.message || e);
     }
   }
 
@@ -443,17 +459,40 @@ export const csrfMiddleware: RequestHandler = async (req: Request, res: Response
   if (isCsrfExempt(url)) {
     return next();
   }
-  // Full double-submit: cookie MUST exist AND header MUST match it AND the
-  // token signature MUST be valid (server-issued).
+  // QA3-1 (stale-cookie deadlock): previously, a *present-but-invalid*
+  // zaytrix_csrf cookie (e.g. signed by a CSRF_SECRET from before a secret
+  // rotation, or issued by an older deployment) was never re-seeded — the
+  // seed step above only runs when the cookie is ABSENT. The SPA then hit an
+  // endless 403 loop for the full 24h cookie lifetime. Fix: on enforcement
+  // failure we re-seed a FRESH cookie in the 403 response itself + tag the
+  // body with a machine-readable code, so the client wrapper (main.tsx) can
+  // transparently retry once with the new token. Security is unchanged: a
+  // cross-site attacker still cannot read the (sameSite=lax, JS-readable)
+  // cookie value, so they cannot complete the double-submit pair.
+  const reseedAndReject = async (code: string): Promise<void> => {
+    try {
+      const mod = await getCsrfTokenModule();
+      res.cookie(CSRF_COOKIE_NAME, mod.makeCsrfToken(), {
+        httpOnly: false,
+        sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
+        path: "/",
+        maxAge: CSRF_COOKIE_MAX_AGE_MS,
+      });
+    } catch {
+      // Issuer unavailable (missing secrets) — fail closed, no reseed.
+    }
+    res.status(403).json({ success: false, code, error: "CSRF token tidak valid" });
+  };
   const cookieVal = (req.cookies as Record<string, string> | undefined)?.[CSRF_COOKIE_NAME];
   const headerRaw = req.headers[CSRF_HEADER_NAME];
   const headerVal = typeof headerRaw === "string" ? headerRaw : Array.isArray(headerRaw) ? headerRaw[0] : "";
   if (!cookieVal || !headerVal || !timingSafeEqualStr(headerVal, cookieVal)) {
-    return res.status(403).json({ success: false, error: "CSRF token tidak valid" });
+    return reseedAndReject("CSRF_MISMATCH");
   }
   const mod = await getCsrfTokenModule();
   if (!mod.verifyCsrfToken(headerVal)) {
-    return res.status(403).json({ success: false, error: "CSRF token tidak valid" });
+    return reseedAndReject("CSRF_INVALID");
   }
   return next();
 };
@@ -470,7 +509,7 @@ export const sanitizeError: ErrorRequestHandler = (
   _next: NextFunction
 ) => {
   // Log the real error server-side for debugging / incident response.
-  console.error("[sanitizeError]", {
+  log.error("[sanitizeError]", {
     method: req.method,
     url: req.originalUrl || req.url,
     ip: req.ip,

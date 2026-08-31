@@ -150,10 +150,22 @@ describe("Public Market Data API", () => {
     expect(Array.isArray(data.history)).toBe(true);
   });
 
-  it("GET /api/live/hashrate should return real data", async () => {
+  it("GET /api/live/hashrate should return real data or an honest upstream failure", async () => {
     const { status, data } = await api("/api/live/hashrate?days=3");
     expect(status).toBe(200);
-    expect(data.success).toBe(true);
+    // QA3: mempool.space (satu-satunya sumber hashrate real) tidak selalu
+    // dapat dijangkau dari jaringan pengembangan. Kontrak endpoint (DATA-15):
+    // berhasil → success:true; gagal upstream → success:false + pesan jujur +
+    // isEstimated:true — TIDAK PERNAH data fabrikasi. Test menerima keduanya
+    // agar tidak flaky tergantung jaringan eksternal.
+    if (data.success === true) {
+      expect(Array.isArray(data.history)).toBe(true);
+    } else {
+      expect(data.success).toBe(false);
+      expect(typeof data.error).toBe("string");
+      expect(data.error.length).toBeGreaterThan(0);
+      expect(data.isEstimated).toBe(true);
+    }
   });
 
   it("GET /api/fx/usd-idr should return exchange rate", async () => {

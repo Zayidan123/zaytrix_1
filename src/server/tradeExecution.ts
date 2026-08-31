@@ -1,3 +1,6 @@
+import { createLogger } from "./logger";
+const log = createLogger("tradeExecution");
+
 // ZAYTRIX real exchange order execution (SEC2-DATA).
 // Replaces the simulation-only /api/trade/execute with REAL signed order placement
 // to Binance, Bybit, and KuCoin when valid API keys are provided.
@@ -520,7 +523,7 @@ tradeExecutionRouter.post("/connect", async (req: Request, res: Response) => {
         else tickerPrice = parseFloat(data?.price) || 0;
       }
     } catch (e: any) {
-      console.log(`[trade/connect] ticker fetch for ${exchange}: ${e.message}`);
+      log.info(`[trade/connect] ticker fetch for ${exchange}: ${e.message}`);
     }
 
     let balance: number | null = 0;
@@ -590,7 +593,7 @@ tradeExecutionRouter.post("/connect", async (req: Request, res: Response) => {
             }
           }
         } catch (e: any) {
-          console.log(`[trade/connect] balance fetch for ${exchange}: ${e.message}`);
+          log.info(`[trade/connect] balance fetch for ${exchange}: ${e.message}`);
         }
       }
 

@@ -1,3 +1,6 @@
+import { createLogger } from "./logger";
+const log = createLogger("httpAgent");
+
 // =============================================================================
 // httpAgent.ts — shared HTTP(S) agents with keepAlive (OPT-3b)
 // =============================================================================
@@ -82,8 +85,8 @@ export async function setGlobalKeepAliveDispatcher(): Promise<void> {
       connections: 10,
     });
     undici.setGlobalDispatcher(dispatcher);
-    console.log("[httpAgent] global undici dispatcher set (keepAlive ON, max 10 connections per host).");
+    log.info("[httpAgent] global undici dispatcher set (keepAlive ON, max 10 connections per host).");
   } catch (e: any) {
-    console.warn("[httpAgent] could not set global undici dispatcher:", e?.message || e);
+    log.warn("[httpAgent] could not set global undici dispatcher:", e?.message || e);
   }
 }

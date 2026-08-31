@@ -1,3 +1,6 @@
+import { createLogger } from "./logger";
+const log = createLogger("oauth");
+
 // ZAYTRIX Google OAuth (SEC2-AUTH).
 //
 // Manual OAuth 2.0 Authorization Code flow (no Passport dependency) — keeps
@@ -128,7 +131,7 @@ async function recordSession(req: Request, userId: string, token: string): Promi
       },
     });
   } catch (e: any) {
-    console.error("[oauth] recordSession failed:", e?.message || e);
+    log.error("[oauth] recordSession failed:", e?.message || e);
   }
 }
 
@@ -256,7 +259,7 @@ oauthRouter.get("/google/callback", async (req: Request, res: Response, next: Ne
     });
     if (!tokenRes.ok) {
       const errBody = await tokenRes.text();
-      console.error("[oauth] token exchange failed:", tokenRes.status, errBody);
+      log.error("[oauth] token exchange failed:", tokenRes.status, errBody);
       return res.redirect(302, `${frontendBaseUrl()}/?oauth_error=token_exchange_failed`);
     }
     const tokenJson = (await tokenRes.json()) as any;
@@ -293,7 +296,7 @@ oauthRouter.get("/google/callback", async (req: Request, res: Response, next: Ne
     const email = (profile.email || "").trim().toLowerCase();
     const name = profile.name || (email ? email.split("@")[0] : "Pengguna Google");
     if (!googleSub || !email) {
-      console.error("[oauth] missing google sub or email in profile:", profile);
+      log.error("[oauth] missing google sub or email in profile:", profile);
       return res.redirect(302, `${frontendBaseUrl()}/?oauth_error=missing_profile`);
     }
 
@@ -373,7 +376,7 @@ oauthRouter.get("/google/callback", async (req: Request, res: Response, next: Ne
     //    the cookie and render the dashboard.
     return res.redirect(302, frontendBaseUrl() + "/");
   } catch (err) {
-    console.error("[oauth] callback error:", err);
+    log.error("[oauth] callback error:", err);
     return res.redirect(302, `${frontendBaseUrl()}/?oauth_error=server_error`);
   }
 });
@@ -467,7 +470,7 @@ oauthRouter.post("/google/2fa", async (req: Request, res: Response, next: NextFu
           },
         });
       } catch (e: any) {
-        console.error("[oauth] 2fa failedLoginAttempts update failed:", e?.message || e);
+        log.error("[oauth] 2fa failedLoginAttempts update failed:", e?.message || e);
         newCount = user.failedLoginAttempts || 0;
         shouldLock = false;
       }

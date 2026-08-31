@@ -1,3 +1,6 @@
+import { createLogger } from "./logger";
+const log = createLogger("email");
+
 // ZAYTRIX transactional email service (SEC2-AUTH).
 //
 // Two modes:
@@ -56,7 +59,7 @@ export function getTransporter(): Transporter {
     cachedTransporter = nodemailer.createTransport({
       jsonTransport: true,
     });
-    console.log("[email] dev mode active — emails will be logged as JSON, NOT sent.");
+    log.info("[email] dev mode active — emails will be logged as JSON, NOT sent.");
     return cachedTransporter;
   }
 
@@ -73,7 +76,7 @@ export function getTransporter(): Transporter {
     secure: port === 465, // true for 465, false (StartTLS) for 587/other
     auth: { user, pass },
   });
-  console.log(`[email] SMTP transport configured for ${host}:${port}.`);
+  log.info(`[email] SMTP transport configured for ${host}:${port}.`);
   return cachedTransporter;
 }
 
@@ -123,7 +126,7 @@ function logDevEmail(to: string, subject: string, html: string): void {
   // Pull the first http(s) URL out of the rendered HTML — that's the link the
   // user would normally click. Helps QA flow through the dev log.
   const linkMatch = html.match(/https?:\/\/[^\s"'<>]+/i);
-  console.log(
+  log.info(
     `\n[email][DEV] ───────────────────────────────────────────\n` +
       `[email][DEV] To:      ${to}\n` +
       `[email][DEV] Subject: ${subject}\n` +

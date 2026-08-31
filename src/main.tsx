@@ -53,14 +53,23 @@ if (typeof window !== "undefined" && typeof window.fetch === "function") {
     }
   };
 
-  window.fetch = function csrfAwareFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  window.fetch = async function csrfAwareFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    // Stage 1: attach the CSRF header (double-submit). Only the header
+    // *computation* is guarded — if the underlying fetch itself rejects
+    // (network error), that rejection propagates natively instead of being
+    // swallowed and re-sent (a re-send could double-POST non-idempotent
+    // requests like trade orders).
+    let effectiveInput: RequestInfo | URL = input;
+    let effectiveInit: RequestInit | undefined = init;
+    let method = "GET";
+    let url = "";
     try {
-      const method = (
+      method = (
         init?.method ||
         (input instanceof Request ? input.method : "GET")
       ).toUpperCase();
+      url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       const mutating = method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE";
-      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 
       if (mutating && isSameOrigin(url)) {
         const csrfToken = readCsrfCookie();
@@ -70,17 +79,72 @@ if (typeof window !== "undefined" && typeof window.fetch === "function") {
             headers.set("X-CSRF-Token", csrfToken);
             if (input instanceof Request) {
               // Clone the Request with the extra header — do NOT mutate the caller's object.
-              return originalFetch(new Request(input, { headers }));
+              effectiveInput = new Request(input, { headers });
+              effectiveInit = undefined;
+            } else {
+              effectiveInit = { ...init, headers };
             }
-            return originalFetch(url, { ...init, headers });
           }
         }
       }
     } catch {
-      // Any failure in the wrapper must never break the original request.
+      // Any failure in the wrapper must never break the original request —
+      // fall back to the untouched arguments.
+      effectiveInput = input;
+      effectiveInit = init;
     }
-    return originalFetch(input as any, init);
+    const response = await originalFetch(effectiveInput as any, effectiveInit);
+    // Stage 2: QA3-1 recovery — one transparent retry on a stale-cookie 403.
+    return maybeCsrfRetry(input, init, response, url, method);
   };
+
+  // QA3-1 recovery: when a mutating same-origin request is rejected with 403
+  // "CSRF token tidak valid" (stale cookie after a secret rotation, e.g. the
+  // documented post-incident rotation step), the server re-seeds a fresh
+  // zaytrix_csrf cookie IN that 403 response. Here we transparently retry the
+  // ORIGINAL request once with the fresh token. Constraints:
+  //   • only one retry (guarded by the X-CSRF-Retry marker header)
+  //   • only for plain string/URL inputs — a Request object's body is
+  //     single-use, so we cannot safely replay it
+  //   • body is replayed from init (call sites in this app all use
+  //     string URL + init style)
+  //   • any failure falls through and returns the original 403 untouched,
+  //     so component-level error handling still works.
+  async function maybeCsrfRetry(
+    input: RequestInfo | URL,
+    init: RequestInit | undefined,
+    response: Response,
+    url: string,
+    method: string
+  ): Promise<Response> {
+    try {
+      const mutating = method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE";
+      if (response.status !== 403 || !mutating || !isSameOrigin(url)) return response;
+      if (typeof input !== "string" && !(input instanceof URL)) return response; // body not replayable
+      const alreadyRetried = new Headers(init?.headers).has("X-CSRF-Retry");
+      if (alreadyRetried) return response;
+      // Confirm the 403 is really CSRF (not auth/rate-limit) by peeking a clone.
+      let isCsrf = false;
+      try {
+        const peeked = await response.clone().json();
+        const err = String((peeked as any)?.error || "");
+        const code = String((peeked as any)?.code || "");
+        isCsrf = err.includes("CSRF") || code.startsWith("CSRF_");
+      } catch { return response; }
+      if (!isCsrf) return response;
+      // The 403 response carries a re-seeded cookie; hit the canonical refresh
+      // endpoint as well (always issues fresh) then retry ONCE.
+      await originalFetch("/api/auth/csrf-token", { method: "GET" });
+      const fresh = readCsrfCookie();
+      if (!fresh) return response;
+      const headers = new Headers(init?.headers);
+      headers.set("X-CSRF-Token", fresh);
+      headers.set("X-CSRF-Retry", "1");
+      return await originalFetch(String(url), { ...init, method, headers });
+    } catch {
+      return response;
+    }
+  }
 }
 
 if (typeof window !== "undefined") {

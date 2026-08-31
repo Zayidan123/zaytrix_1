@@ -1,3 +1,6 @@
+import { createLogger } from "./logger";
+const log = createLogger("portfolio");
+
 // ZAYTRIX portfolio/ledger/backtest/conversion/alert persistence (SEC2-DATA).
 // All endpoints require authentication. Data is scoped to the authenticated user.
 // The frontend store (store.ts) syncs to these endpoints on login and on change.
@@ -552,7 +555,7 @@ portfolioRouter.get("/tax-lots", async (req: Request, res: Response) => {
 
     res.json({ success: true, result });
   } catch (e: any) {
-    console.error("[tax-lots] error:", e?.message || e);
+    log.error("[tax-lots] error:", e?.message || e);
     res.status(500).json({ success: false, error: "Gagal menghitung tax lots." });
   }
 });
@@ -731,7 +734,7 @@ portfolioRouter.get("/correlation-matrix", async (req: Request, res: Response) =
     correlationCache.set(cacheKey, { data, ts: Date.now() });
     res.json({ success: true, ...data });
   } catch (e: any) {
-    console.error("[correlation-matrix] error:", e?.message || e);
+    log.error("[correlation-matrix] error:", e?.message || e);
     res.status(500).json({ success: false, error: "Gagal menghitung matriks korelasi." });
   }
 });
@@ -923,7 +926,7 @@ portfolioRouter.get("/tax-report", async (req: Request, res: Response) => {
       },
     });
   } catch (e: any) {
-    console.error("[tax-report] error:", e?.message || e);
+    log.error("[tax-report] error:", e?.message || e);
     res.status(500).json({ success: false, error: "Gagal membuat laporan pajak." });
   }
 });
@@ -1117,7 +1120,7 @@ portfolioRouter.get("/dca", async (req: Request, res: Response) => {
     dcaCache.set(cacheKey, { data, ts: Date.now() });
     res.json({ success: true, ...data });
   } catch (e: any) {
-    console.error("[dca] error:", e?.message || e);
+    log.error("[dca] error:", e?.message || e);
     res.status(500).json({ success: false, error: "Gagal menghitung simulasi DCA." });
   }
 });
@@ -1687,7 +1690,7 @@ portfolioRouter.get("/attribution", async (req: Request, res: Response) => {
       },
     });
   } catch (e: any) {
-    console.error("[attribution] error:", e?.message || e);
+    log.error("[attribution] error:", e?.message || e);
     res.status(500).json({ success: false, error: "Gagal menghitung atribusi kinerja." });
   }
 });
@@ -1904,7 +1907,7 @@ portfolioRouter.get("/rebalance", async (req: Request, res: Response) => {
       },
     });
   } catch (e: any) {
-    console.error("[rebalance] error:", e?.message || e);
+    log.error("[rebalance] error:", e?.message || e);
     res.status(500).json({ success: false, error: "Gagal menghitung saran rebalancing." });
   }
 });
@@ -1985,10 +1988,10 @@ async function runAlertChecker(): Promise<void> {
     }
     if (updates.length > 0) {
       await Promise.allSettled(updates);
-      console.log(`[alertChecker] Triggered ${updates.length} alert(s)`);
+      log.info(`[alertChecker] Triggered ${updates.length} alert(s)`);
     }
   } catch (e: any) {
-    console.error("[alertChecker] run error:", e?.message || e);
+    log.error("[alertChecker] run error:", e?.message || e);
   }
 }
 
@@ -1998,12 +2001,12 @@ export function startAlertChecker(): void {
   if (alertCheckerStarted) return;
   alertCheckerStarted = true;
   setTimeout(() => {
-    runAlertChecker().catch((e) => console.error("[alertChecker] initial run:", e?.message || e));
+    runAlertChecker().catch((e) => log.error("[alertChecker] initial run:", e?.message || e));
   }, 10_000);
   setInterval(() => {
-    runAlertChecker().catch((e) => console.error("[alertChecker] interval run:", e?.message || e));
+    runAlertChecker().catch((e) => log.error("[alertChecker] interval run:", e?.message || e));
   }, 30_000);
-  console.log("[alertChecker] Started — runs every 30s (first run in 10s)");
+  log.info("[alertChecker] Started — runs every 30s (first run in 10s)");
 }
 
 // GET /api/portfolio/alerts/triggered — returns only alerts that fired since

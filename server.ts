@@ -26,6 +26,15 @@ import { wafMiddleware, strictBotCheck } from "./src/server/waf";
 import { startDataRetentionJob, exportUserData, deleteAllUserData } from "./src/server/dataRetention";
 // OPT-3c: upstream API health checker (Binance/CoinGecko) — additive, runs in background.
 import { startUpstreamHealthChecker } from "./src/server/upstreamHealth";
+// QA3-F1: structured JSON logger (replaces ad-hoc console.* across the server).
+// Variadic-compatible so the old call sites migrate mechanically; every line
+// is one JSON object with ts/level/module/msg/data + universal secret
+// redaction (emails → u***@, JWT/GitHub tokens → masked, sensitive keys →
+// [REDACTED]). Also feeds an in-memory ring buffer exposed at
+// GET /api/system/logs (requireAuth) for operator inspection.
+import { createLogger, systemLogsRouter } from "./src/server/logger";
+
+const log = createLogger("server");
 
 // SEC2-INFRA: initialize Sentry/error monitoring early
 initMonitoring();
@@ -158,17 +167,17 @@ async function generateContentWithRetry(aiClient: any, args: any, retries = 4, d
         if (args) {
           if (args.model === "gemini-2.5-flash") {
             const nextModel = "gemini-2.0-flash";
-            console.log(`[Gemini Model Fallback] gemini-2.5-flash threw error. Switching attempt ${attempt + 1} to ${nextModel} for resilience.`);
+            log.info(`[Gemini Model Fallback] gemini-2.5-flash threw error. Switching attempt ${attempt + 1} to ${nextModel} for resilience.`);
             args.model = nextModel;
           } else if (args.model === "gemini-2.0-flash") {
             const nextModel = "gemini-flash-latest";
-            console.log(`[Gemini Model Fallback] gemini-2.0-flash threw error. Switching attempt ${attempt + 1} to ${nextModel} for resilience.`);
+            log.info(`[Gemini Model Fallback] gemini-2.0-flash threw error. Switching attempt ${attempt + 1} to ${nextModel} for resilience.`);
             args.model = nextModel;
           }
         }
         
         const sleepTime = delay * Math.pow(2, attempt - 1);
-        console.log(`[Gemini Retry] Attempt ${attempt} failed with standard error/high demand. Retrying in ${sleepTime}ms... Error: ${errorDetail}`);
+        log.info(`[Gemini Retry] Attempt ${attempt} failed with standard error/high demand. Retrying in ${sleepTime}ms... Error: ${errorDetail}`);
         await new Promise(resolve => setTimeout(resolve, sleepTime));
       } else {
         throw error;
@@ -477,12 +486,12 @@ async function refreshLiveAssets() {
         }
       });
       updatedCrypto = true;
-      console.log("Crypto assets refreshed from Binance API successfully.");
+      log.info("Crypto assets refreshed from Binance API successfully.");
     } else {
       throw new Error(`Binance API returned status: ${binanceRes.status}`);
     }
   } catch (bErr: any) {
-    console.log("Binance crypto fetch handled status:", bErr.message);
+    log.info("Binance crypto fetch handled status:", bErr.message);
   }
 
   // 2. Fetch Indonesian Stocks and Fallbacks from Yahoo Finance using resilient /v8/finance/chart (bypasses 401 entirely)
@@ -567,10 +576,10 @@ async function refreshLiveAssets() {
 
     if (successfullyUpdatedCount > 0) {
       updatedStocks = true;
-      console.log(`Successfully updated ${successfullyUpdatedCount} stock assets from resilient Yahoo Finance chart API.`);
+      log.info(`Successfully updated ${successfullyUpdatedCount} stock assets from resilient Yahoo Finance chart API.`);
     }
   } catch (err: any) {
-    console.log("[Resilience] Fallback triggered: Failed to fetch stocks from resonant chart:", err.message);
+    log.info("[Resilience] Fallback triggered: Failed to fetch stocks from resonant chart:", err.message);
   }
 
   // 3. DATA-4: NO fabricated price fluctuation anymore. When a category
@@ -608,16 +617,16 @@ setInterval(async () => {
   try {
     await refreshLiveAssets();
   } catch (err: any) {
-    console.log("Background refresh live assets status:", err.message);
+    log.info("Background refresh live assets status:", err.message);
   }
 }, 2000);
 
 // Initialize price sync immediately on server boot
 refreshLiveAssets().then(() => {
-  console.log("Initial real-time Binance asset price synchronization complete on boot successfully.");
+  log.info("Initial real-time Binance asset price synchronization complete on boot successfully.");
   bootstrapRealTimeSignals();
 }).catch(err => {
-  console.log("Initial backend boot synchronization alert handled:", err.message);
+  log.info("Initial backend boot synchronization alert handled:", err.message);
 });
 
 // Secure server-side proxy route for multi-channel webhook alerts (Telegram, Discord, WhatsApp)
@@ -672,8 +681,8 @@ app.post("/api/send-alert", requireAuth, async (req, res) => {
   } = req.body;
 
   // FIX-A-2: never log the raw bot token — log only whether one was supplied.
-  console.log("[send-alert] bot token:", telegramBotToken ? "[REDACTED]" : "(none)");
-  console.log(`[send-alert] authenticated user: ${req.user?.email || req.user?.sub || "(unknown)"}`);
+  log.info("[send-alert] bot token:", telegramBotToken ? "[REDACTED]" : "(none)");
+  log.info(`[send-alert] authenticated user: ${req.user?.email || req.user?.sub || "(unknown)"}`);
 
   // SEC-2: validate every outbound webhook URL BEFORE anything is sent.
   // Non-allowlisted hosts / non-HTTPS schemes are rejected with 400.
@@ -720,7 +729,7 @@ app.post("/api/send-alert", requireAuth, async (req, res) => {
         const cleanMsg = (messageText || "").replace(/\*\*/g, "");
         const telegramUrl = `https://api.telegram.org/bot${sanitizedToken}/sendMessage`;
         
-        console.log(`[TELEGRAM SENDER] Sending to chatId ${finalChatId} via URL (identity masked)`);
+        log.info(`[TELEGRAM SENDER] Sending to chatId ${finalChatId} via URL (identity masked)`);
         
         const response = await fetch(telegramUrl, {
           method: "POST",
@@ -733,19 +742,19 @@ app.post("/api/send-alert", requireAuth, async (req, res) => {
 
         if (response.ok) {
           results.telegram = { success: true };
-          console.log(`[TELEGRAM SENDER] Successfully dispatched message to ${finalChatId}`);
+          log.info(`[TELEGRAM SENDER] Successfully dispatched message to ${finalChatId}`);
         } else {
           // SEC-2: log the full upstream body server-side only; the client
           // gets a generic message so upstream/internal details never leak.
           const text = await response.text();
-          console.error(`[TELEGRAM SENDER ERROR] Status ${response.status}: ${text}`);
+          log.error(`[TELEGRAM SENDER ERROR] Status ${response.status}: ${text}`);
           results.telegram = {
             success: false,
             error: `Gagal mengirim alert (Telegram HTTP ${response.status})`
           };
         }
       } catch (e: any) {
-        console.error("[TELEGRAM SENDER ROUTING EXCEPTION]", e);
+        log.error("[TELEGRAM SENDER ROUTING EXCEPTION]", e);
         results.telegram = { success: false, error: "Gagal mengirim alert" };
       }
     }
@@ -769,11 +778,11 @@ app.post("/api/send-alert", requireAuth, async (req, res) => {
           // SEC-2: never echo the upstream response body to the client;
           // log details server-side and return a generic error.
           const text = await response.text();
-          console.error(`[DISCORD SENDER ERROR] Status ${response.status}: ${text}`);
+          log.error(`[DISCORD SENDER ERROR] Status ${response.status}: ${text}`);
           results.discord = { success: false, error: "Gagal mengirim alert" };
         }
       } catch (e: any) {
-        console.error("[DISCORD SENDER ROUTING EXCEPTION]", e);
+        log.error("[DISCORD SENDER ROUTING EXCEPTION]", e);
         results.discord = { success: false, error: "Gagal mengirim alert" };
       }
     }
@@ -807,11 +816,11 @@ app.post("/api/send-alert", requireAuth, async (req, res) => {
           // SEC-2: never echo the upstream response body to the client;
           // log details server-side and return a generic error.
           const text = await response.text();
-          console.error(`[WHATSAPP SENDER ERROR] Status ${response.status}: ${text}`);
+          log.error(`[WHATSAPP SENDER ERROR] Status ${response.status}: ${text}`);
           results.whatsapp = { success: false, error: "Gagal mengirim alert" };
         }
       } catch (e: any) {
-        console.error("[WHATSAPP SENDER ROUTING EXCEPTION]", e);
+        log.error("[WHATSAPP SENDER ROUTING EXCEPTION]", e);
         results.whatsapp = { success: false, error: "Gagal mengirim alert" };
       }
     }
@@ -956,7 +965,7 @@ app.get("/api/history/:symbol", async (req, res) => {
   try {
     const now = Date.now();
     if (now - lastQuotesFetch >= QUOTE_CACHE_TTL) {
-      refreshLiveAssets().catch(err => console.log("Background refresh info:", err.message));
+      refreshLiveAssets().catch(err => log.info("Background refresh info:", err.message));
     }
 
     let history: any[] = [];
@@ -965,7 +974,7 @@ app.get("/api/history/:symbol", async (req, res) => {
       try {
         history = await fetchBinanceKlines();
       } catch (binanceErr: any) {
-        console.log(`[History] Binance klines failed for ${symbol}, falling back to Yahoo:`, binanceErr.message);
+        log.info(`[History] Binance klines failed for ${symbol}, falling back to Yahoo:`, binanceErr.message);
       }
     }
     if (history.length === 0) {
@@ -977,7 +986,7 @@ app.get("/api/history/:symbol", async (req, res) => {
   } catch (err: any) {
     // DATA-2: every real source failed → honest 503, never a fabricated
     // random-walk history. The frontend renders the failure state.
-    console.error(`[History] All real sources failed for ${symbol}:`, err.message);
+    log.error(`[History] All real sources failed for ${symbol}:`, err.message);
     return res.status(503).json({ success: false, error: "Data historis tidak tersedia" });
   }
 });
@@ -985,7 +994,7 @@ app.get("/api/history/:symbol", async (req, res) => {
 app.get("/api/assets", async (req, res) => {
   const now = Date.now();
   if (now - lastQuotesFetch >= QUOTE_CACHE_TTL) {
-    refreshLiveAssets().catch(err => console.log("Background refresh info:", err.message));
+    refreshLiveAssets().catch(err => log.info("Background refresh info:", err.message));
   }
   // DATA-5: `isWarmup` stays true until the first successful live market
   // refresh completes, so consumers can label the returned prices as the
@@ -1035,7 +1044,7 @@ app.get("/api/coins/tickers", async (req, res) => {
     tickersCacheTime = now;
     return res.json({ success: true, tickers: filtered });
   } catch (err: any) {
-    console.log("[Coins Tickers API Info]", err.message);
+    log.info("[Coins Tickers API Info]", err.message);
     // If external call fails, return stale cache if available
     if (tickersCache) {
       return res.json({ success: true, tickers: tickersCache, warning: "Served from expired cache due to external error" });
@@ -1115,7 +1124,7 @@ app.get("/api/coins/global-stats", async (req, res) => {
       }
     }
   } catch (err: any) {
-    console.log("[Global Stats Fetch from CoinMarketCap info]", err.message);
+    log.info("[Global Stats Fetch from CoinMarketCap info]", err.message);
   }
 
   // 2. Fallback to Coinpaprika
@@ -1141,7 +1150,7 @@ app.get("/api/coins/global-stats", async (req, res) => {
       }
     }
   } catch (err: any) {
-    console.log("[Global Stats Fetch from Coinpaprika info]", err.message);
+    log.info("[Global Stats Fetch from Coinpaprika info]", err.message);
   }
 
   // 3. Fallback to Coingecko
@@ -1167,7 +1176,7 @@ app.get("/api/coins/global-stats", async (req, res) => {
       }
     }
   } catch (err: any) {
-    console.log("[Global Stats Fetch from Coingecko info]", err.message);
+    log.info("[Global Stats Fetch from Coingecko info]", err.message);
   }
 
   // DATA-6: every real source failed → honest 503. The old fallback here used
@@ -1213,7 +1222,7 @@ app.get("/api/coins/rankings", async (req, res) => {
         currentTickers = filtered;
       }
     } catch (err) {
-      console.warn("[Background Binance Ticker Fetch inside Rankings failed]", err);
+      log.warn("[Background Binance Ticker Fetch inside Rankings failed]", err);
     }
   }
 
@@ -1252,7 +1261,7 @@ app.get("/api/coins/rankings", async (req, res) => {
         }
       }
     } catch (err: any) {
-      console.log("[CoinGecko Markets Fetch Info, trying CoinCap next]", err.message);
+      log.info("[CoinGecko Markets Fetch Info, trying CoinCap next]", err.message);
     }
   }
 
@@ -1273,7 +1282,7 @@ app.get("/api/coins/rankings", async (req, res) => {
           }
         }
       } catch (err: any) {
-        console.log("[CoinCap Fetch Info, trying Coinpaprika next]", err.message);
+        log.info("[CoinCap Fetch Info, trying Coinpaprika next]", err.message);
       }
     }
   }
@@ -1299,7 +1308,7 @@ app.get("/api/coins/rankings", async (req, res) => {
         }
       }
     } catch (err: any) {
-      console.warn("[Coinpaprika Fetch Failed, trying Binance dynamic next]", err.message);
+      log.warn("[Coinpaprika Fetch Failed, trying Binance dynamic next]", err.message);
     }
   }
 
@@ -1482,7 +1491,7 @@ app.get("/api/coins/rankings", async (req, res) => {
     });
 
   } catch (err: any) {
-    console.error("[Rankings API Error]", err.message);
+    log.error("[Rankings API Error]", err.message);
     return res.status(503).json({ success: false, error: "Data rankings tidak tersedia saat ini", coins: [] });
   }
 });
@@ -1583,7 +1592,7 @@ app.post("/api/assets/register", requireAuth, async (req, res) => {
       (liveAssets as any[]).push(newAsset);
       return res.json({ message: "Asset successfully registered from Binance real-time", asset: newAsset });
     } catch (err: any) {
-      console.error(`Binance registration failed for ${upperSymbol}:`, err.message);
+      log.error(`Binance registration failed for ${upperSymbol}:`, err.message);
       return res.status(400).json({ error: `Gagal mendaftarkan aset crypto: ${upperSymbol} tidak ditemukan di bursa Binance.` });
     }
   }
@@ -1639,7 +1648,7 @@ app.post("/api/assets/register", requireAuth, async (req, res) => {
     // SEC-4/DATA: the dummy fallback asset (fabricated price of 1000 and a
     // fake "(Aset Kustom)" name) was removed — fail honestly instead of
     // injecting fabricated data into the asset registry.
-    console.error(`[Registration] Yahoo verification failed for ${upperSymbol}:`, err.message);
+    log.error(`[Registration] Yahoo verification failed for ${upperSymbol}:`, err.message);
     return res.status(400).json({ error: `Gagal memverifikasi aset ${upperSymbol} dari Yahoo Finance. Aset tidak didaftarkan.` });
   }
 });
@@ -1757,7 +1766,7 @@ app.post("/api/gemini/analyze", async (req, res) => {
 
     const cacheKey = getCacheKey(customPrompt);
     if (geminiCache.has(cacheKey)) {
-      console.log("[Gemini Cache] Serving general analysis value from cache.");
+      log.info("[Gemini Cache] Serving general analysis value from cache.");
       return res.json({ analysis: geminiCache.get(cacheKey) });
     }
 
@@ -1788,7 +1797,7 @@ app.post("/api/gemini/analyze", async (req, res) => {
     geminiCacheSet(cacheKey, outputText);
     res.json({ analysis: outputText });
   } catch (err: any) {
-    console.log("Gemini Error info (using local fallback report):", err.message || err);
+    log.info("Gemini Error info (using local fallback report):", err.message || err);
     const fallbackReport = generateDynamicFallbackReport(type, modelData, assetComparison);
     res.json({ analysis: fallbackReport, isFallback: true, errorReason: err.message || String(err) });
   }
@@ -1844,7 +1853,7 @@ app.post("/api/gemini/news-sentiment", async (req, res) => {
 
     const cacheKey = getCacheKey("sentiment-" + id);
     if (geminiCache.has(cacheKey)) {
-      console.log("[Gemini Cache] Serving news sentiment from cache.");
+      log.info("[Gemini Cache] Serving news sentiment from cache.");
       try {
         return res.json(JSON.parse(geminiCache.get(cacheKey)!));
       } catch (e) {
@@ -1854,7 +1863,7 @@ app.post("/api/gemini/news-sentiment", async (req, res) => {
 
     const aiClient = getAiClient(req);
     if (!aiClient) {
-      console.log("[Fallback] No AI client, generating offline sentiment analysis for", id);
+      log.info("[Fallback] No AI client, generating offline sentiment analysis for", id);
       const offline = getOfflineNewsSentiment(id, title);
       return res.json({ ...offline, isFallback: true });
     }
@@ -1874,7 +1883,7 @@ app.post("/api/gemini/news-sentiment", async (req, res) => {
     geminiCacheSet(cacheKey, outputText);
     res.json(JSON.parse(outputText));
   } catch (err: any) {
-    console.log("[News Sentiment Error] Using local offline fallback:", err.message || err);
+    log.info("[News Sentiment Error] Using local offline fallback:", err.message || err);
     const offline = getOfflineNewsSentiment(id, title);
     res.json({ ...offline, isFallback: true, errorReason: err.message || String(err) });
   }
@@ -1931,7 +1940,7 @@ app.post("/api/gemini/news-chat", async (req, res) => {
     const outputText = response.text || "";
     res.json({ answer: outputText });
   } catch (err: any) {
-    console.log("[News Chat Error] Using local fallback:", err.message || err);
+    log.info("[News Chat Error] Using local fallback:", err.message || err);
     res.json({ 
       answer: `Maaf, terjadi kesalahan koneksi jaringan saat menghubungi asisten AI Z-Capital: ${err.message || String(err)}. Sebagai saran cepat, tinjau tab 'Aset Terkait' dan batas resistensi teknis di dasbor utama untuk memandu keputusan alokasi Anda.`, 
       isFallback: true 
@@ -2058,7 +2067,7 @@ Tuliskan opini Anda secara lugas, dingin, berwibawa, saksama, obyektif, dalam ba
 
     const cacheKey = getCacheKey(customPrompt);
     if (geminiCache.has(cacheKey)) {
-      console.log("[Gemini Cache] Serving onchain analysis value from cache.");
+      log.info("[Gemini Cache] Serving onchain analysis value from cache.");
       return res.json({ analysis: geminiCache.get(cacheKey) });
     }
 
@@ -2083,7 +2092,7 @@ Tuliskan opini Anda secara lugas, dingin, berwibawa, saksama, obyektif, dalam ba
     geminiCacheSet(cacheKey, outputText);
     res.json({ analysis: outputText });
   } catch (err: any) {
-    console.log("Gemini Onchain Error info (using local fallback report):", err.message || err);
+    log.info("Gemini Onchain Error info (using local fallback report):", err.message || err);
     const fallbackReport = generateDynamicOnChainFallback(symbol, req.body);
     res.json({ analysis: fallbackReport, isFallback: true, errorReason: err.message || String(err) });
   }
@@ -2104,13 +2113,13 @@ app.post("/api/gemini/analyze-pdf", async (req, res) => {
     // Deduplicate same document uploads & speed up responses via server cache
     const cacheKey = getCacheKey(pdfData + "_" + fileCleanName + "_" + selectedCategory);
     if (geminiCache.has(cacheKey)) {
-      console.log(`[Gemini Cache] Serving PDF report for "${fileCleanName}" from cache.`);
+      log.info(`[Gemini Cache] Serving PDF report for "${fileCleanName}" from cache.`);
       return res.json({ analysis: geminiCache.get(cacheKey) });
     }
 
     const aiClient = getAiClient(req);
     if (!aiClient) {
-      console.log("Gemini Client not initialized, returning resilient expert PDF report info.");
+      log.info("Gemini Client not initialized, returning resilient expert PDF report info.");
       const fallback = generateResilientPdfReportFallback(fileCleanName, selectedCategory);
       return res.json({ analysis: fallback });
     }
@@ -2177,7 +2186,7 @@ Sajikan secara dingin, logis, obyektif, bernilai tinggi.
     geminiCacheSet(cacheKey, outputText);
     res.json({ analysis: outputText });
   } catch (err: any) {
-    console.log("Gemini PDF Error info (using local PDF report template):", err.message || err);
+    log.info("Gemini PDF Error info (using local PDF report template):", err.message || err);
     const fallback = generateResilientPdfReportFallback(fileName || "Berkas.pdf", category);
     res.json({ analysis: fallback, isFallback: true, errorReason: err.message || String(err) });
   }
@@ -2295,7 +2304,7 @@ async function scrapeWebsiteContent(url: string): Promise<string> {
   // FIX-ALL P0-6: validate URL before fetching.
   const guard = isSsrfSafeUrl(url);
   if (!guard.ok) {
-    console.warn(`[scrapeWebsiteContent] Blocked URL: ${url} — ${guard.reason}`);
+    log.warn(`[scrapeWebsiteContent] Blocked URL: ${url} — ${guard.reason}`);
     return `[Sistem keamanan mencegah pengambilan konten dari URL ini. Alasan: ${guard.reason}. Mohon analis mengkaji secara komprehensif berdasarkan basis data keahlian ZAYTRIX terkait domain tersebut.]`;
   }
   try {
@@ -2328,7 +2337,7 @@ async function scrapeWebsiteContent(url: string): Promise<string> {
 
     return cleaned || "[Konten tekstual kosong]";
   } catch (error: any) {
-    console.error("Gagal melakukan scrap untuk URL:", url, error.message);
+    log.error("Gagal melakukan scrap untuk URL:", url, error.message);
     return `[Sistem pembatasan eksternal / keamanan mencegah pengunduhan naskah secara dinamis untuk domain ini. Mohon analis mengkaji secara komprehensif berdasarkan basis data keahlian ZAYTRIX terkait situs resmi ${url}.]`;
   }
 }
@@ -2349,7 +2358,7 @@ app.post("/api/gemini/analyze-multi-pdf", async (req, res) => {
 
     const aiClient = getAiClient(req);
     if (!aiClient) {
-      console.log("Gemini Client not initialized, returning resilient expert Multi-PDF report info.");
+      log.info("Gemini Client not initialized, returning resilient expert Multi-PDF report info.");
       const fallback = generateResilientMultiPdfReportFallback(files.map(f => f.fileName), selectedCategory);
       return res.json({ analysis: fallback });
     }
@@ -2432,7 +2441,7 @@ Tolong buat Laporan Evaluasi Komparatif Finansial Berbobot Tinggi setingkat CFA 
 
     res.json({ analysis: response.text });
   } catch (err: any) {
-    console.log("Gemini Multi-PDF Error info (using local multi-PDF comparison report):", err.message || err);
+    log.info("Gemini Multi-PDF Error info (using local multi-PDF comparison report):", err.message || err);
     const mockFileNames = files.map(f => f.fileName);
     const fallback = generateResilientMultiPdfReportFallback(mockFileNames, category);
     res.json({ analysis: fallback, isFallback: true, errorReason: err.message || String(err) });
@@ -2724,7 +2733,7 @@ function persistNotificationConfigs(): void {
     });
     fs.writeFileSync(CONFIG_FILE_PATH, JSON.stringify(payload, null, 2), { encoding: "utf-8", mode: 0o600 });
   } catch (e: any) {
-    console.log("[On-Chain Data Background] Failed to save config file:", e.message);
+    log.info("[On-Chain Data Background] Failed to save config file:", e.message);
   }
 }
 
@@ -2744,7 +2753,7 @@ try {
     }
     // SEC-8: redacted boot log — the old log printed the whole config object
     // (bot tokens + webhook URLs) in PLAINTEXT. Every secret is now masked.
-    console.log("[On-Chain Data Background] Loaded notifications config on boot for", notificationConfigs.size, "user(s):",
+    log.info("[On-Chain Data Background] Loaded notifications config on boot for", notificationConfigs.size, "user(s):",
       Array.from(notificationConfigs.entries()).map(([uid, cfg]) => ({
         user: uid,
         telegramEnabled: !!cfg.telegramEnabled,
@@ -2758,7 +2767,7 @@ try {
     );
   }
 } catch (e: any) {
-  console.log("[On-Chain Data Background] Failed to load config on boot:", e.message);
+  log.info("[On-Chain Data Background] Failed to load config on boot:", e.message);
 }
 
 // Telegram alert standalone sender helper
@@ -2827,7 +2836,7 @@ async function runBackgroundOnChainAlerts() {
     try {
       await runBackgroundOnChainAlertsForUser(userId, cfg);
     } catch (userErr: any) {
-      console.error(`[Background On-Chain Alert] (${userId}) scan failed:`, userErr.message);
+      log.error(`[Background On-Chain Alert] (${userId}) scan failed:`, userErr.message);
     }
   }
 }
@@ -2842,12 +2851,12 @@ async function runBackgroundOnChainAlertsForUser(userId: string, userConfig: Sav
     return;
   }
 
-  console.log(`[Background On-Chain Alert] (${userId}) Scanning for highly specific large on-chain transactions for Telegram bot: ${redactSecret(token)}`);
+  log.info(`[Background On-Chain Alert] (${userId}) Scanning for highly specific large on-chain transactions for Telegram bot: ${redactSecret(token)}`);
   try {
     const { processedTxs } = await fetchLatestOnChainData();
 
     if (isFirstAlertScan) {
-      console.log(`[Background On-Chain Alert] First scan after boot. Registering ${processedTxs?.length || 0} existing transactions to prevent notification storms.`);
+      log.info(`[Background On-Chain Alert] First scan after boot. Registering ${processedTxs?.length || 0} existing transactions to prevent notification storms.`);
       if (processedTxs && Array.isArray(processedTxs)) {
         for (const tx of processedTxs) {
           if (tx && tx.txhash) {
@@ -2904,10 +2913,10 @@ async function runBackgroundOnChainAlertsForUser(userId: string, userConfig: Sav
             `• TXID: \`${tx.txhash.substring(0, 16)}...\`\n\n` +
             `🔗 [Detail Transaksi (Explorer)](${tx.explorerUrl})`;
 
-          console.log(`[Background On-Chain Alert] Sending alert for hash ${tx.txhash} to Telegram (Category: ${category}, Threshold: $${threshold})...`);
+          log.info(`[Background On-Chain Alert] Sending alert for hash ${tx.txhash} to Telegram (Category: ${category}, Threshold: $${threshold})...`);
           const sendRes = await sendTelegramAlert(token, chatId, formattedMsg);
           if (!sendRes.success) {
-            console.error(`[Background On-Chain Alert] Failed to send to Telegram: ${sendRes.error}`);
+            log.error(`[Background On-Chain Alert] Failed to send to Telegram: ${sendRes.error}`);
           }
           // Sleep for 1.5 seconds to respect Telegram Chat Bot rate limit of 1 message/second
           await new Promise((resolve) => setTimeout(resolve, 1500));
@@ -2922,14 +2931,14 @@ async function runBackgroundOnChainAlertsForUser(userId: string, userConfig: Sav
       hashesArray.slice(-100).forEach(h => notifiedTxHashes.add(h));
     }
   } catch (err: any) {
-    console.error("[Background On-Chain Alert] Worker execution error:", err.message);
+    log.error("[Background On-Chain Alert] Worker execution error:", err.message);
   }
 }
 
 // Start persistent server-side background interval alert scanner (every 45 seconds)
 setInterval(() => {
   runBackgroundOnChainAlerts().catch(err => {
-    console.error("[Background On-Chain Alert] Interval worker caught unhandled promise:", err);
+    log.error("[Background On-Chain Alert] Interval worker caught unhandled promise:", err);
   });
 }, 45000);
 
@@ -2967,7 +2976,7 @@ app.post("/api/settings/notifications", requireAuth, (req, res) => {
     notificationConfigs.set(userId, newConfig);
     persistNotificationConfigs();
     // FIX-A-3 + SEC-8: do NOT log secrets — log only flags + redacted presence.
-    console.log("[On-Chain Data Background] Settings saved for user:", userId,
+    log.info("[On-Chain Data Background] Settings saved for user:", userId,
       "| telegram:", newConfig.telegramEnabled,
       "| discord:", newConfig.discordEnabled,
       "| whatsapp:", newConfig.whatsappEnabled,
@@ -3010,14 +3019,14 @@ let liveLiquidationsList: LiveLiquidationEvent[] = [];
 // state until real events arrive.
 
 function initBinanceLiquidationWS() {
-  console.log("[Binance WS] Initializing real-time Futures Liquidation Feed...");
+  log.info("[Binance WS] Initializing real-time Futures Liquidation Feed...");
   const wsUrl = "wss://fstream.binance.com/ws/!forceOrder@arr";
   
   try {
     let ws = new WebSocket(wsUrl);
     
     ws.on("open", () => {
-      console.log("[Binance WS] Connected to Binance Futures Liquidation Stream successfully.");
+      log.info("[Binance WS] Connected to Binance Futures Liquidation Stream successfully.");
     });
     
     ws.on("message", (data) => {
@@ -3050,22 +3059,22 @@ function initBinanceLiquidationWS() {
           }
         }
       } catch (err: any) {
-        console.error("[Binance WS] Message processing error:", err.message);
+        log.error("[Binance WS] Message processing error:", err.message);
       }
     });
     
     ws.on("error", (err) => {
-      console.error("[Binance WS] Connection error:", err.message);
+      log.error("[Binance WS] Connection error:", err.message);
     });
     
     ws.on("close", () => {
-      console.warn("[Binance WS] Connection closed. Reconnecting in 5 seconds...");
+      log.warn("[Binance WS] Connection closed. Reconnecting in 5 seconds...");
       setTimeout(() => {
         initBinanceLiquidationWS();
       }, 5000);
     });
   } catch (err: any) {
-    console.error("[Binance WS] Failed to establish WS client:", err.message);
+    log.error("[Binance WS] Failed to establish WS client:", err.message);
   }
 }
 
@@ -3093,7 +3102,7 @@ async function fetchBinanceSymbolDerivatives(symbol: string) {
       if (isFinite(oi)) openInterest = oi;
     }
   } catch (e: any) {
-    console.log(`[Binance Fetch] OI failed for ${symbol}:`, e.message);
+    log.info(`[Binance Fetch] OI failed for ${symbol}:`, e.message);
   }
 
   try {
@@ -3104,7 +3113,7 @@ async function fetchBinanceSymbolDerivatives(symbol: string) {
       if (isFinite(fr)) fundingRate = fr * 100;
     }
   } catch (e: any) {
-    console.log(`[Binance Fetch] FR failed for ${symbol}:`, e.message);
+    log.info(`[Binance Fetch] FR failed for ${symbol}:`, e.message);
   }
 
   try {
@@ -3117,7 +3126,7 @@ async function fetchBinanceSymbolDerivatives(symbol: string) {
       }
     }
   } catch (e: any) {
-    console.log(`[Binance Fetch] L/S failed for ${symbol}:`, e.message);
+    log.info(`[Binance Fetch] L/S failed for ${symbol}:`, e.message);
   }
 
   return { openInterest, fundingRate, longShortRatio };
@@ -3145,7 +3154,7 @@ async function getLiveBinanceDerivatives() {
       : { btc, eth, sol };
     derivativesCacheTime = now;
   } catch (err: any) {
-    console.error("[Binance Fetch] Failed to fetch derivatives:", err.message);
+    log.error("[Binance Fetch] Failed to fetch derivatives:", err.message);
     if (!derivativesCache) {
       // DATA-15: no hardcoded fallback values — nulls + isStale flag so the
       // frontend can render "tidak tersedia".
@@ -3207,7 +3216,7 @@ app.get("/api/onchain/metrics", async (req, res) => {
       ETH: ethFr.length > 0 ? parseFloat(ethFr[0].fundingRate) : null,
       SOL: solFr.length > 0 ? parseFloat(solFr[0].fundingRate) : null,
     };
-  } catch(e: any) { console.error("[Metrics] Funding rate fetch failed:", e.message); }
+  } catch(e: any) { log.error("[Metrics] Funding rate fetch failed:", e.message); }
 
   // --- 2. Binance Futures Open Interest (current) ---
   try {
@@ -3226,7 +3235,7 @@ app.get("/api/onchain/metrics", async (req, res) => {
         };
       }
     });
-  } catch(e: any) { console.error("[Metrics] OI fetch failed:", e.message); }
+  } catch(e: any) { log.error("[Metrics] OI fetch failed:", e.message); }
 
   // --- 3. CoinGecko Global Data (dominance, market cap, volume) ---
   try {
@@ -3242,7 +3251,7 @@ app.get("/api/onchain/metrics", async (req, res) => {
         marketCapChange24h: d.market_cap_change_percentage_24h_usd || null,
       };
     }
-  } catch(e: any) { console.error("[Metrics] CoinGecko global failed:", e.message); }
+  } catch(e: any) { log.error("[Metrics] CoinGecko global failed:", e.message); }
 
   // --- 4. CoinGecko BTC Price History (30 days) ---
   try {
@@ -3259,7 +3268,7 @@ app.get("/api/onchain/metrics", async (req, res) => {
         volume: Math.round(v[1] / 1e6), // in millions
       }));
     }
-  } catch(e: any) { console.error("[Metrics] BTC price history failed:", e.message); }
+  } catch(e: any) { log.error("[Metrics] BTC price history failed:", e.message); }
 
   // --- 5. Fear & Greed Index (Alternative.me) ---
   try {
@@ -3274,7 +3283,7 @@ app.get("/api/onchain/metrics", async (req, res) => {
         })),
       };
     }
-  } catch(e: any) { console.error("[Metrics] Fear & Greed failed:", e.message); }
+  } catch(e: any) { log.error("[Metrics] Fear & Greed failed:", e.message); }
 
   // --- 6. Top Gainers/Losers from Binance Spot (server already has this) ---
   try {
@@ -3297,7 +3306,7 @@ app.get("/api/onchain/metrics", async (req, res) => {
         volumeUsd: parseFloat(t.quoteVolume),
       }));
     }
-  } catch(e: any) { console.error("[Metrics] Binance gainers/losers failed:", e.message); }
+  } catch(e: any) { log.error("[Metrics] Binance gainers/losers failed:", e.message); }
 
   metricsCache = result;
   metricsCacheTime = now;
@@ -3348,7 +3357,7 @@ app.get("/api/onchain/data", async (req, res) => {
       lastUpdated: new Date().toISOString()
     });
   } catch (err: any) {
-    console.error("[On-Chain Data ERROR]", err.message);
+    log.error("[On-Chain Data ERROR]", err.message);
     return res.status(500).json({
       success: false,
       error: "Gagal memproses data on-chain bursa real-time: " + err.message
@@ -3361,11 +3370,11 @@ let isAnalysisRunning = false;
 
 async function runAutomatedGeminiAnalysis() {
   if (isAnalysisRunning) {
-    console.log("[Background AI Analysis] Analysis is already running, skipping this interval.");
+    log.info("[Background AI Analysis] Analysis is already running, skipping this interval.");
     return;
   }
   isAnalysisRunning = true;
-  console.log("[Background AI Analysis] Running periodic automated on-chain & derivatives market analysis...");
+  log.info("[Background AI Analysis] Running periodic automated on-chain & derivatives market analysis...");
 
   try {
     const onchainData = await fetchLatestOnChainData();
@@ -3408,7 +3417,7 @@ async function runAutomatedGeminiAnalysis() {
         if (isFinite(oi)) openInterest = oi;
       }
     } catch (e: any) {
-      console.log("[Background AI Analysis] Open Interest fetch handled:", e.message);
+      log.info("[Background AI Analysis] Open Interest fetch handled:", e.message);
     }
 
     try {
@@ -3419,7 +3428,7 @@ async function runAutomatedGeminiAnalysis() {
         if (isFinite(fr)) fundingRate = fr * 100;
       }
     } catch (e: any) {
-      console.log("[Background AI Analysis] Funding Rate fetch handled:", e.message);
+      log.info("[Background AI Analysis] Funding Rate fetch handled:", e.message);
     }
 
     try {
@@ -3432,7 +3441,7 @@ async function runAutomatedGeminiAnalysis() {
         }
       }
     } catch (e: any) {
-      console.log("[Background AI Analysis] Long/Short ratio fetch handled:", e.message);
+      log.info("[Background AI Analysis] Long/Short ratio fetch handled:", e.message);
     }
 
     if (openInterest != null) {
@@ -3529,7 +3538,7 @@ Tulis dengan gaya bahasa Indonesia profesional tingkat tinggi, berwibawa, dingin
         });
         analysisText = response.text;
       } catch (geminiErr: any) {
-        console.log("[Background AI Analysis] Gemini API status (using fallback):", geminiErr.message);
+        log.info("[Background AI Analysis] Gemini API status (using fallback):", geminiErr.message);
         isFallback = true;
         analysisText = generateDynamicOnChainFallback("BTC", metrics);
       }
@@ -3549,9 +3558,9 @@ Tulis dengan gaya bahasa Indonesia profesional tingkat tinggi, berwibawa, dingin
     };
 
     fs.writeFileSync(path.join(process.cwd(), "automated-analysis.json"), JSON.stringify(automatedResult, null, 2), "utf-8");
-    console.log("[Background AI Analysis] Periodic automated market analysis completed successfully and saved.");
+    log.info("[Background AI Analysis] Periodic automated market analysis completed successfully and saved.");
   } catch (err: any) {
-    console.log("[Background AI Analysis] Worker execution status:", err.message);
+    log.info("[Background AI Analysis] Worker execution status:", err.message);
   } finally {
     isAnalysisRunning = false;
   }
@@ -3589,13 +3598,13 @@ app.post("/api/gemini/automated-analysis/trigger", async (req, res) => {
 // Setup initialization and intervals for automated AI analysis
 setTimeout(() => {
   runAutomatedGeminiAnalysis().catch(err => {
-    console.log("[Background AI Analysis] Boot run status:", err.message);
+    log.info("[Background AI Analysis] Boot run status:", err.message);
   });
 }, 10000); // 10s boot delay
 
 setInterval(() => {
   runAutomatedGeminiAnalysis().catch(err => {
-    console.log("[Background AI Analysis] Interval run status:", err.message);
+    log.info("[Background AI Analysis] Interval run status:", err.message);
   });
 }, 600000); // every 10 minutes
 
@@ -3645,7 +3654,7 @@ async function refreshLiveBtcOnChainCache() {
     }
   } catch (err: any) {
     // Network/parse failure — keep previous cached value (or null).
-    console.log("[BTC On-Chain Cache] mempool.space fetch handled:", err.message);
+    log.info("[BTC On-Chain Cache] mempool.space fetch handled:", err.message);
   }
 
   try {
@@ -3662,7 +3671,7 @@ async function refreshLiveBtcOnChainCache() {
       }
     }
   } catch (err: any) {
-    console.log("[BTC On-Chain Cache] blockchain.info fetch handled:", err.message);
+    log.info("[BTC On-Chain Cache] blockchain.info fetch handled:", err.message);
   }
 
   liveBtcMempoolLastUpdated = Date.now();
@@ -3800,7 +3809,7 @@ app.post("/api/gemini/trading-signals/analyze", async (req, res) => {
   // for the cache-MISS path so fresh analyses reflect the current price.
   const cacheKey = getCacheKey(`signals_${upperSymbol}_${customFocus || ""}_${aiTone || ""}`);
   if (geminiCache.has(cacheKey)) {
-    console.log(`[Gemini Cache] Serving Trade Signal for ${upperSymbol} from cache.`);
+    log.info(`[Gemini Cache] Serving Trade Signal for ${upperSymbol} from cache.`);
     try {
       const parsed = JSON.parse(geminiCache.get(cacheKey)!);
       return res.json(parsed);
@@ -3905,7 +3914,7 @@ app.post("/api/gemini/trading-signals/analyze", async (req, res) => {
     return res.json(resultPayload);
 
   } catch (err: any) {
-    console.log(`[Trade Signal Gemini Log] Using resilient local fallback model:`, err.message || err);
+    log.info(`[Trade Signal Gemini Log] Using resilient local fallback model:`, err.message || err);
     
     // Fallback recommendation logic based on actual price activity + onchain dynamics
     let recommendation: "STRONG BUY" | "BUY" | "HOLD" | "SELL" | "STRONG SELL" = "HOLD";
@@ -4457,7 +4466,7 @@ app.get("/api/onchain/altcoin-season", async (req, res) => {
         }
       }
     } catch (err: any) {
-      console.log("[Altcoin Season] blockchaincenter fetch handled:", err.message);
+      log.info("[Altcoin Season] blockchaincenter fetch handled:", err.message);
     }
 
     // Fallback: derive a simple proxy from CoinGecko global dominance.
@@ -4479,7 +4488,7 @@ app.get("/api/onchain/altcoin-season", async (req, res) => {
           }
         }
       } catch (err: any) {
-        console.log("[Altcoin Season] CoinGecko proxy fetch handled:", err.message);
+        log.info("[Altcoin Season] CoinGecko proxy fetch handled:", err.message);
       }
     }
 
@@ -4866,7 +4875,7 @@ app.get("/api/onchain/correlations", async (req, res) => {
         }
       }
     } catch (err: any) {
-      console.log("[Correlations] CoinGecko BTC fetch handled:", err.message);
+      log.info("[Correlations] CoinGecko BTC fetch handled:", err.message);
     }
 
     const btcReturns = dailyReturns(btcCloses);
@@ -4920,6 +4929,12 @@ app.get("/api/onchain/correlations", async (req, res) => {
 app.use("/api/auth", authLimiter, authRouter);
 app.use("/api/user/api-keys", apiKeysRouter);
 
+// QA3-F1: operator log viewer — ring buffer of redacted structured log lines.
+// requireAuth: only authenticated sessions may read server logs (they may
+// contain module names + operational context; never secrets — already
+// redacted at emit time). GET params: ?limit=100&level=warn (min severity).
+app.use("/api/system/logs", requireAuth, systemLogsRouter);
+
 // SEC2-DATA: mount portfolio + real trade execution routers.
 // Portfolio router self-mounts requireAuth. Trade execution router also self-mounts requireAuth.
 try {
@@ -4927,17 +4942,17 @@ try {
   app.use("/api/portfolio", portfolioRouter);
   // NEW FEATURE: start the background price-alert checker (polls Binance every 30s).
   startAlertChecker();
-  console.log("[portfolio] router mounted successfully.");
+  log.info("[portfolio] router mounted successfully.");
 } catch (e: any) {
-  console.log("[portfolio] router not available:", e?.message || e);
+  log.info("[portfolio] router not available:", e?.message || e);
 }
 
 try {
   const { tradeExecutionRouter } = await import("./src/server/tradeExecution");
   app.use("/api/trade", tradeExecutionRouter);
-  console.log("[trade] execution router mounted successfully (replaces simulation-only routes).");
+  log.info("[trade] execution router mounted successfully (replaces simulation-only routes).");
 } catch (e: any) {
-  console.log("[trade] execution router not available:", e?.message || e);
+  log.info("[trade] execution router not available:", e?.message || e);
 }
 
 try {
@@ -4946,12 +4961,12 @@ try {
   const liveDataModule: any = await import("./src/server/liveDataRoutes").catch(() => null);
   if (liveDataModule?.liveDataRouter) {
     app.use(liveDataModule.liveDataRouter);
-    console.log("[liveData] router mounted successfully.");
+    log.info("[liveData] router mounted successfully.");
   } else {
-    console.log("[liveData] router not yet available — skipping (this is OK).");
+    log.info("[liveData] router not yet available — skipping (this is OK).");
   }
 } catch (e: any) {
-  console.log("[liveData] router not yet available:", e?.message || e);
+  log.info("[liveData] router not yet available:", e?.message || e);
 }
 
 // ─── AI Router (9router primary + Gemini fallback) ────────────────────
@@ -4985,9 +5000,9 @@ try {
     res.json(result);
   });
 
-  console.log("[aiRouter] 9router + Gemini fallback endpoints mounted.");
+  log.info("[aiRouter] 9router + Gemini fallback endpoints mounted.");
 } catch (e: any) {
-  console.log("[aiRouter] not available:", e?.message || e);
+  log.info("[aiRouter] not available:", e?.message || e);
 }
 
 // 404 for unmatched /api/* — must come BEFORE the SPA catch-all so unknown API
@@ -5073,7 +5088,7 @@ async function startServer() {
   // disconnect Prisma. Prevents abrupt WebSocket drops + cancelled requests
   // when the process receives SIGTERM (container stop) or SIGINT (Ctrl-C).
   const server = app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Financial Modelling Server running on port ${PORT}`);
+    log.info(`Financial Modelling Server running on port ${PORT}`);
   });
 
   // OPT-1e: 30s hard socket timeout — guards against slow/hanging HTTP
@@ -5081,20 +5096,20 @@ async function startServer() {
   server.setTimeout(30000);
 
   function gracefulShutdown(signal: string) {
-    console.log(`[${signal}] Graceful shutdown initiated...`);
+    log.info(`[${signal}] Graceful shutdown initiated...`);
     server.close(() => {
-      console.log("[shutdown] HTTP server closed. Draining DB pool...");
+      log.info("[shutdown] HTTP server closed. Draining DB pool...");
       // Lazy-import Prisma to avoid loading it at boot if unused.
       import("./src/server/db")
         .then(({ prisma }) => prisma.$disconnect())
         .finally(() => {
-          console.log("[shutdown] Complete. Exiting.");
+          log.info("[shutdown] Complete. Exiting.");
           process.exit(0);
         });
     });
     // Force exit after 10s if graceful close hangs (stuck socket / slow client)
     setTimeout(() => {
-      console.error("[shutdown] Force exit (timeout)");
+      log.error("[shutdown] Force exit (timeout)");
       process.exit(1);
     }, 10000).unref();
   }

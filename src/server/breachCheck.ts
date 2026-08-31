@@ -1,3 +1,6 @@
+import { createLogger } from "./logger";
+const log = createLogger("breachCheck");
+
 // ZAYTRIX password breach check (AUTH10).
 // Uses HaveIBeenPwned k-anonymity API — privacy-preserving, no full hash sent.
 // Only the first 5 chars of SHA-1 are sent; we check the suffix locally.
@@ -46,7 +49,7 @@ export async function checkPasswordBreach(password: string): Promise<BreachCheck
     // breach corpus. The check actually succeeded.
     return { breached: false, count: 0, checked: true };
   } catch (e: any) {
-    console.log("[breachCheck] failed (offline?):", e?.message || e);
+    log.info("[breachCheck] failed (offline?):", e?.message || e);
     // Network error / DNS failure / etc. — the API was unreachable so we
     // cannot make any claim about the password's breach status.
     return { breached: false, count: 0, checked: false };

@@ -1,3 +1,6 @@
+import { createLogger } from "./logger";
+const log = createLogger("alerting");
+
 // ZAYTRIX Alerting Configuration (MONITORING9).
 // Defines alert rules + notification channels. In production, integrate with
 // PagerDuty/Slack/Email. In dev, logs to console.
@@ -109,7 +112,7 @@ async function sendAlert(rule: AlertRule): Promise<void> {
   const message = `[ALERT:${rule.severity.toUpperCase()}] ${rule.name}: ${rule.description}`;
 
   // Log to console (always)
-  console.warn(message);
+  log.warn(message);
 
   // In production, send to Sentry/PagerDuty/Slack
   if (process.env.NODE_ENV === "production") {
@@ -136,7 +139,7 @@ let alertTimer: ReturnType<typeof setInterval> | null = null;
 export function startAlerting() {
   if (alertTimer) return;
   alertTimer = setInterval(() => checkAlerts(), 60 * 1000);
-  console.log("[alerting] Alert checker started (runs every 60s).");
+  log.info("[alerting] Alert checker started (runs every 60s).");
 }
 
 // Health check endpoint data

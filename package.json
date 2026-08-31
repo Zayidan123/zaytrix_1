@@ -16,7 +16,8 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:reset": "prisma migrate reset",
-    "audit": "bun audit"
+    "audit": "bun audit",
+    "smoke": "node scripts/smoke-test.mjs --boot --port 4180"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

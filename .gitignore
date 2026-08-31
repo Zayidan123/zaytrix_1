@@ -35,3 +35,5 @@ mini-services/
 db/
 db/custom.db
 .zscripts/
+# QA3-F2: smoke test artifacts (screenshots, result JSON, snapshot dumps)
+qa-artifacts/

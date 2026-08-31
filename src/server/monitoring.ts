@@ -1,3 +1,6 @@
+import { createLogger } from "./logger";
+const log = createLogger("monitoring");
+
 // ZAYTRIX monitoring & alerting (SEC2-INFRA).
 // Sentry SDK integration for error tracking + performance monitoring.
 // In dev mode (no SENTRY_DSN), logs errors to console only.
@@ -56,9 +59,9 @@ export function initMonitoring() {
         return event;
       },
     });
-    console.log("[monitoring] Sentry initialized (DSN configured, PII scrubbing on).");
+    log.info("[monitoring] Sentry initialized (DSN configured, PII scrubbing on).");
   } else {
-    console.log("[monitoring] Sentry NOT initialized (no SENTRY_DSN). Errors logged to console only.");
+    log.info("[monitoring] Sentry NOT initialized (no SENTRY_DSN). Errors logged via structured logger only.");
   }
 }
 
@@ -69,7 +72,7 @@ export function captureError(error: Error | string, context?: Record<string, any
     Sentry.captureException(error);
   }
   // Always log to console
-  console.error("[monitoring] error captured:", error, context ? JSON.stringify(context) : "");
+  log.error("[monitoring] error captured:", error, context ? JSON.stringify(context) : "");
 }
 
 // Express error handler middleware (should be last, before the 404)
@@ -91,10 +94,10 @@ export function sentryErrorHandler(app?: any) {
       if (app) {
         Sentry.setupExpressErrorHandler(app);
       } else {
-        console.warn("[monitoring] sentryErrorHandler called without app — Sentry Express error handler NOT registered.");
+        log.warn("[monitoring] sentryErrorHandler called without app — Sentry Express error handler NOT registered.");
       }
     } catch (e: any) {
-      console.error("[monitoring] Sentry setupExpressErrorHandler failed:", e?.message || e);
+      log.error("[monitoring] Sentry setupExpressErrorHandler failed:", e?.message || e);
     }
   }
   // Always return a no-op pass-through so callers can mount this with

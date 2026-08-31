@@ -1,3 +1,6 @@
+import { createLogger } from "./logger";
+const log = createLogger("audit");
+
 // ZAYTRIX audit logging (SEC-BACKEND).
 //
 // logAudit() persists a single AuditLog row capturing who/what/when for every
@@ -35,6 +38,6 @@ export async function logAudit(
     });
   } catch (e: any) {
     // Never throw from audit — the calling endpoint must still respond.
-    console.error("[audit] failed to log:", e?.message || e);
+    log.error("[audit] failed to log:", e?.message || e);
   }
 }

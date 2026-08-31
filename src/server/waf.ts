@@ -1,3 +1,6 @@
+import { createLogger } from "./logger";
+const log = createLogger("waf");
+
 // ZAYTRIX WAF (Web Application Firewall) + Bot Detection (NETSEC9).
 // Middleware that inspects incoming requests for malicious patterns and
 // blocks known bots/scrapers/abuse tools. Adds defense-in-depth on top of
@@ -136,7 +139,7 @@ export function wafMiddleware(req: Request, res: Response, next: NextFunction) {
   const check = isSuspiciousRequest(req);
   if (check.blocked) {
     // Log the blocked request (could send to Sentry)
-    console.warn(`[WAF] Blocked request: ${req.method} ${req.originalUrl} — ${check.reason} — IP: ${req.ip}`);
+    log.warn(`[WAF] Blocked request: ${req.method} ${req.originalUrl} — ${check.reason} — IP: ${req.ip}`);
     return res.status(403).json({
       success: false,
       error: "Permintaan diblokir oleh firewall keamanan.",
@@ -164,7 +167,7 @@ export function getBotScore(req: Request): number {
 export function strictBotCheck(req: Request, res: Response, next: NextFunction) {
   const score = getBotScore(req);
   if (score >= 60) {
-    console.warn(`[WAF] High-risk action blocked (bot score ${score}): ${req.method} ${req.originalUrl} — IP: ${req.ip}`);
+    log.warn(`[WAF] High-risk action blocked (bot score ${score}): ${req.method} ${req.originalUrl} — IP: ${req.ip}`);
     return res.status(403).json({
       success: false,
       error: "Aksi sensitif diblokir (terdeteksi automasi). Gunakan browser biasa.",

@@ -1,3 +1,6 @@
+import { createLogger } from "./logger";
+const log = createLogger("dataRetention");
+
 // ZAYTRIX Data Retention + Field Encryption (DATAPROT9).
 // - Field-level encryption for PII (displayName, etc.)
 // - Data retention policy: auto-purge old audit logs, expired sessions/tokens
@@ -93,10 +96,10 @@ export async function runDataRetentionJob(): Promise<void> {
     if (btDeleted.count > 0) results.push(`${btDeleted.count} old backtest results`);
 
     if (results.length > 0) {
-      console.log(`[dataRetention] Purged: ${results.join(", ")}`);
+      log.info(`[dataRetention] Purged: ${results.join(", ")}`);
     }
   } catch (e: any) {
-    console.log("[dataRetention] error:", e.message);
+    log.info("[dataRetention] error:", e.message);
   }
 }
 
@@ -108,7 +111,7 @@ export function startDataRetentionJob() {
   setTimeout(() => runDataRetentionJob(), 60000);
   // Then every 24 hours
   retentionTimer = setInterval(() => runDataRetentionJob(), 24 * 60 * 60 * 1000);
-  console.log("[dataRetention] Job scheduled (runs every 24h, first run in 60s).");
+  log.info("[dataRetention] Job scheduled (runs every 24h, first run in 60s).");
 }
 
 // ─── Data Export (GDPR/Privacy right to access) ──────────────────────

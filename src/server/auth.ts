@@ -1,3 +1,6 @@
+import { createLogger } from "./logger";
+const log = createLogger("auth");
+
 // ZAYTRIX authentication (SEC-BACKEND + SEC2-AUTH).
 //
 // Exports:
@@ -236,7 +239,7 @@ export async function recordSession(req: Request, userId: string, token: string)
     // Best-effort for the login response itself, but note: requireAuth is now
     // FAIL-CLOSED — if this insert failed, the very next request with this
     // cookie will be 401'd. Log loudly so ops can see why sessions die.
-    console.error("[auth] recordSession failed (session will be rejected by requireAuth):", e?.message || e);
+    log.error("[auth] recordSession failed (session will be rejected by requireAuth):", e?.message || e);
   }
 }
 
@@ -244,7 +247,7 @@ async function revokeSessionByToken(token: string): Promise<void> {
   try {
     await prisma.session.deleteMany({ where: { tokenHash: hashToken(token) } });
   } catch (e: any) {
-    console.error("[auth] revokeSessionByToken failed:", e?.message || e);
+    log.error("[auth] revokeSessionByToken failed:", e?.message || e);
   }
 }
 
@@ -325,7 +328,7 @@ async function validateSession(token: string, userId: string): Promise<boolean> 
     // SEC-5: fail-closed on DB error. A DB outage is visible in logs and ops
     // dashboards; silently honoring un-verifiable JWTs is NOT an option when
     // the whole point of the Session table is revocation.
-    console.error("[auth] validateSession error (rejecting request fail-closed):", e?.message || e);
+    log.error("[auth] validateSession error (rejecting request fail-closed):", e?.message || e);
     return false;
   }
 }
@@ -494,10 +497,10 @@ authRouter.post("/register", async (req: Request, res: Response, next: NextFunct
       // Fire-and-forget the email send (awaited for dev-mode logging but
       // wrapped so any transport error stays inside the try/catch).
       sendVerificationEmail(user.email, evToken).catch((e) =>
-        console.error("[auth] sendVerificationEmail failed:", e?.message || e)
+        log.error("[auth] sendVerificationEmail failed:", e?.message || e)
       );
     } catch (e: any) {
-      console.error("[auth] email verification token create failed:", e?.message || e);
+      log.error("[auth] email verification token create failed:", e?.message || e);
     }
 
     // SEC3-AUTH (AUTH10): password breach check via HaveIBeenPwned k-anonymity.
@@ -532,7 +535,7 @@ authRouter.post("/register", async (req: Request, res: Response, next: NextFunct
     } catch (e: any) {
       // Defensive: should never happen since checkPasswordBreach swallows its
       // own errors, but if it does, registration still succeeds.
-      console.error("[auth] breach check threw:", e?.message || e);
+      log.error("[auth] breach check threw:", e?.message || e);
     }
 
     const userWithBreach = { ...user, breachCount, breachChecked };
@@ -605,7 +608,7 @@ authRouter.post("/login", async (req: Request, res: Response, next: NextFunction
           },
         });
       } catch (e: any) {
-        console.error("[auth] failedLoginAttempts update failed:", e?.message || e);
+        log.error("[auth] failedLoginAttempts update failed:", e?.message || e);
       }
       recordAuthAttempt(false);
       await logAudit(user.id, "LOGIN", req, false, { reason: "bad_password", email, attempts: newCount, locked: shouldLock });
@@ -752,7 +755,7 @@ authRouter.post("/login/2fa", async (req: Request, res: Response, next: NextFunc
           error: `Kode 2FA tidak valid. Sisa percobaan: ${remaining} sebelum akun terkunci.`,
         });
       } catch (e: any) {
-        console.error("[auth] 2FA failedLoginAttempts update failed:", e?.message || e);
+        log.error("[auth] 2FA failedLoginAttempts update failed:", e?.message || e);
         return res.status(401).json({ success: false, error: "Kode 2FA tidak valid. Pastikan waktu perangkat sinkron." });
       }
     }
@@ -864,7 +867,7 @@ authRouter.post("/2fa/backup-login", async (req: Request, res: Response, next: N
           },
         });
       } catch (e: any) {
-        console.error("[auth] backup-login failedLoginAttempts update failed:", e?.message || e);
+        log.error("[auth] backup-login failedLoginAttempts update failed:", e?.message || e);
         newCount = user.failedLoginAttempts || 0;
         shouldLock = false;
       }
@@ -1210,7 +1213,7 @@ authRouter.post("/resend-verification", requireAuth, async (req: Request, res: R
       },
     });
     sendVerificationEmail(user.email, token).catch((e) =>
-      console.error("[auth] resend verification email failed:", e?.message || e)
+      log.error("[auth] resend verification email failed:", e?.message || e)
     );
     await logAudit(user.id, "EMAIL_VERIFY_RESEND", req, true, {});
     return res.json({ success: true, message: "Email verifikasi telah dikirim ulang." });
@@ -1252,7 +1255,7 @@ authRouter.post("/forgot-password", async (req: Request, res: Response, next: Ne
       !process.env.EMAIL_DEV_MODE
     ) {
       process.env.EMAIL_DEV_MODE = "true";
-      console.warn(
+      log.warn(
         "[auth] FUNC-10: SMTP not configured in non-production — auto-enabling EMAIL_DEV_MODE. " +
           "Reset token akan dicetak ke log server, bukan dikirim."
       );
@@ -1271,7 +1274,7 @@ authRouter.post("/forgot-password", async (req: Request, res: Response, next: Ne
       // FUNC-10: failures are logged server-side (not surfaced to the caller —
       // the response stays anti-enumeration generic).
       sendPasswordResetEmail(user.email, token).catch((e) =>
-        console.error("[auth] sendPasswordResetEmail failed:", e?.message || e)
+        log.error("[auth] sendPasswordResetEmail failed:", e?.message || e)
       );
       await logAudit(user.id, "PASSWORD_RESET_REQUEST", req, true, {});
     } else {

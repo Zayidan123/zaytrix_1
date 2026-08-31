@@ -1,3 +1,6 @@
+import { createLogger } from "./logger";
+const log = createLogger("upstreamHealth");
+
 // =============================================================================
 // upstreamHealth.ts — periodic upstream API health checker (OPT-3c)
 // =============================================================================
@@ -86,7 +89,7 @@ export function startUpstreamHealthChecker(): void {
   }, 60_000);
   timer.unref();
 
-  console.log(
+  log.info(
     `[upstream-health] Checker started — monitors: ${UPSTREAMS.map((u) => u.name).join(", ")}`
   );
 }

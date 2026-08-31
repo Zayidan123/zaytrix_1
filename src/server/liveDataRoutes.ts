@@ -234,6 +234,14 @@ export const liveDataRouter = express.Router();
 // Making the keyGenerator explicit avoids the default `req.ip` fallback
 // silently changing behavior if express-rate-limit's default ever drifts.
 liveDataRouter.use(
+  // QA3-3: this router is mounted at the app ROOT (app.use(liveDataRouter))
+  // because its routes carry full "/api/live/..." paths. Without the explicit
+  // "/api/live" path below, router.use() applies to EVERY request — when the
+  // limiter trips, even the SPA shell "/" and /api/auth/* returned the raw
+  // 429 JSON (browser shows a JSON viewer instead of the app). Scoping the
+  // limiter to "/api/live" means an abusive IP only loses live data, never
+  // the app itself or login.
+  "/api/live",
   rateLimit({
     windowMs: 60 * 1000, // 1 minute
     max: 120, // 120 requests per minute per IP (first-load burst + normal usage)

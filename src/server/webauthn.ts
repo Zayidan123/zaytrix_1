@@ -1,3 +1,6 @@
+import { createLogger } from "./logger";
+const log = createLogger("webauthn");
+
 // ZAYTRIX WebAuthn/Passkey support (AUTH10).
 // Simplified passkey flow using Web Crypto API (ECDSA P-256).
 // Frontend uses navigator.credentials.create() / navigator.credentials.get().
@@ -381,7 +384,7 @@ webauthnRouter.post("/login/finish", async (req: Request, res: Response) => {
       },
     });
   } catch (e: any) {
-    console.log("[webauthn] login error:", e.message);
+    log.info("[webauthn] login error:", e.message);
     res.status(500).json({ success: false, error: "Gagal verifikasi passkey." });
   }
 });
