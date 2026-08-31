@@ -102,6 +102,26 @@ Audit statis menemukan 75 temuan; QA runtime dengan browser automation menemukan
 - **Script `scripts/purge-db-from-history.sh`** — helper one-command untuk aksi pasca-insiden SEC-1 (git filter-repo + verifikasi otomatis + backup branch + panduan force-push). Jalankan: `bash scripts/purge-db-from-history.sh --push`.
 - Atribusi portofolio multi-mata-uang jujur (lihat QA2-2).
 
+### 🧪 Ronde QA Runtime #3 & #4 (31 Ag — hardening + konsol operator)
+
+**Ronde #3** (commit `aa685e5`) — 3 bug nyata ditemukan & diperbaiki:
+- **QA3-1**: *CSRF stale-cookie deadlock* — cookie `zaytrix_csrf` yang ada-tapi-invalid (mis. pasca rotasi secret) tidak pernah di-reseed → SPA terkunci 403 hingga 24 jam. → Middleware 403 kini mengirim cookie segar + kode mesin-baca (`CSRF_MISMATCH`/`CSRF_INVALID`), dan wrapper fetch di `main.tsx` otomatis retry sekali dengan token baru (terverifikasi E2E).
+- **QA3-3**: Rate limiter live-data berlaku untuk SEMUA request (router ter-mount di root) — IP ter-throttle menerima JSON 429 mentah bahkan di halaman `/`. → Limiter di-scope ke `/api/live`.
+- **QA3-4**: `authLimiter` menghitung probe GET `/api/auth/me` (2× per mount di StrictMode) — SPA bisa menghabiskan kuota login-nya sendiri. → Probe GET tanpa-risiko di-skip.
+- **Logger terstruktur** (QA3-F1): `src/server/logger.ts` — JSON-lines dengan redaksi universal (email → `u***@`, JWT/token GitHub → di-mask, kunci sensitif → `[REDACTED]`), `LOG_LEVEL`, ring buffer 500 entri, endpoint `GET /api/system/logs` (requireAuth). **165 panggilan `console.*` termigrasi.**
+- **Smoke test otomatis** (QA3-F2): `bun run smoke` — register user via UI nyata, sapu 15 tab, hitung error, laporan JSON (15/15 PASS).
+
+**Ronde #4** (commit `c4f7f14`) — 0 bug baru, 2 fitur:
+- **QA4-F1 — Panel "Log Sistem & Diagnostik"** (Settings Hub → sub-tab baru): konsol operator live yang membaca `GET /api/system/logs` — filter level dengan jumlah live, pencarian, batas 50–500 entri, auto-refresh 30 dtk (berlabel jujur "polling, bukan streaming"), entri expandable, dan kartu catatan integritas (redaksi server-side, semantik ring buffer).
+- **QA4-F2 — Pipeline CI (GitHub Actions)**: template `docs/github-actions-ci.yml` — job `verify` (lint tsc → prisma generate + db push scratch → vitest self-booting 37/37 → build produksi + artefak) untuk tiap push/PR, plus job `smoke` manual (workflow_dispatch, full 15-tab sweep via agent-browser). Dikirim sebagai template karena token dev tidak punya scope `workflow`; aktifkan dengan:
+
+```bash
+mkdir -p .github/workflows && cp docs/github-actions-ci.yml .github/workflows/ci.yml
+git add .github/ && git commit -m "ci: activate pipeline" && git push
+```
+
+- **Smoke test mode CI**: `scripts/smoke-test.mjs --boot` kini membuat `.env` sementara dengan secret acak bila tidak ada (fresh checkout/CI), dan menghapusnya saat teardown — terverifikasi penuh tanpa `.env`: 15/15 tab PASS.
+
 ---
 
 ## 🚀 Fitur Utama
