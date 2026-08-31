@@ -43,6 +43,8 @@ import { AppSettings } from "../types";
 import { safeLocalStorage } from "../utils/safeStorage";
 import { sendAlertSecurely } from "../services/webhookService";
 import Profile from "./Profile";
+// QA4-F1: panel operator log terstruktur — baca GET /api/system/logs (QA3-F1).
+import SystemLogsPanel from "./SystemLogsPanel";
 
 export default function Settings() {
   const settings = useGlobalStore(state => state.settings);
@@ -55,7 +57,7 @@ export default function Settings() {
   const setTwoFactorEnabled = useGlobalStore(state => state.setTwoFactorEnabled);
 
   // Active Setting Sub-Tab
-  const [activeSubTab, setActiveSubTab] = useState<"profil" | "tampilan" | "keamanan" | "notifikasi" | "privasi" | "integrasi" | "bantuan">("profil");
+  const [activeSubTab, setActiveSubTab] = useState<"profil" | "tampilan" | "keamanan" | "notifikasi" | "privasi" | "integrasi" | "sistem" | "bantuan">("profil");
   const [viewMode, setViewMode] = useState<"menu" | "detail">("menu");
 
   // Connection Testing States
@@ -409,6 +411,7 @@ export default function Settings() {
     { id: "notifikasi", name: "Kontrol Notifikasi", icon: Bell, desc: "Telegram, Discord, WhatsApp" },
     { id: "privasi", name: "Privasi & Compliance", icon: Eye, desc: "Visibilitas data & daftar blokir" },
     { id: "integrasi", name: "Integrasi & API Keys", icon: Link, desc: "Kunci API bursa, Google, Apple" },
+    { id: "sistem", name: "Log Sistem & Diagnostik", icon: Terminal, desc: "Log terstruktur server (ter-redaksi)" },
     { id: "bantuan", name: "Bantuan & Hukum", icon: HelpCircle, desc: "Panduan trading, FAQ & Kebijakan" },
   ] as const;
 
@@ -1622,7 +1625,14 @@ export default function Settings() {
             </div>
           )}
 
-          {/* TAB 7: SUPPORT AND LEGAL FAQ DOCUMENTS */}
+          {/* TAB 7: SYSTEM LOGS — QA4-F1 (operator console, reads /api/system/logs) */}
+          {activeSubTab === "sistem" && (
+            <div className="space-y-6 animate-fade-in" id="settings-hub-system-logs">
+              <SystemLogsPanel />
+            </div>
+          )}
+
+          {/* TAB 8: SUPPORT AND LEGAL FAQ DOCUMENTS */}
           {activeSubTab === "bantuan" && (
             <div className="space-y-6 animate-fade-in" id="settings-hub-support">
               

@@ -1,0 +1,124 @@
+# ============================================================================
+# ZAYTRIX CI — QA4-F2 (ronde QA #4)
+# ----------------------------------------------------------------------------
+# Pipeline ringan untuk SETIAP push/PR ke main:
+#   job "verify": lint (tsc) → prisma generate + db push (SQLite scratch) →
+#   vitest self-booting (FUNC-14: globalSetup auto-buat .env + spawn server) →
+#   build produksi (vite + esbuild ESM).
+#
+# Catatan desain:
+#   • Test integrasi MEMUKUL API upstream nyata (Binance/CoinGecko). Test
+#     hashrate sudah menerima kontrak kegagalan-jujur upstream (QA3), jadi
+#     kegagalan jaringan CI eksternal tidak membuat pipeline merah palsu —
+#     namun beberapa test live-data tetap butuh egress internet (GitHub
+#     hosted runner punya akses penuh).
+#   • SQLite file dibuat scratch di job (prisma db push) — TIDAK memakai
+#     db/custom.db (file itu sudah tidak pernah di-track sejak SEC-1).
+#   • Smoke test browser (scripts/smoke-test.mjs) butuh agent-browser +
+#     Chromium — terlalu berat untuk pipeline default; lihat job manual
+#     "smoke" di bawah (workflow_dispatch).
+#   • Badge status dapat dipasang di README: [CI](…/actions)
+# ============================================================================
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Lint · Test · Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prisma generate + scratch database
+        run: |
+          npx prisma generate
+          npx prisma db push --skip-generate
+
+      - name: Lint (tsc --noEmit)
+        run: npm run lint
+
+      - name: Test (vitest self-booting — FUNC-14)
+        run: npm test
+        env:
+          # Port khusus agar tidak bentrok dengan apa pun di runner.
+          ZAYTRIX_TEST_PORT: "4170"
+
+      - name: Build produksi (vite + esbuild ESM)
+        run: npm run build
+
+      - name: Upload artefak build
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-dist
+          path: dist/server.mjs
+          retention-days: 7
+          if-no-files-found: error
+
+  # Job manual (opsional): smoke test browser penuh — register user nyata via
+  # UI, sapu 15 tab, hitung error. Dijalankan on-demand karena butuh Chromium
+  # (±2 menit ekstra). Trigger: tab Actions → "CI" → "Run workflow" → smoke.
+  smoke:
+    name: Smoke Test (agent-browser)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install agent-browser + Chromium
+        run: |
+          npm install -g agent-browser
+          agent-browser install --with-deps || agent-browser install
+
+      - name: Prisma generate + scratch database
+        run: |
+          npx prisma generate
+          npx prisma db push --skip-generate
+
+      - name: Smoke test (self-boot server + 15 tab sweep)
+        run: node scripts/smoke-test.mjs --boot --port 4180
+        env:
+          # globalSetup smoke membuat .env sendiri bila absen.
+          CI: "true"
+
+      - name: Upload hasil QA
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-artifacts
+          path: qa-artifacts/
+          retention-days: 7
+          if-no-files-found: ignore

@@ -24,7 +24,8 @@
 // Artifacts: ./qa-artifacts/smoke-<ts>.png + smoke-result.json
 // ============================================================================
 import { spawn, execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 
 // ---------------------------------------------------------------------------
@@ -131,6 +132,9 @@ function refFromSnapshot(snapshotText, pattern) {
 // Main
 // ---------------------------------------------------------------------------
 let serverProc = null;
+// QA4-F2: temporary .env lifecycle for --boot in CI / fresh checkout.
+const ENV_PATH = new URL("../.env", import.meta.url).pathname;
+let createdEnvFile = false;
 
 
 // One full registration attempt through the real UI form. Returns
@@ -211,6 +215,28 @@ async function main() {
   if (BOOT) {
     base = `http://localhost:${BOOT_PORT}`;
     console.error(`[smoke] booting server on :${BOOT_PORT} …`);
+    // CI/fresh-checkout support (QA4-F2): the server refuses to boot without
+    // .env (dataRetention validates ENCRYPTION_KEY at module-load — see
+    // QA2-1). Mirror vitest globalSetup: create a temporary .env with strong
+    // random secrets when none exists, and remove it at teardown. A user's
+    // existing .env is NEVER touched.
+    if (!existsSync(ENV_PATH)) {
+      const secrets = [
+        "# TEMPORARY — created by scripts/smoke-test.mjs --boot (removed at teardown)",
+        `DATABASE_URL="file:../db/custom.db"`,
+        `SESSION_SECRET="${randomBytes(48).toString("hex")}"`,
+        `ENCRYPTION_KEY="${randomBytes(32).toString("hex")}"`,
+        `CSRF_SECRET="${randomBytes(32).toString("hex")}"`,
+        `GEMINI_API_KEY=""`,
+        `EMAIL_DEV_MODE="true"`,
+        `APP_URL="http://localhost:${BOOT_PORT}"`,
+        `PORT="${BOOT_PORT}"`,
+        "",
+      ].join("\n");
+      writeFileSync(ENV_PATH, secrets, "utf8");
+      createdEnvFile = true;
+      console.error("[smoke] temporary .env created (fresh checkout / CI mode).");
+    }
     serverProc = spawn("npx", ["tsx", "server.ts"], {
       cwd: new URL("..", import.meta.url).pathname,
       env: { ...process.env, PORT: String(BOOT_PORT) },
@@ -323,6 +349,11 @@ function finish(code) {
   } catch { /* best effort */ }
   if (serverProc) {
     try { process.kill(-serverProc.pid, "SIGTERM"); } catch { /* already gone */ }
+  }
+  // QA4-F2: remove the temporary .env ONLY if this script created it
+  // (fresh checkout / CI mode). A user's own .env is never touched.
+  if (createdEnvFile) {
+    try { rmSync(ENV_PATH, { force: true }); } catch { /* best effort */ }
   }
   ab(["close"], { allowFail: true });
   console.error(`\n[smoke] ${result.pass ? "PASS ✅" : "FAIL ❌"} — report: qa-artifacts/smoke-result.json`);
