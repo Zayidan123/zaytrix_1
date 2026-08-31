@@ -1553,29 +1553,48 @@ portfolioRouter.get("/attribution", async (req: Request, res: Response) => {
       });
     }
 
+    // DATA-QA2 (ronde QA #2): atribusi multi-mata-uang yang jujur.
+    // Saham .JK di-quote Yahoo dalam IDR; crypto dalam USD. Sebelumnya kedua
+    // mata uang dijumlahkan mentah (10 lembar BBCA dihitung sebagai "$6.4K").
+    // Sekarang: per-baris tetap native (Rp untuk saham, $ untuk crypto),
+    // sedangkan TOTAL dan persentase dinormalisasi ke USD memakai kurs live
+    // (getUsdIdrRate, open.er-api.com). Jika kurs gagal dan ada saham, total
+    // menjadi campuran yang DIBERI LABEL (mixedCurrency) — tidak pernah
+    // diklaim sebagai USD murni.
+    const hasStocks = holdings.some((h) => h.category !== "crypto");
+    const fxRate = hasStocks ? await getUsdIdrRate() : null;
+    const fxApplied = hasStocks && fxRate !== null;
+    const mixedCurrency = hasStocks && fxRate === null;
+    const toUsd = (amount: number, currency: string): number =>
+      currency === "IDR" ? (fxRate ? amount / fxRate : amount) : amount;
+
     interface AttributionRow {
       id: string;
       symbol: string;
       category: string;
+      currency: "USD" | "IDR";
       quantity: number;
       purchasePrice: number;
       livePrice: number;
-      priceSource: "live" | "last-synced" | "purchase-price";
+      priceSource: "live" | "purchase-price";
       costBasis: number;
       currentValue: number;
       gainLoss: number;
+      gainLossUsd: number;
       gainLossPct: number;
       weightPct: number;
       contributionPct: number;
     }
 
     const rows: AttributionRow[] = [];
-    let totalValue = 0;
-    let totalCost = 0;
+    let totalValueUsd = 0;
+    let totalCostUsd = 0;
 
     for (const h of holdings) {
       const qty = h.quantity > 0 ? h.quantity : 0;
-      const cost = (h.purchasePrice || 0) * qty;
+      const isStock = h.category !== "crypto";
+      const currency: "USD" | "IDR" = isStock ? "IDR" : "USD";
+      const cost = (h.purchasePrice || 0) * qty; // native currency
 
       let livePrice = 0;
       let priceSource: AttributionRow["priceSource"] = "purchase-price";
@@ -1586,27 +1605,29 @@ portfolioRouter.get("/attribution", async (req: Request, res: Response) => {
           priceSource = "live";
         }
       } else {
-        // Stocks: Yahoo Finance live quote (same upstream as /api/assets).
+        // Stocks: Yahoo Finance live quote dalam IDR (upstream sama dengan /api/assets).
         const price = await fetchStockPrice(h.symbol);
         if (price !== null && price > 0) {
           livePrice = price;
           priceSource = "live";
         }
       }
-      // Honest fallback — flagged, never fabricated:
+      // Honest fallback — flagged, never fabricated (native currency):
       if (livePrice <= 0 && (h.purchasePrice || 0) > 0) {
         livePrice = h.purchasePrice;
         priceSource = "purchase-price";
       }
 
-      const value = livePrice * qty;
-      const gainLoss = value - cost;
+      const value = livePrice * qty; // native
+      const gainLoss = value - cost; // native
+      const gainLossUsd = toUsd(gainLoss, currency);
       const gainLossPct = cost > 0 ? (gainLoss / cost) * 100 : 0;
 
       rows.push({
         id: h.id,
         symbol: h.symbol,
         category: h.category,
+        currency,
         quantity: qty,
         purchasePrice: h.purchasePrice || 0,
         livePrice,
@@ -1614,26 +1635,28 @@ portfolioRouter.get("/attribution", async (req: Request, res: Response) => {
         costBasis: cost,
         currentValue: value,
         gainLoss,
+        gainLossUsd,
         gainLossPct,
         weightPct: 0, // filled after totals
         contributionPct: 0, // filled after totals
       });
-      totalValue += value;
-      totalCost += cost;
+      totalValueUsd += toUsd(value, currency);
+      totalCostUsd += toUsd(cost, currency);
     }
 
-    const totalGainLoss = totalValue - totalCost;
-    const totalGainLossPct = totalCost > 0 ? (totalGainLoss / totalCost) * 100 : 0;
+    const totalGainLoss = totalValueUsd - totalCostUsd;
+    const totalGainLossPct = totalCostUsd > 0 ? (totalGainLoss / totalCostUsd) * 100 : 0;
 
     for (const r of rows) {
-      r.weightPct = totalValue > 0 ? (r.currentValue / totalValue) * 100 : 0;
+      const valueUsd = toUsd(r.currentValue, r.currency);
+      r.weightPct = totalValueUsd > 0 ? (valueUsd / totalValueUsd) * 100 : 0;
       // Contribution: share of the TOTAL P&L (signed — a losing asset inside a
-      // winning portfolio shows negative contribution).
-      r.contributionPct = totalGainLoss !== 0 ? (r.gainLoss / totalGainLoss) * 100 : 0;
+      // winning portfolio shows negative contribution). USD-normalized.
+      r.contributionPct = totalGainLoss !== 0 ? (r.gainLossUsd / totalGainLoss) * 100 : 0;
     }
 
-    // Rank by absolute P&L impact (largest movers first).
-    rows.sort((a, b) => Math.abs(b.gainLoss) - Math.abs(a.gainLoss));
+    // Rank by absolute P&L impact in USD (largest movers first).
+    rows.sort((a, b) => Math.abs(b.gainLossUsd) - Math.abs(a.gainLossUsd));
     const best = rows.find((r) => r.gainLoss > 0) ?? null;
     const worst = rows.find((r) => r.gainLoss < 0) ?? null;
 
@@ -1641,18 +1664,25 @@ portfolioRouter.get("/attribution", async (req: Request, res: Response) => {
     const summary = `${holdings.length} holding dianalisis. Total return ${totalGainLossPct.toFixed(2)}%` +
       (best ? ` • kontributor terbaik ${best.symbol} (+${best.gainLossPct.toFixed(1)}%)` : "") +
       (worst ? ` • terburuk ${worst.symbol} (${worst.gainLossPct.toFixed(1)}%)` : "") +
-      (staleCount > 0 ? ` • ${staleCount} aset memakai harga non-live (berlabel)` : "");
+      (staleCount > 0 ? ` • ${staleCount} aset memakai harga non-live (berlabel)` : "") +
+      (fxApplied ? ` • saham IDR dikonversi ke USD pada kurs live Rp${Math.round(fxRate!).toLocaleString("id-ID")}` : "") +
+      (mixedCurrency ? " • PERINGATAN: kurs USD/IDR tidak tersedia, total campuran IDR+USD tanpa konversi" : "");
 
     return res.json({
       success: true,
       attribution: {
-        totalValue,
-        totalCost,
+        totalValue: totalValueUsd,
+        totalCost: totalCostUsd,
         totalGainLoss,
         totalGainLossPct,
+        baseCurrency: "USD",
+        fxRate: fxRate ?? null,
+        fxSource: fxRate ? "open.er-api.com (live)" : null,
+        fxApplied,
+        mixedCurrency,
         holdings: rows,
-        best: best ? { symbol: best.symbol, gainLoss: best.gainLoss, gainLossPct: best.gainLossPct } : null,
-        worst: worst ? { symbol: worst.symbol, gainLoss: worst.gainLoss, gainLossPct: worst.gainLossPct } : null,
+        best: best ? { symbol: best.symbol, gainLoss: best.gainLoss, currency: best.currency, gainLossPct: best.gainLossPct } : null,
+        worst: worst ? { symbol: worst.symbol, gainLoss: worst.gainLoss, currency: worst.currency, gainLossPct: worst.gainLossPct } : null,
         summary,
       },
     });

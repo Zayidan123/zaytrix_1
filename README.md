@@ -87,6 +87,23 @@ Tiga auditor paralel memeriksa seluruh codebase:
 
 ---
 
+### 🧪 Ronde QA Runtime #2 (31 Ag — bug nyata ditemukan via browser automation)
+
+Audit statis menemukan 75 temuan; QA runtime dengan browser automation menemukan bug yang hanya muncul saat aplikasi benar-benar dijalankan:
+
+- **QA2-1 KRITIS**: `dotenv.config()` dipanggil di body `server.ts` SETELAH import — padahal ESM mengevaluasi semua import lebih dulu, sehingga modul yang memvalidasi env saat module-load (mis. `dataRetention.ts` → ENCRYPTION_KEY) selalu crash sebelum `.env` termuat. **Quick start resmi (`cp .env.example .env` → `bun run dev`) tidak akan pernah berhasil tanpa fix ini.** → `import "dotenv/config"` dipindah ke baris pertama; build produksi dist juga diverifikasi tetap benar urutannya.
+- **QA2-2**: Atribusi portofolio mencampur mata uang — harga saham `.JK` (IDR) dijumlahkan mentah dengan crypto USD: 10 lembar BBCA dihitung sebagai "$6.4K". → Baris saham tetap native Rp, total & persentase dinormalisasi ke USD dengan kurs live open.er-api.com (Rp17.7xx), chip `IDR→USD`, degradasi jujur `mixedCurrency` bila kurs gagal.
+- **QA2-3**: Crash render tab Coins Rankings — 20 dari 120 koin CoinGecko memiliki `marketCap`/`supply` null (WIF, APT, TIA, TON, dll) → `TypeError: Cannot read properties of null (reading 'toLocaleString')` tertangkap ErrorBoundary. → Formatter null-safe + tampilan `N/A` jujur + agregat `?? 0` + ratio Vol/Mcap null-guard.
+- **QA2-4**: SQLite `journal_mode=delete` membuat dua proses server saling mengunci tulis (DB "database is locked" saat test paralel) → **WAL mode + busy_timeout 5000ms** diaktifkan persisten.
+- **QA2-5**: Test suite lama mengekstrak cookie sesi dari header `set-cookie` gabungan → tanpa sadar memakai cookie CSRF (baru dari fix SEC-6), bukan cookie sesi → 5 test gagal palsu. → `extractSessionCookie()` memilih `zaytrix_session` eksplisit via `getSetCookie()`.
+
+**Fitur baru ronde QA #2:**
+- **FUNC-14 SELESAI — test suite self-booting**: `vitest globalSetup` (src/server/__tests__/global-setup.ts) otomatis membuat `.env` sementara dengan secret acak (fresh checkout/CI), mengaktifkan WAL, men-spawn server, menunggu `/health` siap, dan melakukan teardown. **`bun run test` kini berdiri sendiri — 37/37 PASS.** Port bisa diatur via `ZAYTRIX_TEST_PORT=4170`.
+- **Script `scripts/purge-db-from-history.sh`** — helper one-command untuk aksi pasca-insiden SEC-1 (git filter-repo + verifikasi otomatis + backup branch + panduan force-push). Jalankan: `bash scripts/purge-db-from-history.sh --push`.
+- Atribusi portofolio multi-mata-uang jujur (lihat QA2-2).
+
+---
+
 ## 🚀 Fitur Utama
 
 ### 🔒 Keamanan Enterprise
@@ -119,14 +136,18 @@ Tiga auditor paralel memeriksa seluruh codebase:
 | AI (Gemini/9router) | Aktif jika `GEMINI_API_KEY`/`NINEROUTER_API_KEY` diisi; tanpa kunci → fallback berlabel, tanpa klaim palsu |
 | Email verifikasi/reset | Butuh SMTP; tanpa SMTP di dev → `EMAIL_DEV_MODE=true` mencetak token ke log server |
 | Google OAuth | Butuh `GOOGLE_CLIENT_ID/SECRET`; tanpa itu tombol menampilkan pesan ramah |
-| Test suite | Integrasi — butuh server live di :3000 (`bun run dev` di terminal lain, lalu `bun run test`) |
+| Test suite | **Self-booting (ronde QA #2)** — `bun run test` spawn server sendiri + `.env` sementara otomatis (37/37 PASS); override port via `ZAYTRIX_TEST_PORT` |
 
 ### ⚠️ Tindakan Pasca-Insiden yang WAJIB Anda lakukan (SEC-1)
 Database lama (`db/custom.db`) pernah ter-commit publik berisi email, hash bcrypt, dan hash token user:
 1. **Rotasi password semua user** yang terdaftar di DB lama.
 2. **Hapus semua sesi** (tabel Session) — token lama berpotensi bocor.
 3. Rotasi `SESSION_SECRET`, `ENCRYPTION_KEY`, `CSRF_SECRET` di `.env` (generate baru: `openssl rand -hex 48/32/32`).
-4. Pertimbangkan purge riwayat git (`git filter-repo --path db/custom.db --invert-paths`) karena blob lama masih ada di history — lalu force-push.
+4. **Purge riwayat git** — kini cukup satu perintah (helper ronde QA #2):
+   ```bash
+   bash scripts/purge-db-from-history.sh --push
+   ```
+   Script memakai `git filter-repo`, membuat backup branch lokal, memverifikasi `db/*.db` hilang dari seluruh history, lalu force-push. (Prasyarat: `pip install git-filter-repo`.)
 
 ---
 
@@ -164,6 +185,10 @@ bun run dev
 
 # 5. (Opsional) Build produksi
 bun run build && bun run start
+
+# 6. (Opsional) Test integrasi — server test di-spawn otomatis
+bun run test
+#    Port berbeda (mis. 3000 dipakai): ZAYTRIX_TEST_PORT=4170 bun run test
 ```
 
 ---
@@ -183,6 +208,8 @@ zaytrix_1/
 │   ├── lib/portfolioSync.ts     # Sinkronisasi portofolio + alert (merge)
 │   └── utils/pdfGenerator.ts    # PDF report (DOMPurify)
 ├── Caddyfile                    # Reverse proxy + dokumentasi TLS
+├── scripts/
+│   └── purge-db-from-history.sh # Helper purge git history SEC-1 (QA #2)
 └── .env.example                 # Template env LENGKAP
 ```
 
@@ -194,10 +221,12 @@ zaytrix_1/
 |--------|-------|
 | Temuan audit (GLM 5.3) | 75 (26 SEC + 25 DATA + 24 FUNC) |
 | Temuan ditangani | 75 / 75 |
+| Bug QA runtime (2 ronde) | 9 ditemukan → semua diperbaiki |
 | Data fabrication tersisa | 0 |
 | Type errors | 0 |
-| Build produksi | ✅ (ESM, 486.9kb server) |
-| Commits | audit + fix batch ini |
+| Build produksi | ✅ (ESM, 492.9kb server) |
+| Test suite | ✅ 37/37 self-booting (FUNC-14 selesai) |
+| Commits | audit + 2 batch QA runtime |
 
 ---
 

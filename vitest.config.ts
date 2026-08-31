@@ -13,6 +13,8 @@ const testConfig: any = {
   // Don't run tests in parallel (they share a single dev server)
   pool: "forks",
   poolOptions: { forks: { singleFork: true } },
+  // FUNC-14: boot server otomatis sebelum test (lihat global-setup.ts).
+  globalSetup: ["src/server/__tests__/global-setup.ts"],
 };
 
 export default defineConfig({ test: testConfig });

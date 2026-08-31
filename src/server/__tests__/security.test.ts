@@ -2,7 +2,21 @@
 
 import { describe, it, expect } from "vitest";
 
-const BASE = "http://localhost:3000";
+// FUNC-14: port mengikuti globalSetup (ZAYTRIX_TEST_PORT), default 3000.
+const BASE = process.env.ZAYTRIX_TEST_BASE ?? `http://localhost:${process.env.ZAYTRIX_TEST_PORT ?? "3000"}`;
+
+// FUNC-14: ekstraksi cookie sesi yang benar. headers.get("set-cookie")
+// menggabungkan beberapa Set-Cookie dengan koma — split(";")[0] lama sempat
+// mengambil cookie CSRF (ditambahkan oleh fix SEC-6), bukan cookie sesi.
+// getSetCookie() (undici/Node >= 18.14) mengembalikan array terpisah.
+function extractSessionCookie(headers: Headers): string {
+  const raw: string[] =
+    typeof (headers as any).getSetCookie === "function"
+      ? (headers as any).getSetCookie()
+      : [headers.get("set-cookie") || ""];
+  const line = raw.find((c: string) => c.startsWith("zaytrix_session="));
+  return line ? line.split(";")[0] : "";
+}
 
 async function api(path: string, opts: RequestInit = {}) {
   const res = await fetch(`${BASE}${path}`, {
@@ -94,7 +108,7 @@ describe("Portfolio Persistence", () => {
       body: JSON.stringify({ email, password, displayName: "Port Test" }),
     });
     expect([200, 201]).toContain(status);
-    cookie = (headers.get("set-cookie") || "").split(";")[0];
+    cookie = extractSessionCookie(headers);
     expect(cookie).toBeTruthy();
   });
 
@@ -146,17 +160,23 @@ describe("Portfolio Persistence", () => {
 // ─── 2FA TESTS ───────────────────────────────────────────────────────
 
 describe("2FA Flow", () => {
-  it("should setup 2FA when authed", async () => {
+  it("should reject 2FA setup before email verification (FIX-C-7)", async () => {
     const email = `2fa-${Date.now()}@test.com`;
     const regRes = await api("/api/auth/register", {
       method: "POST",
       body: JSON.stringify({ email, password: "TestPass123!", displayName: "2FA Test" }),
     });
-    const cookie2 = (regRes.headers.get("set-cookie") || "").split(";")[0];
+    expect([200, 201]).toContain(regRes.status);
+    const cookie2 = extractSessionCookie(regRes.headers);
+    expect(cookie2).toBeTruthy();
     const setupRes = await api("/api/auth/2fa/setup", {
       method: "POST",
       headers: { Cookie: cookie2 },
     });
-    expect([200, 401]).toContain(setupRes.status);
+    // FIX-C-7: email belum terverifikasi (tidak ada SMTP di lingkungan test)
+    // → pendaftaran 2FA DITOLAK. Ini kontrak keamanan yang diharapkan.
+    expect(setupRes.status).toBe(400);
+    expect(setupRes.data.success).toBe(false);
+    expect(String(setupRes.data.error)).toContain("diverifikasi");
   });
 });

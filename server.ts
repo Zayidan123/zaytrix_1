@@ -1,7 +1,12 @@
+// FUNC-QA2: import "dotenv/config" HARUS menjadi import pertama.
+// ESM mengevaluasi semua import sebelum body module — modul seperti
+// src/server/dataRetention.ts memvalidasi ENCRYPTION_KEY saat module-load,
+// sehingga .env wajib termuat SEBELUM import tersebut. Memanggil
+// dotenv.config() di body (setelah import) selalu terlambat.
+import "dotenv/config";
 import express from "express";
 import path from "path";
 import fs from "fs";
-import dotenv from "dotenv";
 import crypto from "crypto";
 import { z } from "zod";
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
@@ -21,8 +26,6 @@ import { wafMiddleware, strictBotCheck } from "./src/server/waf";
 import { startDataRetentionJob, exportUserData, deleteAllUserData } from "./src/server/dataRetention";
 // OPT-3c: upstream API health checker (Binance/CoinGecko) — additive, runs in background.
 import { startUpstreamHealthChecker } from "./src/server/upstreamHealth";
-
-dotenv.config();
 
 // SEC2-INFRA: initialize Sentry/error monitoring early
 initMonitoring();

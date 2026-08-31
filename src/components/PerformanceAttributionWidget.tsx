@@ -29,6 +29,7 @@ interface AttributionRow {
   id: string;
   symbol: string;
   category: string;
+  currency: "USD" | "IDR";
   quantity: number;
   purchasePrice: number;
   livePrice: number;
@@ -36,19 +37,25 @@ interface AttributionRow {
   costBasis: number;
   currentValue: number;
   gainLoss: number;
+  gainLossUsd: number;
   gainLossPct: number;
   weightPct: number;
   contributionPct: number;
 }
 
 interface AttributionData {
-  totalValue: number;
-  totalCost: number;
-  totalGainLoss: number;
+  totalValue: number; // USD (base)
+  totalCost: number; // USD (base)
+  totalGainLoss: number; // USD (base)
   totalGainLossPct: number;
+  baseCurrency: "USD";
+  fxRate: number | null;
+  fxSource: string | null;
+  fxApplied: boolean;
+  mixedCurrency: boolean;
   holdings: AttributionRow[];
-  best: { symbol: string; gainLoss: number; gainLossPct: number } | null;
-  worst: { symbol: string; gainLoss: number; gainLossPct: number } | null;
+  best: { symbol: string; gainLoss: number; currency: "USD" | "IDR"; gainLossPct: number } | null;
+  worst: { symbol: string; gainLoss: number; currency: "USD" | "IDR"; gainLossPct: number } | null;
   summary: string;
 }
 
@@ -59,6 +66,19 @@ const fmtUSD = (n: number): string => {
   if (abs >= 1e3) return `$${(n / 1e3).toFixed(2)}K`;
   return `$${n.toFixed(2)}`;
 };
+
+// DATA-QA2: format rupiah untuk baris saham .JK (native IDR).
+const fmtIDR = (n: number): string => {
+  const abs = Math.abs(n);
+  if (abs >= 1e12) return `Rp${(n / 1e12).toFixed(2)}T`;
+  if (abs >= 1e9) return `Rp${(n / 1e9).toFixed(2)}M`;
+  if (abs >= 1e6) return `Rp${(n / 1e6).toFixed(2)}jt`;
+  if (abs >= 1e4) return `Rp${(n / 1e3).toFixed(1)}rb`;
+  return `Rp${n.toLocaleString("id-ID", { maximumFractionDigits: 0 })}`;
+};
+
+const fmtNative = (currency: "USD" | "IDR" | undefined, n: number): string =>
+  currency === "IDR" ? fmtIDR(n) : fmtUSD(n);
 
 const fmtPct = (n: number): string => `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
 
@@ -93,8 +113,12 @@ export default function PerformanceAttributionWidget() {
     return () => clearInterval(t);
   }, [fetchAttribution]);
 
+  // DATA-QA2: skala bar memakai gainLossUsd agar bar lintas mata uang Apple-to-apple.
   const maxAbsGain = data
-    ? Math.max(...data.holdings.map((h) => Math.abs(h.gainLoss)), 1)
+    ? Math.max(
+        ...data.holdings.map((h) => Math.abs(h.gainLossUsd ?? h.gainLoss)),
+        1,
+      )
     : 1;
   const totalGain = data ? data.totalGainLoss : 0;
   const isProfit = totalGain >= 0;
@@ -222,7 +246,7 @@ export default function PerformanceAttributionWidget() {
                     {data.best.symbol} {fmtPct(data.best.gainLossPct)}
                   </p>
                   <p className="text-[9px] text-slate-500 font-mono truncate">
-                    Kontributor terbaik • {fmtUSD(data.best.gainLoss)}
+                    Kontributor terbaik • {fmtNative(data.best.currency, data.best.gainLoss)}
                   </p>
                 </div>
               </div>
@@ -235,19 +259,31 @@ export default function PerformanceAttributionWidget() {
                     {data.worst.symbol} {fmtPct(data.worst.gainLossPct)}
                   </p>
                   <p className="text-[9px] text-slate-500 font-mono truncate">
-                    Kontributor terburuk • {fmtUSD(data.worst.gainLoss)}
+                    Kontributor terburuk • {fmtNative(data.worst.currency, data.worst.gainLoss)}
                   </p>
                 </div>
               </div>
             )}
           </div>
 
+          {/* DATA-QA2: peringatan total campuran bila kurs gagal */}
+          {data.mixedCurrency && (
+            <div className="flex items-start gap-2 bg-amber-500/5 border border-amber-500/25 rounded-xl p-3 mb-4 text-[10px] text-amber-400 font-mono">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+              <span>
+                Kurs USD/IDR live tidak tersedia — total sementara mencampur IDR dan USD TANPA konversi
+                (diberi label, bukan klaim USD murni). Persentase per-aset tetap akurat.
+              </span>
+            </div>
+          )}
+
           {/* Contribution list */}
           <div className="space-y-2">
             <AnimatePresence initial={false}>
               {data.holdings.map((h, idx) => {
                 const profit = h.gainLoss >= 0;
-                const barPct = (Math.abs(h.gainLoss) / maxAbsGain) * 100;
+                // DATA-QA2: bar P&L diskalakan dalam USD agar lintas mata uang sebanding.
+                const barPct = (Math.abs(h.gainLossUsd ?? h.gainLoss) / maxAbsGain) * 100;
                 return (
                   <motion.div
                     key={h.id}
@@ -269,8 +305,13 @@ export default function PerformanceAttributionWidget() {
                         </span>
                         <span className="text-xs font-black font-mono text-white truncate">{h.symbol}</span>
                         <span className="text-[9px] text-slate-500 font-mono truncate hidden sm:inline">
-                          {h.quantity.toLocaleString()} × {fmtUSD(h.livePrice)}
+                          {h.quantity.toLocaleString()} × {fmtNative(h.currency, h.livePrice)}
                         </span>
+                        {h.currency === "IDR" && (
+                          <span className="text-[7.5px] font-mono font-bold px-1 py-0.5 rounded bg-sky-500/10 text-sky-400 border border-sky-500/25 shrink-0" title={`Dikonversi ke USD untuk total portofolio (kurs Rp${data.fxRate ? Math.round(data.fxRate).toLocaleString("id-ID") : "-"})`}>
+                            IDR→USD
+                          </span>
+                        )}
                         {h.priceSource !== "live" && (
                           <span className="text-[7.5px] font-mono font-bold px-1 py-0.5 rounded bg-slate-700/40 text-slate-400 border border-slate-600/40 shrink-0">
                             HARGA BELI
@@ -284,13 +325,13 @@ export default function PerformanceAttributionWidget() {
                           }`}
                         >
                           {profit ? "+" : ""}
-                          {fmtUSD(h.gainLoss)}
+                          {fmtNative(h.currency, h.gainLoss)}
                         </p>
                         <p className="text-[9px] font-mono text-slate-500">{fmtPct(h.gainLossPct)}</p>
                       </div>
                     </div>
 
-                    {/* Diverging P&L bar (gain emerald right, loss rose left) */}
+                    {/* Diverging P&L bar (gain emerald right, loss rose left) — skala USD */}
                     <div className="relative h-2.5 bg-slate-900/80 rounded-full overflow-hidden">
                       <div className="absolute inset-y-0 left-1/2 w-px bg-slate-700/60" />
                       {profit ? (
@@ -335,6 +376,9 @@ export default function PerformanceAttributionWidget() {
             <p className="text-[9px] text-slate-500 font-mono leading-relaxed">
               {data.summary} • Crypto: harga live Binance; saham: live Yahoo Finance. Baris berlabel
               "HARGA BELI" memakai harga beli karena harga live tidak tersedia.
+              {data.fxApplied
+                ? ` Total dalam USD; saham IDR dikonversi pada kurs live ${data.fxSource ?? ""}.`
+                : ""}
             </p>
           </div>
         </>

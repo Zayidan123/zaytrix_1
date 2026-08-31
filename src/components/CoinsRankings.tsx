@@ -28,12 +28,22 @@ interface CoinData {
   price: number;
   change24h: number;
   change7d: number | null; // DATA-11: null = sumber real tidak menyediakan data 7 hari
-  marketCap: number;
+  // DATA-QA2: CoinGecko mengembalikan null untuk marketCap/supply pada koin
+  // tertentu (mis. token wrapped/baru tanpa peringkat kapitalisasi penuh).
+  // null = tampilkan "N/A", jangan pernah difabrikasi.
+  marketCap: number | null;
   volume24h: number;
-  circulatingSupply: number;
+  circulatingSupply: number | null;
   sector: "L1/L2" | "DeFi" | "Stablecoin" | "AI" | "Meme" | "Infrastructure";
   sparkline: number[] | null; // DATA-11: null = sembunyikan sparkline (tidak ada data real)
 }
+
+// DATA-QA2: formatter null-safe — mencegah crash .toLocaleString() pada null
+// (20 dari 120 koin CoinGecko punya marketCap/supply null, mis. WIF/APT/TIA/TON).
+const fmtPrice = (p: number | null): string =>
+  p == null ? "N/A" : p >= 1 ? p.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : p.toFixed(6);
+const fmtInt = (n: number | null): string =>
+  n == null ? "N/A" : n.toLocaleString();
 
 // NOTE: The previous `generate100Coins()` function (30 hardcoded stale coins
 // with BTC=$68,420 / ETH=$3,540 / BNB=$595.2 etc., plus 6 fake
@@ -86,7 +96,8 @@ export default function CoinsRankings() {
                   price: newPrice,
                   change24h: live.change,
                   volume24h: live.volume || coin.volume24h,
-                  marketCap: newPrice * coin.circulatingSupply,
+                  // DATA-QA2: supply null → marketCap tetap null (jangan fabrikasi NaN)
+                  marketCap: coin.circulatingSupply != null ? newPrice * coin.circulatingSupply : coin.marketCap,
                   sparkline: updatedSparkline,
                 };
               }
@@ -241,7 +252,8 @@ export default function CoinsRankings() {
     if (globalStats) {
       return globalStats;
     }
-    const totalMc = allCoins.reduce((sum, c) => sum + c.marketCap, 0);
+    // DATA-QA2: marketCap bisa null (CoinGecko) — dihitung 0 untuk agregat
+    const totalMc = allCoins.reduce((sum, c) => sum + (c.marketCap ?? 0), 0);
     const avgChange = allCoins.reduce((sum, c) => sum + c.change24h, 0) / allCoins.length;
     const totalVol = allCoins.reduce((sum, c) => sum + c.volume24h, 0);
     return { totalMc, avgChange, totalVol };
@@ -514,7 +526,7 @@ export default function CoinsRankings() {
                           </div>
                         </td>
                         <td className="py-4 px-4 text-right font-mono text-slate-200">
-                          ${coin.price >= 1 ? coin.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : coin.price.toFixed(6)}
+                          ${fmtPrice(coin.price)}
                         </td>
                         <td className={`py-4 px-4 text-right font-mono font-bold ${isBullish24h ? "text-emerald-400" : "text-rose-500"}`}>
                           {isBullish24h ? "+" : ""}{coin.change24h.toFixed(2)}%
@@ -523,13 +535,13 @@ export default function CoinsRankings() {
                           {change7dVal === null ? "—" : `${isBullish7d ? "+" : ""}${change7dVal.toFixed(2)}%`}
                         </td>
                         <td className="py-4 px-4 text-right font-mono text-slate-300">
-                          ${coin.marketCap.toLocaleString()}
+                          ${fmtInt(coin.marketCap)}
                         </td>
                         <td className="py-4 px-4 text-right font-mono text-slate-400">
-                          ${coin.volume24h.toLocaleString()}
+                          ${fmtInt(coin.volume24h)}
                         </td>
                         <td className="py-4 px-4 text-right font-mono text-slate-400 hidden lg:table-cell">
-                          {coin.circulatingSupply.toLocaleString(undefined, { maximumFractionDigits: 0 })} <span className="text-[10px] text-slate-500 font-bold">{coin.symbol}</span>
+                          {fmtInt(coin.circulatingSupply)} <span className="text-[10px] text-slate-500 font-bold">{coin.symbol}</span>
                         </td>
                         <td className="py-4 px-5">
                           {/* DATA-11: sparkline hanya dirender bila data real tersedia */}
@@ -604,7 +616,7 @@ export default function CoinsRankings() {
                       <div>
                         <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block font-mono">CURRENT RATE</span>
                         <span className="text-sm font-mono font-bold text-slate-200">
-                          ${coin.price >= 1 ? coin.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : coin.price.toFixed(6)}
+                          ${fmtPrice(coin.price)}
                         </span>
                       </div>
 
@@ -675,7 +687,7 @@ export default function CoinsRankings() {
                       <div>
                         <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block font-mono">CURRENT RATE</span>
                         <span className="text-sm font-mono font-bold text-slate-200">
-                          ${coin.price >= 1 ? coin.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : coin.price.toFixed(6)}
+                          ${fmtPrice(coin.price)}
                         </span>
                       </div>
 
@@ -731,7 +743,10 @@ export default function CoinsRankings() {
                   </thead>
                   <tbody className="divide-y divide-slate-850 text-xs font-semibold">
                     {paginatedCoins.map((coin) => {
-                      const ratio = (coin.volume24h / coin.marketCap) * 100;
+                      // DATA-QA2: marketCap null → ratio N/A, bukan NaN
+                      const ratio = coin.marketCap != null && coin.marketCap > 0
+                        ? (coin.volume24h / coin.marketCap) * 100
+                        : null;
                       return (
                         <tr key={coin.id} className="hover:bg-slate-900/50 transition-colors">
                           <td className="py-4 px-5 font-mono text-slate-400">
@@ -749,19 +764,19 @@ export default function CoinsRankings() {
                             </div>
                           </td>
                           <td className="py-4 px-4 text-right font-mono text-cyan-400 font-bold text-sm">
-                            ${coin.volume24h.toLocaleString()}
+                            ${fmtInt(coin.volume24h)}
                           </td>
                           <td className="py-4 px-4 text-right font-mono text-slate-300">
-                            ${coin.price >= 1 ? coin.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : coin.price.toFixed(6)}
+                            ${fmtPrice(coin.price)}
                           </td>
                           <td className="py-4 px-4 text-right font-mono text-slate-400">
-                            {ratio.toFixed(2)}%
+                            {ratio != null ? `${ratio.toFixed(2)}%` : "N/A"}
                           </td>
                           <td className="py-4 px-5">
                             <div className="w-full bg-slate-900 h-2.5 rounded-full overflow-hidden max-w-[140px]">
                               <div 
                                 className="bg-cyan-500 h-full rounded-full" 
-                                style={{ width: `${Math.min(100, ratio * 3)}%` }}
+                                style={{ width: ratio != null ? `${Math.min(100, ratio * 3)}%` : "0%" }}
                               />
                             </div>
                           </td>
@@ -813,7 +828,7 @@ export default function CoinsRankings() {
                       <div>
                         <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block font-mono">LIVE RATE</span>
                         <span className="text-sm font-mono font-bold text-slate-200">
-                          ${coin.price >= 1 ? coin.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : coin.price.toFixed(6)}
+                          ${fmtPrice(coin.price)}
                         </span>
                       </div>
 
@@ -830,7 +845,7 @@ export default function CoinsRankings() {
                     <div className="space-y-1 pt-1">
                       <div className="flex justify-between text-[9px] font-mono text-slate-500 font-bold">
                         <span>24H VOLUME (USD)</span>
-                        <span className="text-orange-300 font-mono">${coin.volume24h.toLocaleString()}</span>
+                        <span className="text-orange-300 font-mono">${fmtInt(coin.volume24h)}</span>
                       </div>
                       <div className="w-full bg-slate-900 h-1.5 rounded-full overflow-hidden">
                         <div 
@@ -884,7 +899,7 @@ export default function CoinsRankings() {
                       <div>
                         <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block font-mono">LAUNCH RATE</span>
                         <span className="text-sm font-mono font-bold text-slate-200">
-                          ${coin.price >= 1 ? coin.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : coin.price.toFixed(6)}
+                          ${fmtPrice(coin.price)}
                         </span>
                       </div>
 

@@ -4,7 +4,8 @@
 
 import { describe, it, expect } from "vitest";
 
-const BASE = "http://localhost:3000";
+// FUNC-14: port mengikuti globalSetup (ZAYTRIX_TEST_PORT), default 3000.
+const BASE = process.env.ZAYTRIX_TEST_BASE ?? `http://localhost:${process.env.ZAYTRIX_TEST_PORT ?? "3000"}`;
 
 async function api(path: string, opts: RequestInit = {}) {
   const res = await fetch(`${BASE}${path}`, {
@@ -13,6 +14,19 @@ async function api(path: string, opts: RequestInit = {}) {
   });
   const data = await res.json().catch(() => ({}));
   return { status: res.status, data, headers: res.headers };
+}
+
+// FUNC-14: ekstraksi cookie sesi yang benar. headers.get("set-cookie")
+// menggabungkan beberapa Set-Cookie dengan koma — split(";")[0] lama sempat
+// mengambil cookie CSRF (ditambahkan oleh fix SEC-6), bukan cookie sesi.
+// getSetCookie() (undici/Node >= 18.14) mengembalikan array terpisah.
+function extractSessionCookie(headers: Headers): string {
+  const raw: string[] =
+    typeof (headers as any).getSetCookie === "function"
+      ? (headers as any).getSetCookie()
+      : [headers.get("set-cookie") || ""];
+  const line = raw.find((c: string) => c.startsWith("zaytrix_session="));
+  return line ? line.split(";")[0] : "";
 }
 
 // ─── AUTH TESTS ──────────────────────────────────────────────────────
@@ -38,8 +52,7 @@ describe("Auth API", () => {
     expect([200, 201]).toContain(status);
     expect(data.success).toBe(true);
     expect(data.user.email).toBe(testEmail);
-    const setCookie = headers.get("set-cookie") || "";
-    cookie = setCookie.split(";")[0];
+    cookie = extractSessionCookie(headers);
     expect(cookie).toBeTruthy();
   });
 
@@ -76,8 +89,7 @@ describe("Auth API", () => {
     expect(status).toBe(200);
     expect(data.success).toBe(true);
     expect(data.user.email).toBe(testEmail);
-    const setCookie = headers.get("set-cookie") || "";
-    cookie = setCookie.split(";")[0];
+    cookie = extractSessionCookie(headers);
     expect(cookie).toBeTruthy();
   });
 
