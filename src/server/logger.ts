@@ -42,6 +42,14 @@ export function setLogLevel(level: LogLevel): void {
   minLevel = LEVEL_WEIGHT[level];
 }
 
+// QA8-B: getter runtime (inverse map LEVEL_WEIGHT). minLevel selalu salah satu
+// dari 4 bobot karena hanya di-assign via resolveMinLevel()/setLogLevel();
+// fallback "info" murni untuk keamanan tipe, bukan kondisi nyata.
+export function getLogLevel(): LogLevel {
+  const found = (Object.keys(LEVEL_WEIGHT) as LogLevel[]).find((lv) => LEVEL_WEIGHT[lv] === minLevel);
+  return found ?? "info";
+}
+
 // ---------------------------------------------------------------------------
 // Redaction
 // ---------------------------------------------------------------------------
@@ -121,42 +129,50 @@ export interface Logger {
   error(msg: string, ...args: unknown[]): void;
 }
 
+// Inti emit dibagi supaya rute /level (QA8-B) bisa memaksa entri audit masuk
+// ring buffer meskipun ambang level baru akan memfilternya — contoh ekstrem:
+// operator mengubah level ke "error"; entri "warn" tentang perubahan itu
+// sendiri harus tetap tercatat, kalau tidak jejak auditnya hilang senyap.
+function pushEntry(level: LogLevel, module: string, msg: string, args: unknown[], force: boolean): void {
+  if (!force && LEVEL_WEIGHT[level] < minLevel) return;
+  let safeMsg = msg;
+  try {
+    safeMsg = redactString(typeof msg === "string" ? msg : String(msg));
+  } catch {
+    safeMsg = "[unserializable message]";
+  }
+  const entry: LogEntry = {
+    ts: new Date().toISOString(),
+    level,
+    module,
+    msg: safeMsg,
+  };
+  if (args.length > 0) {
+    entry.data = args.map((a) => {
+      try {
+        return redactValue(a, 0);
+      } catch {
+        return "[unserializable]";
+      }
+    });
+  }
+  pushRing(entry);
+  // Single funnel to stdout — one JSON line per entry. Using console.* here
+  // is intentional: this module IS the console replacement.
+  try {
+    // eslint-disable-next-line no-console
+    console.log(JSON.stringify(entry));
+  } catch {
+    // JSON.stringify failed (circular data already capped by redaction, but
+    // be safe) — emit a minimal line instead.
+    // eslint-disable-next-line no-console
+    console.log(JSON.stringify({ ts: entry.ts, level, module, msg: safeMsg, data: "[dropped]" }));
+  }
+}
+
 export function createLogger(module: string): Logger {
   const emit = (level: LogLevel, msg: string, args: unknown[]): void => {
-    if (LEVEL_WEIGHT[level] < minLevel) return;
-    let safeMsg = msg;
-    try {
-      safeMsg = redactString(typeof msg === "string" ? msg : String(msg));
-    } catch {
-      safeMsg = "[unserializable message]";
-    }
-    const entry: LogEntry = {
-      ts: new Date().toISOString(),
-      level,
-      module,
-      msg: safeMsg,
-    };
-    if (args.length > 0) {
-      entry.data = args.map((a) => {
-        try {
-          return redactValue(a, 0);
-        } catch {
-          return "[unserializable]";
-        }
-      });
-    }
-    pushRing(entry);
-    // Single funnel to stdout — one JSON line per entry. Using console.* here
-    // is intentional: this module IS the console replacement.
-    try {
-      // eslint-disable-next-line no-console
-      console.log(JSON.stringify(entry));
-    } catch {
-      // JSON.stringify failed (circular data already capped by redaction, but
-      // be safe) — emit a minimal line instead.
-      // eslint-disable-next-line no-console
-      console.log(JSON.stringify({ ts: entry.ts, level, module, msg: safeMsg, data: "[dropped]" }));
-    }
+    pushEntry(level, module, msg, args, false);
   };
   return {
     debug: (msg, ...args) => emit("debug", msg, args),
@@ -191,4 +207,48 @@ systemLogsRouter.get("/", (req: Request, res: Response) => {
     ringCapacity: RING_CAPACITY,
     entries,
   });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/system/logs/level (QA8-B) — level runtime saat ini.
+// ---------------------------------------------------------------------------
+systemLogsRouter.get("/level", (_req: Request, res: Response) => {
+  return res.json({
+    success: true,
+    level: getLogLevel(),
+    note: "berlaku selama proses server berjalan; default dari LOG_LEVEL saat boot",
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/system/logs/level (QA8-B) — ubah level runtime.
+// Body: { level: "debug" | "info" | "warn" | "error" }.
+// Validasi manual (bukan zod) terhadap 4 nilai — input lain → 400.
+// Perubahan dicatat sebagai entri audit level "warn" (module "system") yang
+// DI-PUSH PAKSA ke ring buffer (melewati ambang yang baru saja diubah) supaya
+// jejak perubahannya sendiri selalu terlihat oleh operator. Mutating request —
+// terlindungi requireAuth (mount di server.ts) + CSRF double-submit global
+// (middleware src/server/security.ts, cookie zaytrix_csrf + header x-csrf-token).
+// ---------------------------------------------------------------------------
+systemLogsRouter.post("/level", (req: Request, res: Response) => {
+  const raw = req.body && typeof req.body === "object" ? (req.body as Record<string, unknown>).level : undefined;
+  const requested = typeof raw === "string" ? raw.toLowerCase().trim() : "";
+  if (requested !== "debug" && requested !== "info" && requested !== "warn" && requested !== "error") {
+    const echo = typeof raw === "string" ? raw.slice(0, 40) : typeof raw;
+    return res.status(400).json({
+      success: false,
+      error: `Level tidak valid: "${echo}" — gunakan salah satu dari: debug, info, warn, error.`,
+    });
+  }
+  const level = requested as LogLevel;
+  const previous = getLogLevel();
+  setLogLevel(level);
+  pushEntry(
+    "warn",
+    "system",
+    `LOG_LEVEL diubah runtime menjadi ${level} oleh operator`,
+    [{ dari: previous, ke: level }],
+    true // force: audit trail tidak boleh tenggelam oleh ambang yang baru diganti
+  );
+  return res.json({ success: true, level });
 });

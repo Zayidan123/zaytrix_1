@@ -1,39 +1,53 @@
 // =============================================================================
-// whaleStream.ts — QA5-F1 (round 5): REAL-time whale trade aggregator
+// whaleStream.ts — QA5-F1 (round 5) + QA8-A-1 (round 8): REAL-time whale trade
+// aggregator — Binance SPOT + FUTURES
 // =============================================================================
-// Purpose: feed the Whale Radar (On-Chain Data tab) with REAL large spot
-// trades from Binance's public trade streams — no API key, no polling.
+// Purpose: feed the Whale Radar (On-Chain Data tab) with REAL large trades
+// from Binance's public trade streams — no API key, no polling.
 //
 // HOW IT WORKS
-//   1. On module load we open ONE combined Binance WebSocket subscription to
-//      `<sym>@aggTrade` for the symbol whitelist. Every aggregated fill is
-//      pushed to us in real time; we keep those ≥ MIN_CAPTURE_USD in a
-//      rolling in-memory buffer (capped: 600 rows / 30 minutes).
+//   1. On module load we open TWO persistent combined Binance WebSocket
+//      subscriptions to `<sym>@aggTrade` for the same symbol whitelist:
+//        - SPOT:     wss://stream.binance.com:9443/stream?streams=...
+//        - FUTURES:  wss://fstream.binance.com/stream?streams=...
+//      Every aggregated fill is pushed to us in real time; we keep those
+//      ≥ MIN_CAPTURE_USD in ONE shared rolling in-memory buffer (capped:
+//      900 rows / 30 minutes — the old 600 spot rows plus futures margin).
+//      NOTE on the futures URL: Binance serves USDT-M futures market streams
+//      on port 443 only — `wss://fstream.binance.com:9443` (the SPOT port)
+//      does NOT complete a WebSocket upgrade (verified empirically before
+//      this was written; the handshake fails with 1006/timeout).
 //   2. At boot we additionally pull the most recent 1000 aggTrades per symbol
-//      via the public REST API ONCE (a "backfill") so a freshly-booted server
-//      still has immediate content — the WS then keeps the buffer live.
-//      The two sources are de-duplicated by (symbol, aggTrade id).
+//      via the public SPOT REST API ONCE (a "backfill") so a freshly-booted
+//      server still has immediate content — the WS then keeps the buffer
+//      live. FUTURES deliberately has NO REST backfill (QA8-A-1: optional):
+//      futures rows honestly start accumulating only once the futures WS
+//      delivers its first real trades. Nothing is synthesized to hide that.
 //   3. liveDataRoutes.ts exposes the buffer read-only via
 //      GET /api/live/whale-trades (filtering + stats + honest states).
 //
 // HONESTY CONTRACT (campaign invariant)
-//   - Every row in the buffer is a REAL Binance fill — nothing is estimated,
-//     extrapolated or fabricated.
-//   - `status()` reports `connected` — when the WS drops we keep serving the
-//     last REAL snapshot and the API/UI labels it as disconnected/stale.
+//   - Every row in the buffer is a REAL Binance fill — spot or futures market
+//     is tagged per row — nothing is estimated, extrapolated or fabricated.
+//   - `getWhaleStreamStatus()` reports per-market `connected` flags: when a
+//     market's WS drops we keep serving its last REAL rows and the API/UI
+//     labels that market as disconnected/stale. The legacy top-level
+//     `connected` (true when ANY market is live) is kept for older consumers.
 //   - Whales are comparatively rare: an empty-but-connected buffer is a
 //     legitimate live state ("menunggu whale berikutnya"), never an error.
 //
-// Failure modes handled: WS error/close (5s reconnect, exponential-ish cap),
-// JSON decode errors (skipped), buffer pruning (age + size), cold boot
-// (backfill), and Binance REST being unreachable (buffer just starts from
-// the WS stream alone).
+// Failure modes handled: per-market WS error/close (independent 5s reconnect
+// timer per market), JSON decode errors (skipped), buffer pruning (age +
+// size), cold boot (spot backfill), and Binance REST being unreachable (the
+// buffer just starts from the WS streams alone).
 // =============================================================================
 
 import WebSocket from "ws";
 import { createLogger } from "./logger";
 
 const log = createLogger("whaleStream");
+
+export type WhaleMarket = "spot" | "futures";
 
 export interface WhaleTradeRow {
   symbol: string;
@@ -44,35 +58,68 @@ export interface WhaleTradeRow {
   side: "BUY" | "SELL";
   time: string; // ISO
   exchange: string;
+  market: WhaleMarket; // QA8-A-1: which Binance venue produced this fill
 }
 
 // Trades below this are never captured — keeps the buffer small and the
 // endpoint's minimum filter (UI floor) meaningful.
 const MIN_CAPTURE_USD = 50_000;
-const MAX_ROWS = 600;
+// QA8-A-1: 600 (spot) + futures margin, one shared buffer.
+const MAX_ROWS = 900;
 const MAX_AGE_MS = 30 * 60 * 1000;
 
 // The same whitelist the API endpoint validates against (single source of
 // truth lives in liveDataRoutes.ts — kept identical here).
 const WHALE_SYMBOLS = ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA"];
 
+const MARKET_ENDPOINTS: Record<WhaleMarket, { buildUrl: (streams: string) => string; exchange: string }> = {
+  spot: {
+    buildUrl: (streams) => `wss://stream.binance.com:9443/stream?streams=${streams}`,
+    exchange: "Binance Spot",
+  },
+  futures: {
+    // Futures market streams are only served on the default port (443).
+    buildUrl: (streams) => `wss://fstream.binance.com/stream?streams=${streams}`,
+    exchange: "Binance Futures",
+  },
+};
+
 const buffer: WhaleTradeRow[] = [];
 const seenKeys = new Set<string>();
 
-const state = {
-  connected: false,
-  startedAt: new Date().toISOString(),
-  lastMessageAt: null as string | null,
-  receivedCount: 0, // all messages (any size)
-  capturedCount: 0, // messages ≥ MIN_CAPTURE_USD
+interface MarketState {
+  connected: boolean;
+  startedAt: string;
+  lastMessageAt: null | string;
+  receivedCount: number; // all messages (any size) on this market
+  capturedCount: number; // messages >= MIN_CAPTURE_USD on this market
+}
+
+const markets: Record<WhaleMarket, MarketState> = {
+  spot: {
+    connected: false,
+    startedAt: new Date().toISOString(),
+    lastMessageAt: null,
+    receivedCount: 0,
+    capturedCount: 0,
+  },
+  futures: {
+    connected: false,
+    startedAt: new Date().toISOString(),
+    lastMessageAt: null,
+    receivedCount: 0,
+    capturedCount: 0,
+  },
 };
 
 function pushTrade(row: WhaleTradeRow) {
-  const key = `${row.symbol}:${row.tradeId}`;
+  // QA8-A-1: dedup key now includes the market — the same aggTrade id can
+  // legitimately exist on BOTH venues (independent id sequences).
+  const key = `${row.market}:${row.symbol}:${row.tradeId}`;
   if (seenKeys.has(key)) return;
   seenKeys.add(key);
   buffer.push(row);
-  state.capturedCount++;
+  markets[row.market].capturedCount++;
   prune();
 }
 
@@ -92,11 +139,15 @@ function prune() {
     buffer.push(...rows);
     // Re-sync the dedup set to surviving rows.
     seenKeys.clear();
-    for (const r of rows) seenKeys.add(`${r.symbol}:${r.tradeId}`);
+    for (const r of rows) seenKeys.add(`${r.market}:${r.symbol}:${r.tradeId}`);
   }
 }
 
-function mapAggTrade(symbol: string, t: { a: number; p: string; q: string; m: boolean; T: number }): WhaleTradeRow | null {
+function mapAggTrade(
+  market: WhaleMarket,
+  symbol: string,
+  t: { a: number; p: string; q: string; m: boolean; T: number }
+): WhaleTradeRow | null {
   const price = Number(t.p);
   const qty = Number(t.q);
   if (!isFinite(price) || !isFinite(qty) || price <= 0 || qty <= 0) return null;
@@ -111,11 +162,14 @@ function mapAggTrade(symbol: string, t: { a: number; p: string; q: string; m: bo
     // m=true → buyer was the maker → the aggressive taker SOLD into the book.
     side: t.m ? "SELL" : "BUY",
     time: new Date(t.T).toISOString(),
-    exchange: "Binance Spot",
+    exchange: MARKET_ENDPOINTS[market].exchange,
+    market,
   };
 }
 
-// --- One-shot REST backfill (latest 1000 aggTrades per symbol) --------------
+// --- One-shot SPOT REST backfill (latest 1000 aggTrades per symbol) --------
+// QA8-A-1 honesty note: futures has NO backfill by design (optional per
+// spec) — the futures side of the buffer only fills from its live WS.
 async function backfillFromRest() {
   const results = await Promise.allSettled(
     WHALE_SYMBOLS.map(async (sym) => {
@@ -129,7 +183,7 @@ async function backfillFromRest() {
         if (!Array.isArray(trades)) throw new Error("no array");
         let added = 0;
         for (const t of trades) {
-          const row = mapAggTrade(sym, t);
+          const row = mapAggTrade("spot", sym, t);
           if (row) {
             const before = seenKeys.size;
             pushTrade(row);
@@ -145,23 +199,28 @@ async function backfillFromRest() {
   const added = results.reduce((s, r) => (r.status === "fulfilled" ? s + r.value : s), 0);
   const failed = results.filter((r) => r.status === "rejected").length;
   log.info(
-    `[WhaleStream] REST backfill selesai: +${added} transaksi ≥$50K` +
+    `[WhaleStream] REST backfill spot selesai: +${added} transaksi ≥$50K` +
       (failed ? ` (${failed} simbol gagal — buffer akan terisi dari stream WS)` : "")
   );
 }
 
-// --- Combined spot trade stream ----------------------------------------------
-function startWhaleStream() {
+// --- Persistent combined aggTrade stream per market ------------------------
+// Each market gets its OWN socket, open handler and 5s reconnect timer, so
+// one venue being unreachable never blocks the other.
+function startMarketStream(market: WhaleMarket) {
+  const endpoint = MARKET_ENDPOINTS[market];
   const streams = WHALE_SYMBOLS.map((s) => `${s.toLowerCase()}usdt@aggTrade`).join("/");
-  const wsUrl = `wss://stream.binance.com:9443/stream?streams=${streams}`;
-  log.info("[WhaleStream] Menghubungkan ke Binance spot aggTrade stream…");
+  const wsUrl = endpoint.buildUrl(streams);
+  log.info(`[WhaleStream:${market}] Menghubungkan ke Binance ${market} aggTrade stream…`);
 
   try {
     const ws = new WebSocket(wsUrl);
 
     ws.on("open", () => {
-      state.connected = true;
-      log.info("[WhaleStream] Terhubung — transaksi besar akan terkumpul secara real-time.");
+      markets[market].connected = true;
+      log.info(
+        `[WhaleStream:${market}] Terhubung — transaksi besar ${market} akan terkumpul secara real-time.`
+      );
       // Never keep the Node event loop alive just for this stream: in tests
       // (vitest self-booting server) an open WS previously prevented the
       // Vite pool from exiting cleanly ("close timed out after 10000ms").
@@ -172,15 +231,16 @@ function startWhaleStream() {
 
     ws.on("message", (data) => {
       try {
-        state.lastMessageAt = new Date().toISOString();
-        state.receivedCount++;
+        const mstate = markets[market];
+        mstate.lastMessageAt = new Date().toISOString();
+        mstate.receivedCount++;
         const msg = JSON.parse(data.toString());
         // Combined-stream envelope: {stream: "btcusdt@aggTrade", data: {...}}
         const payload = msg?.data ?? msg;
         if (!payload || payload.e !== "aggTrade") return;
         const sym = String(payload.s || "").replace(/USDT$/i, "").toUpperCase();
         if (!WHALE_SYMBOLS.includes(sym)) return;
-        const row = mapAggTrade(sym, payload);
+        const row = mapAggTrade(market, sym, payload);
         if (row) pushTrade(row);
       } catch {
         /* skip malformed frame — never crash the stream */
@@ -188,24 +248,31 @@ function startWhaleStream() {
     });
 
     ws.on("error", (err: Error) => {
-      log.error("[WhaleStream] Connection error:", err.message);
+      log.error(`[WhaleStream:${market}] Connection error:`, err.message);
     });
 
     ws.on("close", () => {
-      if (state.connected) log.warn("[WhaleStream] Koneksi terputus — mencoba ulang dalam 5 detik…");
-      state.connected = false;
-      setTimeout(() => startWhaleStream(), 5000);
+      if (markets[market].connected) {
+        log.warn(`[WhaleStream:${market}] Koneksi terputus — mencoba ulang dalam 5 detik…`);
+      }
+      markets[market].connected = false;
+      const t = setTimeout(() => startMarketStream(market), 5000);
+      // Reconnect timers must not keep the event loop alive either.
+      if (typeof (t as any).unref === "function") (t as any).unref();
     });
   } catch (err: any) {
-    state.connected = false;
-    log.error("[WhaleStream] Gagal memulai WS:", err?.message || String(err));
-    setTimeout(() => startWhaleStream(), 15_000);
+    markets[market].connected = false;
+    log.error(`[WhaleStream:${market}] Gagal memulai WS:`, err?.message || String(err));
+    const t = setTimeout(() => startMarketStream(market), 15_000);
+    if (typeof (t as any).unref === "function") (t as any).unref();
   }
 }
 
-startWhaleStream();
-// Give the WS a moment to connect, then backfill. Even if the backfill loses
-// the race with early stream messages, de-dup by trade id keeps it correct.
+startMarketStream("spot");
+startMarketStream("futures");
+// Give the WS a moment to connect, then backfill (SPOT only — see honesty
+// note above). Even if the backfill loses the race with early stream
+// messages, de-dup by (market, symbol, trade id) keeps it correct.
 const backfillTimer = setTimeout(() => {
   backfillFromRest().catch((e) =>
     log.warn("[WhaleStream] Backfill gagal:", e?.message || String(e))
@@ -223,10 +290,32 @@ export function getWhaleSnapshot(filterSymbols: string[], minUsd: number, limit:
 }
 
 export function getWhaleStreamStatus() {
+  const spot = markets.spot;
+  const futures = markets.futures;
+  const lastMessageAt = [spot.lastMessageAt, futures.lastMessageAt]
+    .filter((x): x is string => typeof x === "string")
+    .sort()
+    .pop() ?? null;
   return {
-    ...state,
+    // Legacy aggregate: the feed is "live" when ANY market is connected.
+    // Older consumers (endpoint "stream.connected" + UI LIVE chip) keep
+    // working; per-market truth is in `markets`.
+    connected: spot.connected || futures.connected,
+    lastMessageAt,
+    startedAt: spot.startedAt,
+    receivedCount: spot.receivedCount + futures.receivedCount,
+    capturedCount: spot.capturedCount + futures.capturedCount,
+    markets: {
+      spot: { ...spot },
+      futures: { ...futures },
+    },
     bufferedCount: buffer.length,
+    bufferedByMarket: {
+      spot: buffer.filter((r) => r.market === "spot").length,
+      futures: buffer.filter((r) => r.market === "futures").length,
+    },
     minCaptureUsd: MIN_CAPTURE_USD,
+    maxRows: MAX_ROWS,
     symbols: WHALE_SYMBOLS,
   };
 }

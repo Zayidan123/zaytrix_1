@@ -11,7 +11,7 @@ import fs from "fs";
 import crypto from "crypto";
 import { z } from "zod";
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
-import { createOpenRouterCompatClient, openRouterModelName } from "./src/server/aiRouter";
+import { createOpenRouterCompatClient, openRouterModelName, callAIStream } from "./src/server/aiRouter";
 import { createServer as createViteServer } from "vite";
 import { fetchLiveOnChainDataModular, isValidOnChainTransaction } from "./onchainDataHelper";
 import WebSocket from "ws";
@@ -187,6 +187,123 @@ async function generateContentWithRetry(aiClient: any, args: any, retries = 4, d
     }
   }
   throw lastError;
+}
+
+// ─── QA8-C: shared SSE scaffolding for the Gemini-compat AI endpoints ────
+// Mirrors /api/ai/chat-stream (QA7-F1): text/event-stream + no proxy buffering
+// (X-Accel-Buffering: no) + keep-alive comment every 15s while the model is
+// thinking + client-disconnect abort propagation (AbortController upstream) +
+// res.end() in finally. Each endpoint passes a `run` callback that receives
+// `send` (frame writer) + `abortSignal` (fires when the client disconnects) and
+// is responsible for its own final {type:"done", ...} / {type:"error"} frame.
+async function runSSEStream(
+  req: any,
+  res: any,
+  run: (send: (obj: unknown) => void, abortSignal: AbortSignal) => Promise<void>
+): Promise<void> {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    // Disable proxy buffering (Caddy/nginx) so tokens arrive immediately.
+    "X-Accel-Buffering": "no",
+  });
+
+  let clientClosed = false;
+  const clientAbort = new AbortController();
+  req.on("close", () => {
+    clientClosed = true;
+    clientAbort.abort();
+  });
+
+  const send = (obj: unknown) => {
+    if (clientClosed || res.writableEnded) return;
+    try {
+      res.write(`data: ${JSON.stringify(obj)}\n\n`);
+    } catch {
+      clientClosed = true;
+    }
+  };
+
+  // Keep-alive comment every 15s so proxies don't time the stream out.
+  const keepAlive = setInterval(() => {
+    if (clientClosed || res.writableEnded) return;
+    try {
+      res.write(": keep-alive\n\n");
+    } catch {
+      clientClosed = true;
+    }
+  }, 15_000);
+
+  try {
+    await run(send, clientAbort.signal);
+  } catch (e: any) {
+    send({ type: "error", error: String(e?.message || e).substring(0, 150) });
+  } finally {
+    clearInterval(keepAlive);
+    if (!res.writableEnded) {
+      try {
+        res.end();
+      } catch {}
+    }
+  }
+}
+
+// QA8-C: run callAIStream and collect the outcome without emitting the
+// router-internal terminal events (they are re-shaped by each endpoint into
+// its own authoritative done/error frames per the SSE contract). Token events
+// are forwarded verbatim. Returns the accumulated text + the sanitized stream
+// error (if the AI failed before/after tokens).
+async function streamViaAIRouter(
+  params: {
+    prompt: string;
+    systemPrompt?: string;
+    maxTokens?: number;
+    temperature?: number;
+    userId?: string;
+    endpoint: string;
+    abortSignal: AbortSignal;
+  },
+  send: (obj: unknown) => void
+): Promise<{ fullText: string; streamError: string | null }> {
+  let fullText = "";
+  let streamError: string | null = null;
+  await callAIStream(params, (ev) => {
+    if (ev.type === "token" && typeof ev.text === "string" && ev.text) {
+      fullText += ev.text;
+      send(ev);
+    } else if (ev.type === "error" && ev.error) {
+      streamError = ev.error;
+    }
+    // "start" and router-internal "done" events are intentionally not
+    // forwarded: the endpoint emits the authoritative terminal frame itself.
+  });
+  return { fullText, streamError };
+}
+
+// QA8-C: streaming trading-signal responses run without upstream jsonMode
+// (callAIStream has no response_format), so the model may wrap its JSON in
+// markdown fences or prose. Strict-parse first — identical to the non-stream
+// path — then best-effort extract the outermost JSON object. Returns null
+// when nothing parses; the caller then degrades to its honest local fallback.
+function parseSignalJsonLoose(raw: string): Record<string, any> | null {
+  const text = (raw || "").trim();
+  if (!text) return null;
+  try {
+    const direct = JSON.parse(text);
+    if (direct && typeof direct === "object" && !Array.isArray(direct)) return direct;
+    return null;
+  } catch {}
+  const first = text.indexOf("{");
+  const last = text.lastIndexOf("}");
+  if (first === -1 || last <= first) return null;
+  try {
+    const extracted = JSON.parse(text.slice(first, last + 1));
+    if (extracted && typeof extracted === "object" && !Array.isArray(extracted)) return extracted;
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 // Initialize the AI client — OpenRouter FIRST (cloud aggregator, works with
@@ -1784,6 +1901,52 @@ app.post("/api/gemini/analyze", async (req, res) => {
       return res.json({ analysis: geminiCache.get(cacheKey) });
     }
 
+    // QA8-C: generation config shared by BOTH transports (stream + non-stream)
+    // so the two paths can never drift apart.
+    const temp = aiTemperature !== undefined ? Number(aiTemperature) : 0.72;
+    const tokens = aiMaxTokens !== undefined ? Number(aiMaxTokens) : 800;
+    const analyzeSystemInstruction = "Anda adalah asisten AI Analis Keuangan & Manajemen Portofolio yang andal, bergelar CFA (Chartered Financial Analyst). Tugas Anda adalah menyajikan ulasan mendalam, tajam, komprehensif, berbasis data statistik, tanpa jargon pemasaran kosong, serta memberikan interpretasi strategis riil.";
+
+    // QA8-C: SSE streaming branch — same request body + "stream": true.
+    // token frames carry progressive markdown; the done frame carries the
+    // EXACT payload fields of the non-stream JSON ({analysis, isFallback}).
+    // An AI failure never aborts the stream: the same honest dynamic fallback
+    // report the non-stream path returns is delivered as the done payload.
+    if (req.body.stream === true) {
+      await runSSEStream(req, res, async (send, abortSignal) => {
+        const aiClient = getAiClient(req);
+        if (!aiClient) {
+          const fallbackReport = generateDynamicFallbackReport(type, modelData, assetComparison);
+          send({ type: "done", analysis: fallbackReport, isFallback: true, errorReason: "Gemini client is not initialized" });
+          return;
+        }
+        try {
+          const { fullText, streamError } = await streamViaAIRouter({
+            prompt: customPrompt,
+            systemPrompt: analyzeSystemInstruction,
+            maxTokens: tokens,
+            temperature: temp,
+            userId: req.user?.sub,
+            endpoint: "gemini-analyze-stream",
+            abortSignal,
+          }, send);
+          if (abortSignal.aborted) return; // client disconnected — no cache write for a partial stream
+          if (streamError || !fullText.trim()) {
+            const fallbackReport = generateDynamicFallbackReport(type, modelData, assetComparison);
+            send({ type: "done", analysis: fallbackReport, isFallback: true, errorReason: streamError || "Respons stream AI kosong" });
+            return;
+          }
+          // Same cache side effect as the non-stream success path.
+          geminiCacheSet(cacheKey, fullText);
+          send({ type: "done", analysis: fullText, isFallback: false });
+        } catch (err: any) {
+          const fallbackReport = generateDynamicFallbackReport(type, modelData, assetComparison);
+          send({ type: "done", analysis: fallbackReport, isFallback: true, errorReason: err?.message || String(err) });
+        }
+      });
+      return;
+    }
+
     const aiClient = getAiClient(req);
     if (!aiClient) {
       // In case Gemini is not available on server, output a beautiful pre-processed dynamic diagnostic report!
@@ -1792,8 +1955,6 @@ app.post("/api/gemini/analyze", async (req, res) => {
       return res.json({ analysis: fallbackReport, isFallback: true, errorReason: "Gemini client is not initialized" });
     }
 
-    const temp = aiTemperature !== undefined ? Number(aiTemperature) : 0.72;
-    const tokens = aiMaxTokens !== undefined ? Number(aiMaxTokens) : 800;
     const thinkingVal = mapThinkingLevel(aiThinkingMode);
 
     const response = await generateContentWithRetry(aiClient, {
@@ -1803,7 +1964,7 @@ app.post("/api/gemini/analyze", async (req, res) => {
         temperature: temp,
         maxOutputTokens: tokens,
         thinkingConfig: { thinkingLevel: thinkingVal },
-        systemInstruction: "Anda adalah asisten AI Analis Keuangan & Manajemen Portofolio yang andal, bergelar CFA (Chartered Financial Analyst). Tugas Anda adalah menyajikan ulasan mendalam, tajam, komprehensif, berbasis data statistik, tanpa jargon pemasaran kosong, serta memberikan interpretasi strategis riil."
+        systemInstruction: analyzeSystemInstruction
       }
     });
 
@@ -1907,6 +2068,28 @@ app.post("/api/gemini/news-sentiment", async (req, res) => {
 app.post("/api/gemini/news-chat", async (req, res) => {
   const { article, question, chatHistory } = req.body;
 
+  // QA8-C: config + fallback answers shared by BOTH transports (stream +
+  // non-stream) so the two paths can never drift apart. Declared BEFORE the
+  // try so the catch block reuses the same honest network-error answer
+  // instead of duplicating the template literal.
+  const newsChatSystemInstruction = "Anda adalah asisten AI Analis Keuangan & Manajemen Portofolio yang andal, bergelar CFA (Chartered Financial Analyst). Jawab pertanyaan pengguna dengan ulasan mendalam, tajam, komprehensif, berbasis data statistik, tanpa jargon pemasaran kosong, serta memberikan interpretasi strategis riil.";
+  const newsChatTemperature = 0.7;
+  const newsChatMaxTokens = 800;
+  const buildOfflineAnswer = (): string => {
+    const lowercaseQuestion = question.toLowerCase();
+    let responseText = `Sebagai asisten keuangan Z-Capital (Offline Mode), saya menganalisis pertanyaan Anda terkait berita "${article.title}". `;
+    if (lowercaseQuestion.includes("beli") || lowercaseQuestion.includes("buy") || lowercaseQuestion.includes("investasi") || lowercaseQuestion.includes("untung")) {
+      responseText += `Dari sudut pandang alokasi portofolio, berita ini membawa dampak positif jangka menengah. Rekomendasi taktis adalah mengalokasikan maksimal 5-10% dari modal kas Anda pada aset pemenang seperti yang disebutkan dalam analisis sentimen utama kami. Selalu terapkan taktik Dollar Cost Averaging (DCA) untuk memitigasi volatilitas jangka pendek.`;
+    } else if (lowercaseQuestion.includes("risiko") || lowercaseQuestion.includes("rugi") || lowercaseQuestion.includes("turun") || lowercaseQuestion.includes("crash")) {
+      responseText += `Risiko utama dari peristiwa ini terletak pada fluktuasi likuiditas harian dan reaksi berlebihan pasar (market overreaction). Kami menyarankan untuk menetapkan batas Stop-Loss ketat sekitar 8-12% dari harga beli target Anda dan memantau volume on-chain / transaksi whale harian di dasbor Z-Capital.`;
+    } else {
+      responseText += `Penting untuk dipahami bahwa berita ini merupakan bagian dari pergeseran struktural pasar yang lebih besar. Kami menyarankan Anda untuk melihat metrik fundamental aset (P/E, P/B untuk saham, atau volume on-chain untuk kripto) sebelum mengambil keputusan eksekusi apa pun. Tetap disiplin dengan rencana trading awal Anda.`;
+    }
+    return responseText;
+  };
+  const buildNetworkErrorAnswer = (errMsg: string): string =>
+    `Maaf, terjadi kesalahan koneksi jaringan saat menghubungi asisten AI Z-Capital: ${errMsg}. Sebagai saran cepat, tinjau tab 'Aset Terkait' dan batas resistensi teknis di dasbor utama untuk memandu keputusan alokasi Anda.`;
+
   try {
     const historyPrompt = chatHistory ? chatHistory.map((h: any) => `${h.role === 'user' ? 'User' : 'Assistant'}: ${h.content}`).join("\n") : "";
     const prompt = `
@@ -1927,27 +2110,53 @@ app.post("/api/gemini/news-chat", async (req, res) => {
       Berikan jawaban yang sangat tajam, komprehensif, logis, obyektif, dan bermanfaat bagi investor di pasar finansial (IHSG saham Indonesia dan kripto global). Jawablah dalam Bahasa Indonesia profesional yang berwibawa, padat, dan bermutu tinggi. Hindari kata-kata manis pemasaran, sales pitch, atau generalisasi banal.
     `;
 
+    // QA8-C: SSE streaming branch — same body + "stream": true. Token frames
+    // carry the progressive answer; the done frame carries the exact fields of
+    // the non-stream JSON ({answer, isFallback}). AI failure degrades to the
+    // same honest offline/network fallback text, never to a fabricated answer.
+    if (req.body.stream === true) {
+      await runSSEStream(req, res, async (send, abortSignal) => {
+        const aiClient = getAiClient(req);
+        if (!aiClient) {
+          send({ type: "done", answer: buildOfflineAnswer(), isFallback: true });
+          return;
+        }
+        try {
+          const { fullText, streamError } = await streamViaAIRouter({
+            prompt,
+            systemPrompt: newsChatSystemInstruction,
+            maxTokens: newsChatMaxTokens,
+            temperature: newsChatTemperature,
+            userId: req.user?.sub,
+            endpoint: "gemini-news-chat-stream",
+            abortSignal,
+          }, send);
+          if (abortSignal.aborted) return; // client disconnected mid-stream
+          if (streamError || !fullText.trim()) {
+            send({ type: "done", answer: buildNetworkErrorAnswer(streamError || "Respons stream AI kosong"), isFallback: true });
+            return;
+          }
+          // news-chat has no cache side effect — payload mirrors non-stream exactly.
+          send({ type: "done", answer: fullText, isFallback: false });
+        } catch (err: any) {
+          send({ type: "done", answer: buildNetworkErrorAnswer(err?.message || String(err)), isFallback: true });
+        }
+      });
+      return;
+    }
+
     const aiClient = getAiClient(req);
     if (!aiClient) {
-      const lowercaseQuestion = question.toLowerCase();
-      let responseText = `Sebagai asisten keuangan Z-Capital (Offline Mode), saya menganalisis pertanyaan Anda terkait berita "${article.title}". `;
-      if (lowercaseQuestion.includes("beli") || lowercaseQuestion.includes("buy") || lowercaseQuestion.includes("investasi") || lowercaseQuestion.includes("untung")) {
-        responseText += `Dari sudut pandang alokasi portofolio, berita ini membawa dampak positif jangka menengah. Rekomendasi taktis adalah mengalokasikan maksimal 5-10% dari modal kas Anda pada aset pemenang seperti yang disebutkan dalam analisis sentimen utama kami. Selalu terapkan taktik Dollar Cost Averaging (DCA) untuk memitigasi volatilitas jangka pendek.`;
-      } else if (lowercaseQuestion.includes("risiko") || lowercaseQuestion.includes("rugi") || lowercaseQuestion.includes("turun") || lowercaseQuestion.includes("crash")) {
-        responseText += `Risiko utama dari peristiwa ini terletak pada fluktuasi likuiditas harian dan reaksi berlebihan pasar (market overreaction). Kami menyarankan untuk menetapkan batas Stop-Loss ketat sekitar 8-12% dari harga beli target Anda dan memantau volume on-chain / transaksi whale harian di dasbor Z-Capital.`;
-      } else {
-        responseText += `Penting untuk dipahami bahwa berita ini merupakan bagian dari pergeseran struktural pasar yang lebih besar. Kami menyarankan Anda untuk melihat metrik fundamental aset (P/E, P/B untuk saham, atau volume on-chain untuk kripto) sebelum mengambil keputusan eksekusi apa pun. Tetap disiplin dengan rencana trading awal Anda.`;
-      }
-      return res.json({ answer: responseText, isFallback: true });
+      return res.json({ answer: buildOfflineAnswer(), isFallback: true });
     }
 
     const response = await generateContentWithRetry(aiClient, {
       model: "gemini-2.5-flash",
       contents: prompt,
       config: {
-        temperature: 0.7,
-        maxOutputTokens: 800,
-        systemInstruction: "Anda adalah asisten AI Analis Keuangan & Manajemen Portofolio yang andal, bergelar CFA (Chartered Financial Analyst). Jawab pertanyaan pengguna dengan ulasan mendalam, tajam, komprehensif, berbasis data statistik, tanpa jargon pemasaran kosong, serta memberikan interpretasi strategis riil."
+        temperature: newsChatTemperature,
+        maxOutputTokens: newsChatMaxTokens,
+        systemInstruction: newsChatSystemInstruction
       }
     });
 
@@ -1956,7 +2165,7 @@ app.post("/api/gemini/news-chat", async (req, res) => {
   } catch (err: any) {
     log.info("[News Chat Error] Using local fallback:", err.message || err);
     res.json({ 
-      answer: `Maaf, terjadi kesalahan koneksi jaringan saat menghubungi asisten AI Z-Capital: ${err.message || String(err)}. Sebagai saran cepat, tinjau tab 'Aset Terkait' dan batas resistensi teknis di dasbor utama untuk memandu keputusan alokasi Anda.`, 
+      answer: buildNetworkErrorAnswer(err.message || String(err)), 
       isFallback: true 
     });
   }
@@ -2085,6 +2294,50 @@ Tuliskan opini Anda secara lugas, dingin, berwibawa, saksama, obyektif, dalam ba
       return res.json({ analysis: geminiCache.get(cacheKey) });
     }
 
+    // QA8-C: generation config shared by BOTH transports (stream + non-stream).
+    const onchainTemperature = 0.15;
+    const onchainMaxTokens = 1200;
+    const onchainSystemInstruction = "Anda adalah asisten AI Analis On-Chain & Spesialis Kriptokurensi bergelar Senior Quantitative Trader. Tugas Anda adalah menyajikan ulasan analisis on-chain yang super tajam, objektif, bebas omong kosong, dan diakhiri dengan Rekomendasi Jual/Beli/Tahan yang sangat jelas.";
+
+    // QA8-C: SSE streaming branch — same body + "stream": true. Token frames
+    // carry progressive markdown; the done frame carries the exact fields of
+    // the non-stream JSON ({analysis, isFallback}). AI failure degrades to the
+    // same honest dynamic on-chain fallback report (generateDynamicOnChainFallback).
+    if (req.body.stream === true) {
+      await runSSEStream(req, res, async (send, abortSignal) => {
+        const aiClient = getAiClient(req);
+        if (!aiClient) {
+          const fallbackReport = generateDynamicOnChainFallback(symbol, req.body);
+          send({ type: "done", analysis: fallbackReport, isFallback: true, errorReason: "Gemini client is not initialized" });
+          return;
+        }
+        try {
+          const { fullText, streamError } = await streamViaAIRouter({
+            prompt: customPrompt,
+            systemPrompt: onchainSystemInstruction,
+            maxTokens: onchainMaxTokens,
+            temperature: onchainTemperature,
+            userId: req.user?.sub,
+            endpoint: "gemini-analyze-onchain-stream",
+            abortSignal,
+          }, send);
+          if (abortSignal.aborted) return; // client disconnected — no cache write for a partial stream
+          if (streamError || !fullText.trim()) {
+            const fallbackReport = generateDynamicOnChainFallback(symbol, req.body);
+            send({ type: "done", analysis: fallbackReport, isFallback: true, errorReason: streamError || "Respons stream AI kosong" });
+            return;
+          }
+          // Same cache side effect as the non-stream success path.
+          geminiCacheSet(cacheKey, fullText);
+          send({ type: "done", analysis: fullText, isFallback: false });
+        } catch (err: any) {
+          const fallbackReport = generateDynamicOnChainFallback(symbol, req.body);
+          send({ type: "done", analysis: fallbackReport, isFallback: true, errorReason: err?.message || String(err) });
+        }
+      });
+      return;
+    }
+
     const aiClient = getAiClient(req);
     if (!aiClient) {
       const fallbackReport = generateDynamicOnChainFallback(symbol, req.body);
@@ -2095,10 +2348,10 @@ Tuliskan opini Anda secara lugas, dingin, berwibawa, saksama, obyektif, dalam ba
       model: "gemini-2.5-flash",
       contents: customPrompt,
       config: {
-        temperature: 0.15,
-        maxOutputTokens: 1200,
+        temperature: onchainTemperature,
+        maxOutputTokens: onchainMaxTokens,
         thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
-        systemInstruction: "Anda adalah asisten AI Analis On-Chain & Spesialis Kriptokurensi bergelar Senior Quantitative Trader. Tugas Anda adalah menyajikan ulasan analisis on-chain yang super tajam, objektif, bebas omong kosong, dan diakhiri dengan Rekomendasi Jual/Beli/Tahan yang sangat jelas."
+        systemInstruction: onchainSystemInstruction
       }
     });
 
@@ -3865,42 +4118,25 @@ app.post("/api/gemini/trading-signals/analyze", async (req, res) => {
     }
   `;
 
-  try {
-    const aiClient = getAiClient(req);
-    if (!aiClient) {
-      throw new Error("Gemini AI Client is not configured on server.");
-    }
+  // QA8-C: tone system-instruction + generation config shared by BOTH
+  // transports (stream + non-stream) so the two paths can never drift apart.
+  let systemInstruction = "Anda adalah sistem analitik perdagangan kuantitatif yang mengutamakan data on-chain real-time di bursa keuangan.";
+  if (aiTone === "academic") {
+    systemInstruction = "Anda adalah akademisi keuangan peraih Nobel & CFA Analyst. Berikan ulasan mendalam, formal, teoritis, saksama, obyektif, sangat detail, dan berbasis statistik empiris.";
+  } else if (aiTone === "formal") {
+    systemInstruction = "Anda adalah spesialis kuantitatif handal (Quantitative Financial Strategist). Berikan analisis matematis yang disiplin, dingin, bernada formal kaku, sangat logis, tanpa emosi, dan murni berbasis model keuangan.";
+  } else if (aiTone === "pragmatic") {
+    systemInstruction = "Anda adalah swing trader profesional taktis. Ulas secara langsung pada pokok masalah, buat panduan taktis entry dan take-profit pragmatis, singkat padat, berfokus murni pada arus likuiditas dan aksi langsung.";
+  } else if (aiTone === "aggressive") {
+    systemInstruction = "Anda adalah Leverage Degen Trader Advisor agresif yang menyukai volatilitas ekstrem. Berikan gaya analisis berisiko tinggi bervolume tebal, gunakan istilah perdagangan leverage, dan tekankan aliansi akumulasi agresif institusi.";
+  }
 
-    let systemInstruction = "Anda adalah sistem analitik perdagangan kuantitatif yang mengutamakan data on-chain real-time di bursa keuangan.";
-    if (aiTone === "academic") {
-      systemInstruction = "Anda adalah akademisi keuangan peraih Nobel & CFA Analyst. Berikan ulasan mendalam, formal, teoritis, saksama, obyektif, sangat detail, dan berbasis statistik empiris.";
-    } else if (aiTone === "formal") {
-      systemInstruction = "Anda adalah spesialis kuantitatif handal (Quantitative Financial Strategist). Berikan analisis matematis yang disiplin, dingin, bernada formal kaku, sangat logis, tanpa emosi, dan murni berbasis model keuangan.";
-    } else if (aiTone === "pragmatic") {
-      systemInstruction = "Anda adalah swing trader profesional taktis. Ulas secara langsung pada pokok masalah, buat panduan taktis entry dan take-profit pragmatis, singkat padat, berfokus murni pada arus likuiditas dan aksi langsung.";
-    } else if (aiTone === "aggressive") {
-      systemInstruction = "Anda adalah Leverage Degen Trader Advisor agresif yang menyukai volatilitas ekstrem. Berikan gaya analisis berisiko tinggi bervolume tebal, gunakan istilah perdagangan leverage, dan tekankan aliansi akumulasi agresif institusi.";
-    }
+  const temp = aiTemperature !== undefined ? Number(aiTemperature) : 0.28;
+  const tokens = aiMaxTokens !== undefined ? Number(aiMaxTokens) : 800;
 
-    const temp = aiTemperature !== undefined ? Number(aiTemperature) : 0.28;
-    const tokens = aiMaxTokens !== undefined ? Number(aiMaxTokens) : 800;
-    const thinkingVal = mapThinkingLevel(aiThinkingMode);
-
-    const response = await generateContentWithRetry(aiClient, {
-      model: "gemini-2.5-flash",
-      contents: promptText,
-      config: {
-        responseMimeType: "application/json",
-        temperature: temp,
-        maxOutputTokens: tokens,
-        thinkingConfig: { thinkingLevel: thinkingVal },
-        systemInstruction: systemInstruction
-      }
-    });
-
-    const bodyText = response.text || "{}";
-    const parsedResult = JSON.parse(bodyText.trim());
-    
+  // QA8-C: shared final payload assembly (success path) — exact same fields,
+  // defaults and recordGeneratedSignal side effect as the pre-QA8-C code.
+  const assembleSignalResult = (parsedResult: any, extras: { isFallback?: boolean; errorReason?: string } = {}) => {
     const finalPayload = {
       recommendation: parsedResult.recommendation || "HOLD",
       confidence: parsedResult.confidence || 70,
@@ -3919,17 +4155,17 @@ app.post("/api/gemini/trading-signals/analyze", async (req, res) => {
       matchedAsset.price
     );
 
-    const resultPayload = {
+    return {
       ...finalPayload,
-      signalDetails: createdSignal
+      signalDetails: createdSignal,
+      ...extras
     };
+  };
 
-    geminiCacheSet(cacheKey, JSON.stringify(resultPayload));
-    return res.json(resultPayload);
-
-  } catch (err: any) {
-    log.info(`[Trade Signal Gemini Log] Using resilient local fallback model:`, err.message || err);
-    
+  // QA8-C: honest local heuristic fallback — moved VERBATIM out of the old
+  // catch block so the streaming branch delivers the SAME fallback payload
+  // (including the signal-history + cache side effects) when the AI fails.
+  const buildFallbackResult = (errorMsg: string): any => {
     // Fallback recommendation logic based on actual price activity + onchain dynamics
     let recommendation: "STRONG BUY" | "BUY" | "HOLD" | "SELL" | "STRONG SELL" = "HOLD";
     let score = 50;
@@ -3974,33 +4210,97 @@ Scraper jaringan onchain kami yang menelusuri data ledger resmi (*${onchainMetri
 - **Taktis Alokasi Kas**: Alokasikan porsi modal hibrida di instrumen digital berkisar 10%-15% dari keseluruhan portofolio global guna menyerap potensi imbal hasil maksimal.
     `;
 
-    const finalPayload = {
-      recommendation,
-      confidence: Math.min(Math.max(score, 5), 98),
-      onchainHealth: sentimentText,
-      analysis: localAnalysis,
-      metrics: onchainMetrics,
-      asset: matchedAsset
-    };
-
-    // Capture and log newly generated trade signal in history for real-time tracking
-    const createdSignal = recordGeneratedSignal(
-      upperSymbol,
-      matchedAsset.category as any,
-      finalPayload.recommendation as any,
-      finalPayload.confidence,
-      matchedAsset.price
+    const resultPayload = assembleSignalResult(
+      {
+        recommendation,
+        confidence: Math.min(Math.max(score, 5), 98),
+        onchainHealth: sentimentText,
+        analysis: localAnalysis
+      },
+      { isFallback: true, errorReason: errorMsg }
     );
 
-    const resultPayload = {
-      ...finalPayload,
-      signalDetails: createdSignal,
-      isFallback: true,
-      errorReason: err.message || String(err)
-    };
+    geminiCacheSet(cacheKey, JSON.stringify(resultPayload));
+    return resultPayload;
+  };
 
+  // QA8-C: SSE streaming branch — same body + "stream": true. Token frames
+  // carry the raw progressive JSON (the client extracts the partial "analysis"
+  // field for display); the done frame carries the exact fields of the
+  // non-stream JSON payload. AI failure degrades to the same honest local
+  // heuristic fallback (signal-history + cache side effects included).
+  if (req.body.stream === true) {
+    await runSSEStream(req, res, async (send, abortSignal) => {
+      const aiClient = getAiClient(req);
+      if (!aiClient) {
+        // Mirrors the non-stream path (no client -> throw -> local fallback).
+        send({ type: "done", ...buildFallbackResult("Gemini AI Client is not configured on server.") });
+        return;
+      }
+      try {
+        const { fullText, streamError } = await streamViaAIRouter({
+          prompt: promptText,
+          systemPrompt: systemInstruction,
+          maxTokens: tokens,
+          temperature: temp,
+          userId: req.user?.sub,
+          endpoint: "gemini-trading-signals-stream",
+          abortSignal,
+        }, send);
+        if (abortSignal.aborted) return; // client disconnected — no side effects
+        if (streamError) {
+          send({ type: "done", ...buildFallbackResult(streamError) });
+          return;
+        }
+        // Streaming requests run without upstream jsonMode, so the model may
+        // wrap its JSON in fences — parse strictly first (identical to the
+        // non-stream path), then best-effort extract the outermost object.
+        const parsedResult = parseSignalJsonLoose(fullText);
+        if (!parsedResult) {
+          send({ type: "done", ...buildFallbackResult("Respons AI bukan JSON valid") });
+          return;
+        }
+        const resultPayload = assembleSignalResult(parsedResult);
+        // Same cache side effect as the non-stream success path.
+        geminiCacheSet(cacheKey, JSON.stringify(resultPayload));
+        send({ type: "done", ...resultPayload, isFallback: false });
+      } catch (err: any) {
+        send({ type: "done", ...buildFallbackResult(err?.message || String(err)) });
+      }
+    });
+    return;
+  }
+
+  try {
+    const aiClient = getAiClient(req);
+    if (!aiClient) {
+      throw new Error("Gemini AI Client is not configured on server.");
+    }
+
+    const thinkingVal = mapThinkingLevel(aiThinkingMode);
+
+    const response = await generateContentWithRetry(aiClient, {
+      model: "gemini-2.5-flash",
+      contents: promptText,
+      config: {
+        responseMimeType: "application/json",
+        temperature: temp,
+        maxOutputTokens: tokens,
+        thinkingConfig: { thinkingLevel: thinkingVal },
+        systemInstruction: systemInstruction
+      }
+    });
+
+    const bodyText = response.text || "{}";
+    const parsedResult = JSON.parse(bodyText.trim());
+
+    const resultPayload = assembleSignalResult(parsedResult);
     geminiCacheSet(cacheKey, JSON.stringify(resultPayload));
     return res.json(resultPayload);
+
+  } catch (err: any) {
+    log.info(`[Trade Signal Gemini Log] Using resilient local fallback model:`, err.message || err);
+    return res.json(buildFallbackResult(err.message || String(err)));
   }
 });
 

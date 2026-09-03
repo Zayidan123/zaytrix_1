@@ -230,14 +230,30 @@ export default function OnChainData() {
 
   // === QA5-F1 WHALE RADAR (REAL Binance spot aggTrades — /api/live/whale-trades) ===
   // Whale feed shape: {success, isEstimated, trades:[{symbol,tradeId,price,qty,
-  // notionalUsd,side,time,exchange}], stats:{count,buyCount,sellCount,
-  // buyNotionalUsd,sellNotionalUsd,largestUsd}, source, fetchedSymbols, lastUpdated}.
+  // notionalUsd,side,time,exchange,market}], stats:{count,buyCount,sellCount,
+  // buyNotionalUsd,sellNotionalUsd,largestUsd,byMarket:{spot,futures}}, source,
+  // fetchedSymbols, lastUpdated}. QA8-A-1: rows are now tagged market
+  // "spot" | "futures" (Binance SPOT + FUTURES streams merged server-side).
   const [whaleFeed, setWhaleFeed] = useState<any>(null);
   const [whaleLoading, setWhaleLoading] = useState<boolean>(false);
   const [whaleError, setWhaleError] = useState<string>("");
   const [whaleMinUsd, setWhaleMinUsd] = useState<number>(100000);
   const [whaleSymbols, setWhaleSymbols] = useState<string[]>(["BTC", "ETH", "SOL"]);
   const [whaleLastFetched, setWhaleLastFetched] = useState<string>("");
+  // QA8-A-2: client-side market filter (SEMUA / SPOT / FUTURES). Purely local —
+  // it never triggers a refetch, so the 30s polling budget is untouched.
+  const [whaleMarketFilter, setWhaleMarketFilter] = useState<"all" | "spot" | "futures">("all");
+
+  // Derived: rows visible under the current market filter. Rows from an older
+  // payload without `market` are treated as spot (honest default, no
+  // fabrication of a futures tag).
+  const whaleVisibleTrades = useMemo(() => {
+    const all: any[] = Array.isArray(whaleFeed?.trades) ? whaleFeed.trades : [];
+    if (whaleMarketFilter === "all") return all;
+    return all.filter((t) =>
+      ((t?.market === "spot" || t?.market === "futures") ? t.market : "spot") === whaleMarketFilter
+    );
+  }, [whaleFeed, whaleMarketFilter]);
 
   const selectedPrice = useMemo(() => {
     if (selectedAiSymbol === "BTC") return livePriceBtc;
@@ -277,6 +293,12 @@ export default function OnChainData() {
       }
     }
 
+    // Fresh run: drop the previous report so the QA8-A-3 progressive stream
+    // starts from a clean slate (the Markdown card below then renders the
+    // real partial text as tokens arrive — never a mix of two reports).
+    setAiAnalysisResult("");
+    setLastGeneratedAt("");
+
     try {
       const baseFlow = 120000000;
       const inflow24h = simNetflow >= 0 ? (baseFlow + simNetflow * 1000000) : baseFlow;
@@ -297,26 +319,114 @@ export default function OnChainData() {
         networkHashrate: simHashrate
       };
 
+      // QA8-A-3: ask for token-by-token streaming first. The backend answers
+      // either text/event-stream (SSE frames: token/done/error) or plain JSON
+      // (older server) — both are handled below; the legacy JSON path stays
+      // fully intact and is reused as the single retry when the stream errors
+      // BEFORE the first token.
+      const runLegacyJson = async (): Promise<{ analysis: string; isFallback: boolean }> => {
+        const res = await fetch("/api/gemini/analyze-onchain", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status} error dari server backend`);
+        }
+        const result = await res.json();
+        return { analysis: String(result?.analysis ?? ""), isFallback: result?.isFallback === true };
+      };
+
       const res = await fetch("/api/gemini/analyze-onchain", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({ ...payload, stream: true })
       });
 
       if (!res.ok) {
         throw new Error(`HTTP ${res.status} error dari server backend`);
       }
 
-      const result = await res.json();
-      setAiAnalysisResult(result.analysis);
-      setIsAiFallback(result.isFallback || false);
-      
+      let analysis = "";
+      let isFallback = false;
+      const contentType = (res.headers.get("content-type") || "").toLowerCase();
+
+      if (contentType.includes("text/event-stream") && res.body) {
+        // --- SSE streaming path (reader + TextDecoder, parsed per "data: "
+        // frame — same proven pattern as MarketSentimentChat.streamChat,
+        // implemented locally here). Token chunks are accumulated and set
+        // progressively so the Markdown report below renders partial text
+        // as it arrives.
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let sseBuf = "";
+        let acc = "";
+        let gotToken = false;
+        let doneEvent: any = null;
+        let streamError: string | null = null;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          sseBuf += decoder.decode(value, { stream: true });
+          const lines = sseBuf.split("\n");
+          sseBuf = lines.pop() ?? "";
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith("data:")) continue; // skips keep-alive comments too
+            try {
+              const ev = JSON.parse(trimmed.slice(5).trim());
+              if (ev.type === "token" && typeof ev.text === "string" && ev.text) {
+                gotToken = true;
+                acc += ev.text;
+                // Progressive render — real partial content, never fabricated.
+                setAiAnalysisResult(acc);
+              } else if (ev.type === "done") {
+                doneEvent = ev;
+              } else if (ev.type === "error") {
+                streamError = ev.error || "stream error";
+              }
+            } catch {
+              /* tolerate malformed SSE line */
+            }
+          }
+        }
+
+        if (streamError && !gotToken) {
+          // Error BEFORE the first token → one honest retry without
+          // stream:true (legacy JSON path, exactly as before).
+          const legacy = await runLegacyJson();
+          analysis = legacy.analysis;
+          isFallback = legacy.isFallback;
+        } else if (typeof doneEvent?.analysis === "string" && doneEvent.analysis) {
+          // The done frame is authoritative (full final text + flags).
+          analysis = doneEvent.analysis;
+          isFallback = doneEvent.isFallback === true;
+          setAiAnalysisResult(analysis);
+        } else if (gotToken && acc.trim()) {
+          // Stream ended after tokens without a done frame — keep the real
+          // partial content rather than discarding honest streamed text.
+          analysis = acc;
+          isFallback = false;
+        } else {
+          throw new Error(streamError || "Stream analisis berakhir tanpa konten.");
+        }
+      } else {
+        // --- Legacy JSON response (older server / non-stream): unchanged.
+        const result = await res.json();
+        analysis = String(result?.analysis ?? "");
+        isFallback = result?.isFallback === true;
+      }
+
+      setAiAnalysisResult(analysis);
+      setIsAiFallback(isFallback);
+
       const timestamp = new Date().toLocaleTimeString("id-ID", { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       setLastGeneratedAt(timestamp);
 
       localStorage.setItem(cacheKey, JSON.stringify({
-        analysis: result.analysis,
-        isFallback: result.isFallback || false,
+        analysis,
+        isFallback,
         timestamp
       }));
 
@@ -3027,7 +3137,7 @@ export default function OnChainData() {
                     </span>
                   </h3>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    Aliran order spot Binance — agregat fill terbaru, disaring menurut nominal USD.
+                    Aliran order spot &amp; futures Binance — agregat fill terbaru, disaring menurut nominal USD.
                     Polling 30 detik (cache server 45 dtk).
                   </p>
                 </div>
@@ -3044,7 +3154,16 @@ export default function OnChainData() {
                   // (first fetch in flight, no snapshot yet), PUTUS (ws down,
                   // stale-but-real snapshot). Previously the initial load
                   // wrongly displayed "PUTUS".
-                  const wsConnected = whaleFeed?.stream?.connected === true;
+                  // QA8-A-2: LIVE now means "at least ONE market connected";
+                  // two tiny S/F dots show the per-market truth (payloads from
+                  // an older server without per-market status degrade to the
+                  // legacy single-market view — honest, never fabricated).
+                  const mkts = whaleFeed?.stream?.markets;
+                  const spotOn = mkts
+                    ? mkts.spot?.connected === true
+                    : whaleFeed?.stream?.connected === true;
+                  const futuresOn = mkts ? mkts.futures?.connected === true : false;
+                  const wsConnected = whaleFeed ? spotOn || futuresOn : false;
                   const loadingState = !whaleFeed && (whaleLoading || !whaleError);
                   const cls = wsConnected
                     ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
@@ -3052,16 +3171,42 @@ export default function OnChainData() {
                       ? "bg-slate-500/10 border-slate-600/40 text-slate-400"
                       : "bg-amber-500/10 border-amber-500/30 text-amber-300";
                   const label = wsConnected ? "WS LIVE" : loadingState ? "MEMUAT…" : "WS PUTUS";
+                  const mktDesc = [spotOn ? "spot aktif" : null, futuresOn ? "futures aktif" : null]
+                    .filter(Boolean)
+                    .join(", ") || "tidak ada market aktif";
                   const tip = wsConnected
-                    ? "WebSocket Binance aggTrade tersambung — buffer real-time"
+                    ? `WebSocket Binance aggTrade tersambung — ${mktDesc}`
                     : loadingState
                       ? "Mengambil snapshot whale pertama…"
                       : "Stream terputus — snapshot real terakhir (bukan data palsu)";
                   const dot = wsConnected ? "bg-emerald-400 animate-pulse" : loadingState ? "bg-slate-400 animate-pulse" : "bg-amber-400";
+                  const ariaDesc = whaleFeed
+                    ? `Status WebSocket whale: ${label}, ${mktDesc}`
+                    : "Status WebSocket whale: memuat";
                   return (
-                    <span className={`px-2 py-1 rounded-md font-mono border flex items-center gap-1.5 ${cls}`} title={tip}>
+                    <span
+                      className={`px-2 py-1 rounded-md font-mono border flex items-center gap-1.5 ${cls}`}
+                      title={tip}
+                      role="status"
+                      aria-label={ariaDesc}
+                    >
                       <span className={`inline-block w-1.5 h-1.5 rounded-full ${dot}`} />
                       {label}
+                      {/* Per-market indicators (S = spot teal, F = futures amber) */}
+                      <span className="flex items-center gap-1 ml-0.5" aria-hidden="true">
+                        <span
+                          className={`text-[9px] font-bold leading-none ${spotOn ? "text-teal-300" : "text-slate-600"}`}
+                          title={`Spot: ${spotOn ? "tersambung" : "tidak aktif"}`}
+                        >
+                          S
+                        </span>
+                        <span
+                          className={`text-[9px] font-bold leading-none ${futuresOn ? "text-amber-300" : "text-slate-600"}`}
+                          title={`Futures: ${futuresOn ? "tersambung" : "tidak aktif"}`}
+                        >
+                          F
+                        </span>
+                      </span>
                     </span>
                   );
                 })()}
@@ -3133,6 +3278,61 @@ export default function OnChainData() {
               </div>
             )}
 
+            {/* QA8-A-2: per-market split (spot vs futures) — real aggregates
+                from stats.byMarket; kept as a compact strip so the 4-card
+                grid above stays exactly the same size/layout. Hidden when the
+                server does not provide the split (older deployments). */}
+            {whaleFeed?.stats?.byMarket && (
+              <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+                {(["spot", "futures"] as const).map((m) => {
+                  const s = whaleFeed.stats.byMarket[m] || {
+                    count: 0, buyCount: 0, sellCount: 0, buyNotionalUsd: 0, sellNotionalUsd: 0,
+                  };
+                  const total = (s.buyNotionalUsd || 0) + (s.sellNotionalUsd || 0);
+                  const buyPct = total > 0 ? Math.round(((s.buyNotionalUsd || 0) / total) * 100) : 0;
+                  return (
+                    <div
+                      key={m}
+                      className={`rounded-lg border p-3 ${
+                        m === "spot"
+                          ? "border-teal-500/20 bg-teal-500/5"
+                          : "border-amber-500/20 bg-amber-500/5"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="flex items-center gap-1.5">
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[9px] font-bold border tracking-wider ${
+                              m === "spot"
+                                ? "bg-teal-500/10 text-teal-300 border-teal-500/30"
+                                : "bg-amber-500/10 text-amber-300 border-amber-500/30"
+                            }`}
+                          >
+                            {m === "spot" ? "SPOT" : "FUTURES"}
+                          </span>
+                          <span className="text-[10px] text-slate-500">
+                            {m === "spot" ? "Pasar spot Binance" : "Pasar berjangka Binance"}
+                          </span>
+                        </span>
+                        <span className="font-mono text-[10px] text-slate-400">{s.count} transaksi</span>
+                      </div>
+                      <div className="flex items-center justify-between text-[10px] font-mono mb-1.5">
+                        <span className="text-emerald-400">Beli {formatUsd(s.buyNotionalUsd || 0, true)}</span>
+                        <span className="text-rose-400">Jual {formatUsd(s.sellNotionalUsd || 0, true)}</span>
+                      </div>
+                      <div className="h-2 rounded-full overflow-hidden bg-slate-950 border border-slate-800 flex">
+                        <div
+                          className="bg-gradient-to-r from-emerald-600 to-emerald-400 h-full transition-all duration-700"
+                          style={{ width: `${buyPct}%` }}
+                        />
+                        <div className="flex-1 bg-gradient-to-r from-rose-500 to-rose-600 h-full" />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
             {/* Buy/Sell pressure bar — real ratio from stats */}
             {whaleFeed?.stats && (whaleFeed.stats.buyNotionalUsd + whaleFeed.stats.sellNotionalUsd) > 0 && (
               <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
@@ -3164,9 +3364,41 @@ export default function OnChainData() {
               </div>
             )}
 
-            {/* Controls — symbol whitelist + whale threshold */}
+            {/* Controls — market filter (QA8-A-2, client-side only) + symbol
+                whitelist + whale threshold */}
             <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-3.5 flex flex-col md:flex-row md:items-center gap-3 md:gap-4">
               <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[10px] uppercase tracking-wider text-slate-500 mr-1">Pasar</span>
+                {([
+                  ["all", "SEMUA"],
+                  ["spot", "SPOT"],
+                  ["futures", "FUTURES"],
+                ] as const).map(([val, label]) => {
+                  const active = whaleMarketFilter === val;
+                  const activeCls =
+                    val === "spot"
+                      ? "bg-teal-500/15 border-teal-500/40 text-teal-300"
+                      : val === "futures"
+                        ? "bg-amber-500/15 border-amber-500/40 text-amber-300"
+                        : "bg-emerald-500/15 border-emerald-500/40 text-emerald-300";
+                  return (
+                    <button
+                      key={val}
+                      onClick={() => setWhaleMarketFilter(val)}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-bold font-mono border transition-all ${
+                        active
+                          ? activeCls
+                          : "bg-slate-950/60 border-slate-800 text-slate-500 hover:text-slate-300 hover:border-slate-700"
+                      }`}
+                      aria-pressed={active}
+                      aria-label={`Filter pasar ${label}`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="flex items-center gap-2 flex-wrap md:border-l md:border-slate-800 md:pl-3">
                 <span className="text-[10px] uppercase tracking-wider text-slate-500 mr-1">Simbol</span>
                 {["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA"].map((sym) => {
                   const active = whaleSymbols.includes(sym);
@@ -3208,7 +3440,9 @@ export default function OnChainData() {
               </div>
             </div>
 
-            {/* Feed — real whale rows (max 50), relative notional bars */}
+            {/* Feed — real whale rows (max 50), relative notional bars.
+                QA8-A-2: rows follow the client-side market filter; each row
+                carries an honest SPOT (teal) / FUTURES (amber) market badge. */}
             {whaleLoading && !whaleFeed && (
               <div className="space-y-2">
                 {Array.from({ length: 6 }).map((_, i) => (
@@ -3222,7 +3456,7 @@ export default function OnChainData() {
                 Menyiapkan radar whale…
               </div>
             )}
-            {whaleFeed?.trades && whaleFeed.trades.length > 0 && (
+            {whaleVisibleTrades.length > 0 && (
               <div className="bg-slate-900/60 border border-slate-800 rounded-xl overflow-hidden">
                 <div className="grid grid-cols-[auto_1fr_auto] md:grid-cols-[auto_1.2fr_1fr_auto_auto] gap-x-3 px-4 py-2.5 border-b border-slate-800 bg-slate-950/50 text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
                   <span>Sisi</span>
@@ -3232,12 +3466,15 @@ export default function OnChainData() {
                   <span className="text-right">ID</span>
                 </div>
                 <div className="max-h-[28rem] overflow-y-auto divide-y divide-slate-800/70">
-                  {whaleFeed.trades.map((t: any, i: number) => {
+                  {whaleVisibleTrades.map((t: any, i: number) => {
                     const maxNotional = whaleFeed.stats?.largestUsd || t.notionalUsd;
                     const barPct = Math.max(4, Math.round((t.notionalUsd / maxNotional) * 100));
+                    // QA8-A-2: honest market tag (rows without `market` come
+                    // from an older payload and default to spot).
+                    const rowMarket = t.market === "futures" ? "futures" : "spot";
                     return (
                       <motion.div
-                        key={`${t.symbol}-${t.tradeId}`}
+                        key={`${rowMarket}-${t.symbol}-${t.tradeId}`}
                         initial={{ opacity: 0, x: -8 }}
                         animate={{ opacity: 1, x: 0 }}
                         transition={{ duration: 0.25, delay: Math.min(i * 0.02, 0.4) }}
@@ -3259,7 +3496,17 @@ export default function OnChainData() {
                           {t.side}
                         </span>
                         <div className="relative z-10 min-w-0">
-                          <span className="font-bold text-white text-sm mr-2">{t.symbol}</span>
+                          <span className="font-bold text-white text-sm mr-1.5">{t.symbol}</span>
+                          <span
+                            className={`mr-2 px-1.5 py-0.5 rounded text-[9px] font-bold border tracking-wider align-middle ${
+                              rowMarket === "futures"
+                                ? "bg-amber-500/10 text-amber-300 border-amber-500/30"
+                                : "bg-teal-500/10 text-teal-300 border-teal-500/30"
+                            }`}
+                            aria-label={`Pasar ${rowMarket === "futures" ? "futures (berjangka) Binance" : "spot Binance"}`}
+                          >
+                            {rowMarket === "futures" ? "FUTURES" : "SPOT"}
+                          </span>
                           <span className="font-mono text-xs text-slate-400">
                             {t.price < 1 ? t.price.toFixed(4) : t.price.toLocaleString("en-US")} × {t.qty < 1 ? t.qty.toFixed(4) : Math.round(t.qty).toLocaleString("en-US")}
                           </span>
@@ -3271,7 +3518,7 @@ export default function OnChainData() {
                         <span className="relative z-10 hidden md:block font-mono text-xs text-slate-500">
                           {new Date(t.time).toLocaleTimeString("id-ID")}
                         </span>
-                        <span className="relative z-10 text-right font-mono text-[10px] text-slate-600" title={`${t.exchange} · aggTrade #${t.tradeId}`}>
+                        <span className="relative z-10 text-right font-mono text-[10px] text-slate-600" title={`${t.exchange} · ${rowMarket} · aggTrade #${t.tradeId}`}>
                           #{t.tradeId}
                         </span>
                       </motion.div>
@@ -3279,19 +3526,35 @@ export default function OnChainData() {
                   })}
                 </div>
                 <div className="px-4 py-2 border-t border-slate-800 bg-slate-950/50 text-[10px] text-slate-500 flex items-center justify-between">
-                  <span>Terurut nominal terbesar · jendela aggTrades terbaru Binance (spot)</span>
-                  <span className="font-mono">{whaleFeed.trades.length} baris</span>
+                  <span>
+                    Terurut nominal terbesar · jendela aggTrades terbaru Binance (spot &amp; futures)
+                    {whaleMarketFilter !== "all" && ` · filter: ${whaleMarketFilter === "spot" ? "SPOT" : "FUTURES"}`}
+                  </span>
+                  <span className="font-mono">{whaleVisibleTrades.length} baris</span>
                 </div>
               </div>
             )}
-            {!whaleLoading && whaleFeed && (!whaleFeed.trades || whaleFeed.trades.length === 0) && (
+            {!whaleLoading && whaleFeed && whaleVisibleTrades.length === 0 && (
               <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-8 text-center">
                 <Fish className="w-8 h-8 mx-auto mb-2 text-slate-600" />
-                <p className="text-slate-400 text-sm">Belum ada whale pada ambang ≥ {formatUsd(whaleMinUsd)} (jendela 30 menit).</p>
-                <p className="text-slate-500 text-xs mt-1 max-w-md mx-auto leading-relaxed">
-                  {whaleFeed.info ||
-                    `Stream live tersambung dan terus mengumpulkan transaksi — whale memang jarang lewat. Buffer menampung ${whaleFeed.stream?.bufferedCount ?? 0} transaksi ≥$50K. Coba turunkan ambang atau tunggu whale berikutnya.`}
-                </p>
+                {whaleFeed.trades?.length > 0 ? (
+                  <>
+                    <p className="text-slate-400 text-sm">
+                      Tidak ada transaksi {whaleMarketFilter === "spot" ? "SPOT" : "FUTURES"} yang lolos filter pasar saat ini.
+                    </p>
+                    <p className="text-slate-500 text-xs mt-1 max-w-md mx-auto leading-relaxed">
+                      {whaleFeed.trades.length} transaksi tersedia di pasar lain — ganti filter Pasar ke SEMUA untuk melihat semuanya (tanpa memicu permintaan baru).
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-slate-400 text-sm">Belum ada whale pada ambang ≥ {formatUsd(whaleMinUsd)} (jendela 30 menit).</p>
+                    <p className="text-slate-500 text-xs mt-1 max-w-md mx-auto leading-relaxed">
+                      {whaleFeed.info ||
+                        `Stream live tersambung dan terus mengumpulkan transaksi — whale memang jarang lewat. Buffer menampung ${whaleFeed.stream?.bufferedCount ?? 0} transaksi ≥$50K. Coba turunkan ambang atau tunggu whale berikutnya.`}
+                    </p>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -3607,8 +3870,10 @@ export default function OnChainData() {
               </div>
             )}
 
-            {/* Loader / Custom Immersion Step-by-Step logs */}
-            {aiLoading && (
+            {/* Loader / Custom Immersion Step-by-Step logs — QA8-A-3: hidden
+                once streamed tokens start arriving (the report card below
+                takes over and renders the real partial markdown). */}
+            {aiLoading && !aiAnalysisResult && (
               <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-8 flex flex-col items-center justify-center space-y-4 text-center">
                 <div className="relative">
                   <div className="w-12 h-12 rounded-full border-2 border-purple-500/20 border-t-purple-500 animate-spin" />
@@ -3623,13 +3888,20 @@ export default function OnChainData() {
               </div>
             )}
 
-            {/* AI Report Result Card */}
-            {!aiLoading && aiAnalysisResult && (
+            {/* AI Report Result Card — visible while streaming (QA8-A-3):
+                partial REAL text renders progressively; the badge switches to
+                an honest "MENGALIR" chip until the stream completes. */}
+            {aiAnalysisResult && (
               <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-6 space-y-5 shadow-lg animate-fadeIn">
                 <div className="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-800/80 pb-4 gap-4">
                   <div>
                     <div className="flex flex-wrap items-center gap-2 mb-1">
-                      {isAiCached ? (
+                      {aiLoading ? (
+                        <span className="bg-purple-500/10 text-purple-400 text-[10px] font-mono px-2 py-0.5 rounded border border-purple-500/20 flex items-center gap-1 animate-pulse">
+                          <Sparkles className="w-3 h-3 text-purple-400" />
+                          ANALISIS MENGALIR…
+                        </span>
+                      ) : isAiCached ? (
                         <span className="bg-emerald-500/10 text-emerald-400 text-[10px] font-mono px-2 py-0.5 rounded border border-emerald-500/20 flex items-center gap-1">
                           <Activity className="w-3 h-3 text-emerald-400" />
                           TERBACA DARI CACHE LOKAL
@@ -3645,7 +3917,9 @@ export default function OnChainData() {
                           HASIL GEMINI 3.5 FLASH LIVE
                         </span>
                       )}
-                      <span className="text-[10px] text-slate-500 font-mono">Generated: {lastGeneratedAt || "Sekarang"}</span>
+                      <span className="text-[10px] text-slate-500 font-mono">
+                        {aiLoading ? "Streaming token demi token…" : `Generated: ${lastGeneratedAt || "Sekarang"}`}
+                      </span>
                     </div>
                     <h3 className="text-base font-bold text-white flex items-center gap-2">
                       <Sparkles className="w-4 h-4 text-purple-400" />
@@ -3657,18 +3931,20 @@ export default function OnChainData() {
                     <button
                       id="btn-re-evaluate"
                       onClick={() => handleRunAiAnalysis(true)}
-                      className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-750 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700/60 transition-all flex items-center gap-1"
+                      disabled={aiLoading}
+                      className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-750 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700/60 transition-all flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      <RefreshCw className="w-3 h-3" />
+                      <RefreshCw className={`w-3 h-3 ${aiLoading ? "animate-spin" : ""}`} />
                       Segarkan / Regenerasi
                     </button>
                     <button
                       id="btn-copy-report"
+                      disabled={aiLoading}
                       onClick={() => {
                         navigator.clipboard.writeText(aiAnalysisResult);
                         alert("Laporan analisis berhasil disalin ke papan klip.");
                       }}
-                      className="px-3.5 py-1.5 bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold rounded-lg transition-all flex items-center gap-1 shadow"
+                      className="px-3.5 py-1.5 bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold rounded-lg transition-all flex items-center gap-1 shadow disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       Salin Laporan
                     </button>

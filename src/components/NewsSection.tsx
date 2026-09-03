@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
+import { consumeAIStream } from "../lib/aiStream";
 import { 
   ArrowLeft, 
   Calendar, 
@@ -178,7 +179,7 @@ export default function NewsSection() {
 
   // AI Chat States
   const [newsQuestion, setNewsQuestion] = useState("");
-  const [newsChatHistory, setNewsChatHistory] = useState<{role: 'user' | 'model', content: string}[]>([]);
+  const [newsChatHistory, setNewsChatHistory] = useState<{role: 'user' | 'model', content: string, isStreaming?: boolean}[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
 
   // Fetch /api/news on mount, poll every 5 minutes for fresh articles.
@@ -285,6 +286,92 @@ export default function NewsSection() {
     if (!selectedArticleId) return null;
     return articles.find(art => art.id === selectedArticleId) || null;
   }, [articles, selectedArticleId]);
+
+  // QA8-C: ask the news-chat assistant. Streams the answer token-by-token
+  // over SSE when the server supports it; retries ONCE over the legacy
+  // non-stream transport when SSE fails BEFORE the first token; the done
+  // frame is applied exactly like the old JSON response (data.answer).
+  const askNewsChat = async (question: string, history: { role: "user" | "model"; content: string }[]) => {
+    setChatLoading(true);
+    const appendModelReply = (content: string, isStreaming = false) => {
+      setNewsChatHistory((prev) => [...prev, { role: "model" as const, content, isStreaming }]);
+    };
+    const updateLastModelReply = (content: string, isStreaming: boolean) => {
+      setNewsChatHistory((prev) => prev.map((c, i) => (i === prev.length - 1 && c.role === "model" ? { ...c, content, isStreaming } : c)));
+    };
+
+    // Legacy non-stream transport (exact old fetch path) — kept intact as the
+    // JSON fallback and as the single retry when SSE fails before any token.
+    const requestNonStream = async () => {
+      const res = await fetch("/api/gemini/news-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ article: activeArticle, question, chatHistory: history })
+      });
+      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+      const data = await res.json();
+      appendModelReply(data.answer);
+    };
+
+    try {
+      const res = await fetch("/api/gemini/news-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ article: activeArticle, question, chatHistory: history, stream: true })
+      });
+      const contentType = res.headers.get("content-type") || "";
+
+      if (res.ok && contentType.includes("text/event-stream") && res.body) {
+        let acc = "";
+        let gotToken = false;
+        let streamError: string | null = null;
+        appendModelReply("", true);
+        await consumeAIStream(res, {
+          onToken: (chunk) => {
+            gotToken = true;
+            acc += chunk;
+            updateLastModelReply(acc, true);
+          },
+          onDone: (payload) => {
+            // The done frame is authoritative — mirrors the old data.answer apply.
+            if (payload && typeof payload.answer === "string") {
+              acc = payload.answer;
+            }
+          },
+          onError: (msg) => {
+            streamError = msg;
+          }
+        });
+
+        if (streamError && !gotToken) {
+          // QA8-C: SSE failed before any content — drop the empty bubble and
+          // retry ONCE over the legacy non-stream path.
+          setNewsChatHistory((prev) => prev.filter((c, i) => !(i === prev.length - 1 && c.role === "model" && c.content === "")));
+          await requestNonStream();
+          return;
+        }
+
+        updateLastModelReply(acc, false);
+        if (streamError) {
+          // Partial answer + honest disconnect note (content preserved).
+          updateLastModelReply(`${acc}\n\n(Catatan: aliran jawaban terputus — ${streamError})`, false);
+        }
+        return;
+      }
+
+      // Server answered JSON (no stream support) — legacy handling.
+      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+      const data = await res.json();
+      appendModelReply(data.answer);
+    } catch (err: any) {
+      setNewsChatHistory((prev) => [...prev, {
+        role: 'model',
+        content: `Maaf, asisten AI mendeteksi gangguan jaringan: ${err.message || String(err)}. Silakan coba tanyakan kembali.`
+      }]);
+    } finally {
+      setChatLoading(false);
+    }
+  };
 
   // Handle Scroll to top on reading article
   const handleSelectArticle = (id: string) => {
@@ -851,11 +938,24 @@ export default function NewsSection() {
                                         : 'bg-slate-900 border border-slate-800/80 text-slate-300 rounded-tl-none'
                                     }`}>
                                       {chat.content}
+                                      {chat.role === 'model' && chat.isStreaming && (
+                                        <span className="inline-flex items-center gap-1 ml-1.5 align-middle" title="Jawaban mengalir token demi token (SSE)">
+                                          <span className="w-1 h-1 rounded-full bg-amber-400 animate-pulse" />
+                                          <span className="text-[8px] font-mono text-amber-400/90">streaming…</span>
+                                        </span>
+                                      )}
                                     </div>
                                   </div>
                                 ))}
                                 
-                                {chatLoading && (
+                                {/* QA8-C: the three-dot loader only shows before the
+                                    first token arrives — once the streaming reply
+                                    bubble exists, the live text + chip replace it. */}
+                                {chatLoading && !(
+                                  newsChatHistory.length > 0 &&
+                                  newsChatHistory[newsChatHistory.length - 1].role === "model" &&
+                                  newsChatHistory[newsChatHistory.length - 1].isStreaming
+                                ) && (
                                   <div className="flex gap-2.5 justify-start">
                                     <div className="w-5 h-5 rounded-full bg-amber-500/20 border border-amber-500/40 flex items-center justify-center shrink-0">
                                       <Brain className="w-3 h-3 text-amber-400 animate-pulse" />
@@ -877,34 +977,11 @@ export default function NewsSection() {
                                 const question = newsQuestion.trim();
                                 setNewsQuestion("");
                                 const userMsg = { role: 'user' as const, content: question };
-                                setNewsChatHistory(prev => [...prev, userMsg]);
-                                setChatLoading(true);
-
-                                fetch("/api/gemini/news-chat", {
-                                  method: "POST",
-                                  headers: { "Content-Type": "application/json" },
-                                  body: JSON.stringify({
-                                    article: activeArticle,
-                                    question,
-                                    chatHistory: [...newsChatHistory, userMsg]
-                                  })
-                                })
-                                  .then(res => {
-                                    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-                                    return res.json();
-                                  })
-                                  .then(data => {
-                                    setNewsChatHistory(prev => [...prev, { role: 'model', content: data.answer }]);
-                                  })
-                                  .catch(err => {
-                                    setNewsChatHistory(prev => [...prev, { 
-                                      role: 'model', 
-                                      content: `Maaf, asisten AI mendeteksi gangguan jaringan: ${err.message || String(err)}. Silakan coba tanyakan kembali.` 
-                                    }]);
-                                  })
-                                  .finally(() => {
-                                    setChatLoading(false);
-                                  });
+                                const history = [...newsChatHistory, userMsg];
+                                setNewsChatHistory(history);
+                                // QA8-C: stream the answer over SSE (auto-fallback
+                                // to the legacy non-stream request inside).
+                                askNewsChat(question, history);
                               }}
                               className="flex items-center gap-2"
                             >

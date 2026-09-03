@@ -1771,19 +1771,45 @@ liveDataRouter.get("/api/live/dominance-history", async (req, res) => {
 
 // ---------------------------------------------------------------------------
 // 15. GET /api/live/whale-trades?symbols=BTC,ETH&minUsd=250000&limit=50
-//     Source: src/server/whaleStream.ts — a PERSISTENT Binance spot aggTrade
-//     WebSocket that aggregates REAL large fills into a rolling buffer
-//     (30-minute window, deduped, boot-time REST backfill). QA5-F1: replaces
-//     the purely deterministic `whaleTransactions24h` estimate with a REAL
-//     feed. This endpoint is a read-only projection of that buffer.
+//     Source: src/server/whaleStream.ts — TWO PERSISTENT Binance aggTrade
+//     WebSockets (spot + futures, QA8-A-1) that aggregate REAL large fills
+//     into one rolling buffer (30-minute window, deduped by
+//     (market,symbol,tradeId), boot-time SPOT REST backfill — futures has
+//     no backfill by design). QA5-F1: replaces the purely deterministic
+//     `whaleTransactions24h` estimate with a REAL feed. This endpoint is a
+//     read-only projection of that buffer.
 //     Honesty contract:
-//       - success:true  + isEstimated:false → REAL Binance fills.
+//       - success:true  + isEstimated:false → REAL Binance fills (each row
+//         tagged market: "spot" | "futures").
 //       - Empty-but-connected buffer → success:true, trades:[] (whales are
 //         rare; "menunggu whale berikutnya" is a live state, not an error).
-//       - WS disconnected → success:false + last REAL snapshot still served
-//         via streamConnected:false (UI shows the stale banner).
+//       - ALL streams disconnected → success:false + last REAL snapshot
+//         still served via streamConnected:false (UI shows the stale
+//         banner). Per-market truth: stream.markets.{spot,futures}.connected.
+//       - stats keeps every legacy field; stats.byMarket (QA8-A-1) adds
+//         per-market aggregates without breaking old consumers.
 // ---------------------------------------------------------------------------
-import { getWhaleSnapshot, getWhaleStreamStatus } from "./whaleStream";
+import { getWhaleSnapshot, getWhaleStreamStatus, type WhaleTradeRow } from "./whaleStream";
+
+// QA8-A-1: per-market aggregate (same shape as the legacy top-level stats,
+// so the UI can render identical cards per market).
+function buildWhaleByMarket(trades: WhaleTradeRow[]) {
+  const agg = (market: "spot" | "futures") => {
+    const rows = trades.filter(
+      (t) => (t.market === "spot" || t.market === "futures" ? t.market : "spot") === market
+    );
+    const buys = rows.filter((t) => t.side === "BUY");
+    const sells = rows.filter((t) => t.side === "SELL");
+    return {
+      count: rows.length,
+      buyCount: buys.length,
+      sellCount: sells.length,
+      buyNotionalUsd: Math.round(buys.reduce((s, t) => s + t.notionalUsd, 0)),
+      sellNotionalUsd: Math.round(sells.reduce((s, t) => s + t.notionalUsd, 0)),
+    };
+  };
+  return { spot: agg("spot"), futures: agg("futures") };
+}
 
 liveDataRouter.get("/api/live/whale-trades", async (req, res) => {
   // FIX-B-4 style hardening: never interpolate raw query params into
@@ -1805,11 +1831,26 @@ liveDataRouter.get("/api/live/whale-trades", async (req, res) => {
   const buyWhales = trades.filter((t) => t.side === "BUY");
   const sellWhales = trades.filter((t) => t.side === "SELL");
 
+  // Honest per-market provenance for the `source` chip: lists which venues
+  // are actually feeding us right now (legacy consumers only display it).
+  const liveMarkets = [
+    status.markets.spot.connected ? "spot" : null,
+    status.markets.futures.connected ? "futures" : null,
+  ].filter((m): m is string => m !== null);
+  const source =
+    liveMarkets.length === 2
+      ? "binance-spot+futures-ws-live"
+      : liveMarkets.length === 1
+        ? `binance-${liveMarkets[0]}-ws-live`
+        : "binance-ws-stale";
+
   const base = {
     trades,
     symbols: symbolList,
     minUsd,
     stream: {
+      // Legacy aggregate (true when ANY market is connected) + per-market
+      // truth (QA8-A-1) so the UI can show S●/F● indicators honestly.
       connected: status.connected,
       bufferedCount: status.bufferedCount,
       capturedCount: status.capturedCount,
@@ -1817,8 +1858,10 @@ liveDataRouter.get("/api/live/whale-trades", async (req, res) => {
       lastMessageAt: status.lastMessageAt,
       minCaptureUsd: status.minCaptureUsd,
       windowMinutes: 30,
+      markets: status.markets,
+      bufferedByMarket: status.bufferedByMarket,
     },
-    source: status.connected ? "binance-spot-ws-live" : "binance-spot-ws-stale",
+    source,
     lastUpdated: new Date().toISOString(),
   };
 
@@ -1834,20 +1877,29 @@ liveDataRouter.get("/api/live/whale-trades", async (req, res) => {
         buyNotionalUsd: Math.round(buyWhales.reduce((s, t) => s + t.notionalUsd, 0)),
         sellNotionalUsd: Math.round(sellWhales.reduce((s, t) => s + t.notionalUsd, 0)),
         largestUsd: Math.round(trades[0]?.notionalUsd || 0),
+        // QA8-A-1: per-market split — additive, legacy fields untouched.
+        byMarket: buildWhaleByMarket(trades),
       },
     });
   }
 
   // Empty result — distinguish the three honest states:
   if (status.connected) {
-    // Stream live, buffer may simply not have a whale ≥ minUsd for these
-    // symbols yet, or the requested symbols have nothing in the 30-min window.
+    // At least one market stream is live; the buffer may simply not have a
+    // whale ≥ minUsd for these symbols yet, or the requested symbols have
+    // nothing in the 30-min window. Say WHICH market is live (honest).
+    const mkt = [
+      status.markets.spot.connected ? "spot aktif" : null,
+      status.markets.futures.connected ? "futures aktif" : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
     return res.json({
       ...base,
       success: true,
       isEstimated: false,
       stats: null,
-      info: `Stream live tersambung — belum ada transaksi ≥ $${minUsd.toLocaleString("en-US")} untuk simbol terpilih dalam jendela 30 menit (buffer: ${status.bufferedCount} transaksi ≥$50K). Whale memang jarang; menunggu whale berikutnya.`,
+      info: `Stream live tersambung (${mkt}) — belum ada transaksi ≥ $${minUsd.toLocaleString("en-US")} untuk simbol terpilih dalam jendela 30 menit (buffer: ${status.bufferedCount} transaksi ≥$50K, spot ${status.bufferedByMarket.spot} / futures ${status.bufferedByMarket.futures}). Whale memang jarang; menunggu whale berikutnya.`,
     });
   }
   return res.json({
@@ -1856,7 +1908,7 @@ liveDataRouter.get("/api/live/whale-trades", async (req, res) => {
     isEstimated: true,
     stats: null,
     error:
-      "Stream transaksi Binance sedang terputus dari server ini. Tidak ada data whale yang bisa ditampilkan secara jujur (tidak ada data palsu).",
+      "Semua stream transaksi Binance (spot & futures) sedang terputus dari server ini. Tidak ada data whale yang bisa ditampilkan secara jujur (tidak ada data palsu).",
   });
 });
 

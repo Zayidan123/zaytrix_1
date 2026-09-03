@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
-import Markdown from "react-markdown";
+import StreamMarkdown from "./StreamMarkdown";
+import { consumeAIStream } from "../lib/aiStream";
 import { 
   Sparkles, 
   TrendingUp, 
@@ -48,6 +49,55 @@ interface AiSignalsProps {
   assets: Asset[];
 }
 
+// QA8-C: best-effort client-side extraction of the partial "analysis" string
+// from a streamed (still incomplete) JSON payload — the trading-signals stream
+// emits the raw model JSON token by token, so the human-readable part is the
+// value of its "analysis" field. Display-only: the authoritative final text
+// always arrives in the SSE "done" frame and replaces whatever this returned.
+function extractPartialSignalAnalysis(raw: string): string | null {
+  const keyIdx = raw.indexOf('"analysis"');
+  if (keyIdx === -1) return null;
+  let i = keyIdx + '"analysis"'.length;
+  while (i < raw.length && /\s/.test(raw[i])) i++;
+  if (raw[i] !== ":") return null;
+  i++;
+  while (i < raw.length && /\s/.test(raw[i])) i++;
+  if (raw[i] !== '"') return null;
+  i++;
+  let out = "";
+  while (i < raw.length) {
+    const ch = raw[i];
+    if (ch === "\\") {
+      // Escape sequence — may be cut at a chunk boundary.
+      const next = raw[i + 1];
+      if (next === undefined) break;
+      if (next === "n") out += "\n";
+      else if (next === "t") out += "\t";
+      else if (next === "r") out += "\r";
+      else if (next === '"') out += '"';
+      else if (next === "\\") out += "\\";
+      else if (next === "/") out += "/";
+      else if (next === "u") {
+        const hex = raw.slice(i + 2, i + 6);
+        if (hex.length < 4 || !/^[0-9a-fA-F]{4}$/.test(hex)) {
+          out += next;
+          i++;
+          continue;
+        }
+        out += String.fromCharCode(parseInt(hex, 16));
+        i += 6;
+        continue;
+      } else out += next;
+      i += 2;
+      continue;
+    }
+    if (ch === '"') break; // closing quote of the analysis string
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
 export default function AiSignals({ assets }: AiSignalsProps) {
   const settings = useGlobalStore(state => state.settings);
   // Only display cryptocurrencies for our specialized onchain analysis terminal
@@ -61,6 +111,8 @@ export default function AiSignals({ assets }: AiSignalsProps) {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [refreshIntervalSecs, setRefreshIntervalSecs] = useState(60); // Less hyperactive! Default to 60 seconds
   const [lastScrapedAt, setLastScrapedAt] = useState<string>("");
+  /** QA8-C: partial "analysis" text while the SSE stream is flowing (null = idle). */
+  const [streamingAnalysis, setStreamingAnalysis] = useState<string | null>(null);
   
   // Client-side cache to persist expert recommendations per symbol so navigation is lag-free and safe
   const [cache, setCache] = useState<Record<string, { data: OnChainPayload; timestamp: number }>>({});
@@ -224,32 +276,22 @@ export default function AiSignals({ assets }: AiSignalsProps) {
 
     setLoading(true);
     setError(null);
-    try {
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json"
-      };
 
-      const res = await fetch("/api/gemini/trading-signals/analyze", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ 
-          symbol: symbolToAnalyze, 
-          category: "crypto",
-          customFocus: customFocus.trim() || undefined,
-          aiTone: settings.aiTone,
-          aiTemperature: settings.aiTemperature,
-          aiMaxTokens: settings.aiMaxTokens,
-          aiThinkingMode: settings.aiThinkingMode || "high"
-        })
-      });
+    const baseBody = {
+      symbol: symbolToAnalyze,
+      category: "crypto",
+      customFocus: customFocus.trim() || undefined,
+      aiTone: settings.aiTone,
+      aiTemperature: settings.aiTemperature,
+      aiMaxTokens: settings.aiMaxTokens,
+      aiThinkingMode: settings.aiThinkingMode || "high"
+    };
 
-      if (!res.ok) {
-        throw new Error(`Gagal memuat rekomendasi. Server merespon dengan kode ${res.status}`);
-      }
-
-      const payload = await res.json() as OnChainPayload;
+    // Apply a final payload exactly like the old non-stream path (data, local
+    // cache, timestamp, history refresh).
+    const applyPayload = (payload: OnChainPayload) => {
       setData(payload);
-      
+
       const currentTime = Date.now();
       setCache(prev => ({
         ...prev,
@@ -259,10 +301,93 @@ export default function AiSignals({ assets }: AiSignalsProps) {
 
       // Pull latest history trace immediately
       fetchHistoryAndMetrics();
+    };
+
+    // QA8-C: legacy non-stream transport (exact old fetch path) — used when the
+    // server answers JSON (cache hit / older deployment) and as the single
+    // retry when SSE fails BEFORE the first token arrives.
+    const requestNonStream = async (): Promise<OnChainPayload> => {
+      const res = await fetch("/api/gemini/trading-signals/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(baseBody)
+      });
+      if (!res.ok) {
+        throw new Error(`Gagal memuat rekomendasi. Server merespon dengan kode ${res.status}`);
+      }
+      return (await res.json()) as OnChainPayload;
+    };
+
+    try {
+      // QA8-C: request the SSE stream first — the analysis text flows in
+      // token by token while the structured payload arrives in the done frame.
+      const res = await fetch("/api/gemini/trading-signals/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...baseBody, stream: true })
+      });
+      const contentType = res.headers.get("content-type") || "";
+
+      if (res.ok && contentType.includes("text/event-stream") && res.body) {
+        let raw = "";
+        let gotToken = false;
+        let streamError: string | null = null;
+        let finalPayload: OnChainPayload | null = null;
+        setStreamingAnalysis("");
+        await consumeAIStream(res, {
+          onToken: (chunk) => {
+            gotToken = true;
+            raw += chunk;
+            // Raw chunks are JSON tokens — extract the partial "analysis"
+            // field for the progressive display (display-only; the done
+            // frame is authoritative and applied below).
+            setStreamingAnalysis(extractPartialSignalAnalysis(raw) ?? "");
+          },
+          onDone: (payload) => {
+            if (payload && typeof payload.analysis === "string") {
+              finalPayload = payload as OnChainPayload;
+            }
+          },
+          onError: (msg) => {
+            streamError = msg;
+          }
+        });
+        setStreamingAnalysis(null);
+
+        if (streamError && !gotToken) {
+          // QA8-C: SSE failed before any content — retry ONCE over the legacy
+          // non-stream path so the user still gets a recommendation.
+          applyPayload(await requestNonStream());
+          return;
+        }
+        if (streamError) {
+          // Error after partial content — keep the previous data + honest note.
+          setError(`Aliran analitik AI terputus: ${streamError}`);
+          return;
+        }
+        if (finalPayload) {
+          // The done frame is authoritative — apply it exactly like the
+          // non-stream JSON response (incl. the honest isFallback label).
+          applyPayload(finalPayload);
+          return;
+        }
+        // Stream ended without a done frame — honest error, no silent retry
+        // (the AI already produced tokens; a second call would double the cost).
+        setError("Aliran analitik AI berakhir tanpa hasil final dari server.");
+        return;
+      }
+
+      // Server answered JSON (cache hit / no stream support) — legacy handling
+      // of THIS response (no duplicate request).
+      if (!res.ok) {
+        throw new Error(`Gagal memuat rekomendasi. Server merespon dengan kode ${res.status}`);
+      }
+      applyPayload((await res.json()) as OnChainPayload);
     } catch (err: any) {
       console.error(err);
       setError(err.message || "Gagal menghubungi server analitik.");
     } finally {
+      setStreamingAnalysis(null);
       setLoading(false);
     }
   };
@@ -594,6 +719,20 @@ export default function AiSignals({ assets }: AiSignalsProps) {
         <div className="lg:col-span-3 space-y-6">
           
           {loading && !data ? (
+            streamingAnalysis !== null ? (
+              /* QA8-C: first analysis streaming in — progressive markdown */
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3">
+                <div className="flex items-center gap-2">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-400" />
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400">
+                    Analisis AI sedang mengalir (streaming)…
+                  </span>
+                </div>
+                <div className="markdown-body text-xs text-slate-300 max-h-[320px] overflow-y-auto">
+                  <StreamMarkdown text={streamingAnalysis} isStreaming />
+                </div>
+              </div>
+            ) : (
             /* First loading placeholder */
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-12 text-center flex flex-col items-center justify-center space-y-4">
               <Cpu className="w-12 h-12 text-amber-500 animate-spin" />
@@ -602,6 +741,7 @@ export default function AiSignals({ assets }: AiSignalsProps) {
                 <p className="text-xs text-slate-500 mt-1">Mengumpulkan volume bursa, netflow exchange, & mengaktifkan penasihat kuantitatif AI (OpenRouter)...</p>
               </div>
             </div>
+            )
           ) : error ? (
             /* Error Fallback box */
             <div className="bg-rose-500/10 border border-rose-500/20 rounded-xl p-6 flex items-start space-x-3">
@@ -798,6 +938,14 @@ export default function AiSignals({ assets }: AiSignalsProps) {
                     <span className="text-xs font-bold text-slate-100 uppercase tracking-wider font-sans">
                       Hasil Evaluasi Kuantitatif & Sinyal AI
                     </span>
+                    {streamingAnalysis !== null && (
+                      <span
+                        className="text-[8px] font-mono px-1.5 py-0.5 rounded border bg-amber-500/10 border-amber-500/25 text-amber-300 flex items-center gap-1"
+                        title="Analisis mengalir token demi token (SSE)"
+                      >
+                        <span className="w-1 h-1 rounded-full bg-amber-400 animate-pulse" /> streaming…
+                      </span>
+                    )}
                   </div>
                   
                   <div className="text-[9px] text-slate-500 font-mono">
@@ -826,7 +974,13 @@ export default function AiSignals({ assets }: AiSignalsProps) {
                   )}
                   
                   <div className="markdown-body">
-                    <Markdown>{data.analysis}</Markdown>
+                    {/* QA8-C: progressive markdown while the stream flows; the
+                        authoritative done payload text otherwise. */}
+                    {streamingAnalysis !== null ? (
+                      <StreamMarkdown text={streamingAnalysis} isStreaming />
+                    ) : (
+                      <StreamMarkdown text={data.analysis} />
+                    )}
                   </div>
                 </div>
               </div>

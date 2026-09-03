@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from "react";
 import Markdown from "react-markdown";
+import StreamMarkdown from "./StreamMarkdown";
+import { consumeAIStream } from "../lib/aiStream";
 import { useGlobalStore } from "../store";
 import { 
   Coins, 
@@ -67,6 +69,8 @@ export default function AssetsHub({ assets }: AssetsHubProps) {
   const [isLoadingAi, setIsLoadingAi] = useState(false);
   const [aiError, setAiError] = useState("");
   const [isAiReportFallback, setIsAiReportFallback] = useState(false);
+  /** QA8-C: true while SSE tokens of the comparison report are arriving. */
+  const [isAiStreaming, setIsAiStreaming] = useState(false);
   const [isPdfReportFallback, setIsPdfReportFallback] = useState(false);
 
   // Format IDR Ratios
@@ -161,33 +165,28 @@ export default function AssetsHub({ assets }: AssetsHubProps) {
     setAiError("");
     setAiReport("");
     setIsAiReportFallback(false);
+    setIsAiStreaming(false);
 
-    try {
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json"
-      };
+    const baseBody = {
+      type: "comparison",
+      aiTone: settings.aiTone,
+      aiMaxTokens: settings.aiMaxTokens,
+      aiTemperature: settings.aiTemperature,
+      aiThinkingMode: settings.aiThinkingMode || "high",
+      assetComparison: {
+        assetA,
+        assetB
+      }
+    };
 
-      const res = await fetch("/api/gemini/analyze", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          type: "comparison",
-          aiTone: settings.aiTone,
-          aiMaxTokens: settings.aiMaxTokens,
-          aiTemperature: settings.aiTemperature,
-          aiThinkingMode: settings.aiThinkingMode || "high",
-          assetComparison: {
-            assetA,
-            assetB
-          }
-        })
-      });
-
+    // QA8-C: legacy non-stream transport, kept verbatim as the fallback when
+    // the server answers plain JSON (cache hit / older deployment) and for the
+    // single retry when SSE fails BEFORE the first token arrives.
+    const applyJsonResponse = async (res: Response) => {
       const contentType = res.headers.get("content-type");
       if (!contentType || !contentType.includes("application/json")) {
         throw new Error(`Format data tidak valid dari server (HTTP ${res.status}).`);
       }
-
       const data = await res.json();
       if (res.ok) {
         setAiReport(data.analysis);
@@ -195,9 +194,67 @@ export default function AssetsHub({ assets }: AssetsHubProps) {
       } else {
         setAiError(data.error || "Gagal memperoleh analisis dari server.");
       }
+    };
+    const requestNonStream = async () => {
+      const res = await fetch("/api/gemini/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(baseBody)
+      });
+      await applyJsonResponse(res);
+    };
+
+    try {
+      // QA8-C: request the SSE stream first — the report flows in token by token.
+      const res = await fetch("/api/gemini/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...baseBody, stream: true })
+      });
+      const contentType = res.headers.get("content-type") || "";
+
+      if (res.ok && contentType.includes("text/event-stream") && res.body) {
+        let gotToken = false;
+        let streamError: string | null = null;
+        setIsAiStreaming(true);
+        await consumeAIStream(res, {
+          onToken: (chunk) => {
+            gotToken = true;
+            setAiReport((prev) => prev + chunk);
+          },
+          onDone: (payload) => {
+            // The done frame is authoritative — apply it exactly like the
+            // non-stream JSON response (incl. the honest isFallback label).
+            if (payload && typeof payload.analysis === "string") {
+              setAiReport(payload.analysis);
+            }
+            setIsAiReportFallback(!!(payload && payload.isFallback));
+          },
+          onError: (msg) => {
+            streamError = msg;
+          }
+        });
+        setIsAiStreaming(false);
+
+        if (streamError && !gotToken) {
+          // QA8-C: SSE failed before any content — retry ONCE over the legacy
+          // non-stream path so the user still gets a report.
+          await requestNonStream();
+          return;
+        }
+        if (streamError) {
+          // Error after partial content — keep the partial text + honest note.
+          setAiError(`Aliran data AI terputus: ${streamError}`);
+        }
+        return;
+      }
+
+      // Server answered JSON (cache hit / no stream support) — legacy path.
+      await applyJsonResponse(res);
     } catch (err: any) {
       setAiError("Terjadi kesalahan koneksi server: " + err.message);
     } finally {
+      setIsAiStreaming(false);
       setIsLoadingAi(false);
     }
   };
@@ -663,6 +720,11 @@ export default function AssetsHub({ assets }: AssetsHubProps) {
                       <div className="flex items-center space-x-2 text-blue-400 font-bold">
                         <BookOpen className="w-4 h-4" />
                         <span className="uppercase font-mono text-[10px]">Laporan Penasihat AI Keuangan</span>
+                        {isAiStreaming && (
+                          <span className="text-[8px] font-mono px-1.5 py-0.5 rounded border bg-violet-500/10 border-violet-500/25 text-violet-300 flex items-center gap-1" title="Analisis mengalir token demi token (SSE)">
+                            <span className="w-1 h-1 rounded-full bg-violet-400 animate-pulse" /> streaming…
+                          </span>
+                        )}
                       </div>
                       <button
                         onClick={handleExportCfaReportPDF}
@@ -681,7 +743,9 @@ export default function AssetsHub({ assets }: AssetsHubProps) {
                       </div>
                     )}
                     <div className="markdown-body leading-relaxed text-[11px] font-sans">
-                      <Markdown>{aiReport}</Markdown>
+                      {/* QA8-C: progressive markdown — memoized paragraphs, raw
+                          streaming tail + caret. */}
+                      <StreamMarkdown text={aiReport} isStreaming={isAiStreaming} />
                     </div>
                   </div>
                 )}

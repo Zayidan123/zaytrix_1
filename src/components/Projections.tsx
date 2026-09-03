@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from "react";
-import Markdown from "react-markdown";
+import StreamMarkdown from "./StreamMarkdown";
+import { consumeAIStream } from "../lib/aiStream";
 import { useGlobalStore } from "../store";
 import { 
   TrendingUp, 
@@ -55,6 +56,8 @@ export default function Projections({ assets }: ProjectionsProps) {
   const [isLoadingAi, setIsLoadingAi] = useState(false);
   const [aiError, setAiError] = useState("");
   const [isAiFallback, setIsAiFallback] = useState(false);
+  /** QA8-C: true while SSE tokens of the projection analysis are arriving. */
+  const [isAiStreaming, setIsAiStreaming] = useState(false);
 
   const selectedAsset = useMemo(() => {
     return assets.find(a => a.symbol === targetSymbol) || assets[0];
@@ -284,38 +287,33 @@ export default function Projections({ assets }: ProjectionsProps) {
     setAiError("");
     setAiAnalysis("");
     setIsAiFallback(false);
+    setIsAiStreaming(false);
 
-    try {
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json"
-      };
+    const baseBody = {
+      type: "projection",
+      aiTone: settings.aiTone,
+      aiMaxTokens: settings.aiMaxTokens,
+      aiTemperature: settings.aiTemperature,
+      aiThinkingMode: settings.aiThinkingMode || "high",
+      modelData: {
+        asset: selectedAsset,
+        purchasePrice: parseFloat(purchasePrice),
+        targetPrice: finalSummary.finalValue,
+        holdingPeriod: parseInt(holdingPeriod),
+        growthRate: parseFloat(growthRate),
+        yieldRate: parseFloat(yieldRate),
+        riskScenario
+      }
+    };
 
-      const res = await fetch("/api/gemini/analyze", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          type: "projection",
-          aiTone: settings.aiTone,
-          aiMaxTokens: settings.aiMaxTokens,
-          aiTemperature: settings.aiTemperature,
-          aiThinkingMode: settings.aiThinkingMode || "high",
-          modelData: {
-            asset: selectedAsset,
-            purchasePrice: parseFloat(purchasePrice),
-            targetPrice: finalSummary.finalValue,
-            holdingPeriod: parseInt(holdingPeriod),
-            growthRate: parseFloat(growthRate),
-            yieldRate: parseFloat(yieldRate),
-            riskScenario
-          }
-        })
-      });
-
+    // QA8-C: legacy non-stream transport, kept verbatim as the fallback when
+    // the server answers plain JSON (cache hit / older deployment) and for the
+    // single retry when SSE fails BEFORE the first token arrives.
+    const applyJsonResponse = async (res: Response) => {
       const contentType = res.headers.get("content-type");
       if (!contentType || !contentType.includes("application/json")) {
         throw new Error(`Format data tidak valid dari server (HTTP ${res.status}).`);
       }
-
       const data = await res.json();
       if (res.ok) {
         setAiAnalysis(data.analysis);
@@ -323,9 +321,67 @@ export default function Projections({ assets }: ProjectionsProps) {
       } else {
         setAiError(data.error || "Gagal memperoleh analitis proyeksi dari server.");
       }
+    };
+    const requestNonStream = async () => {
+      const res = await fetch("/api/gemini/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(baseBody)
+      });
+      await applyJsonResponse(res);
+    };
+
+    try {
+      // QA8-C: request the SSE stream first — the analysis flows in token by token.
+      const res = await fetch("/api/gemini/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...baseBody, stream: true })
+      });
+      const contentType = res.headers.get("content-type") || "";
+
+      if (res.ok && contentType.includes("text/event-stream") && res.body) {
+        let gotToken = false;
+        let streamError: string | null = null;
+        setIsAiStreaming(true);
+        await consumeAIStream(res, {
+          onToken: (chunk) => {
+            gotToken = true;
+            setAiAnalysis((prev) => prev + chunk);
+          },
+          onDone: (payload) => {
+            // The done frame is authoritative — apply it exactly like the
+            // non-stream JSON response (incl. the honest isFallback label).
+            if (payload && typeof payload.analysis === "string") {
+              setAiAnalysis(payload.analysis);
+            }
+            setIsAiFallback(!!(payload && payload.isFallback));
+          },
+          onError: (msg) => {
+            streamError = msg;
+          }
+        });
+        setIsAiStreaming(false);
+
+        if (streamError && !gotToken) {
+          // QA8-C: SSE failed before any content — retry ONCE over the legacy
+          // non-stream path so the user still gets an analysis.
+          await requestNonStream();
+          return;
+        }
+        if (streamError) {
+          // Error after partial content — keep the partial text + honest note.
+          setAiError(`Aliran data AI terputus: ${streamError}`);
+        }
+        return;
+      }
+
+      // Server answered JSON (cache hit / no stream support) — legacy path.
+      await applyJsonResponse(res);
     } catch (err: any) {
       setAiError("Terjadi error koneksi server: " + err.message);
     } finally {
+      setIsAiStreaming(false);
       setIsLoadingAi(false);
     }
   };
@@ -582,6 +638,11 @@ export default function Projections({ assets }: ProjectionsProps) {
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-2 mb-2">
                   <h5 className="text-sm font-bold text-slate-200 font-mono tracking-wider flex items-center gap-1.5">
                     <Sparkles className="w-4 h-4 text-blue-400" /> OPINI KEUANGAN AI (CFA)
+                    {isAiStreaming && (
+                      <span className="text-[8px] font-mono px-1.5 py-0.5 rounded border bg-violet-500/10 border-violet-500/25 text-violet-300 flex items-center gap-1" title="Analisis mengalir token demi token (SSE)">
+                        <span className="w-1 h-1 rounded-full bg-violet-400 animate-pulse" /> streaming…
+                      </span>
+                    )}
                   </h5>
                   {aiAnalysis && (
                     <button
@@ -608,7 +669,9 @@ export default function Projections({ assets }: ProjectionsProps) {
                       </div>
                     )}
                     <div className="markdown-body text-[11px] leading-relaxed">
-                      <Markdown>{aiAnalysis}</Markdown>
+                      {/* QA8-C: progressive markdown — memoized paragraphs, raw
+                          streaming tail + caret. */}
+                      <StreamMarkdown text={aiAnalysis} isStreaming={isAiStreaming} />
                     </div>
                   </div>
                 ) : aiError ? (

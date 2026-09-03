@@ -19,7 +19,7 @@
 
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import Markdown from "react-markdown";
+import StreamMarkdown from "./StreamMarkdown";
 import {
   MessageCircle,
   Send,
@@ -505,14 +505,10 @@ ATURAN JAWABAN:
               >
                 {msg.role === "assistant" ? (
                   <div className="text-xs leading-relaxed prose prose-sm prose-invert max-w-none [&_p]:my-1 [&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-xs [&_strong]:text-white [&_ul]:my-1 [&_li]:my-0.5">
-                    <Markdown>{msg.content}</Markdown>
-                    {msg.isStreaming && (
-                      <span
-                        className="zx-stream-cursor"
-                        aria-label="AI sedang menulis"
-                        title="AI sedang menulis…"
-                      />
-                    )}
+                    {/* QA8-C: progressive markdown render — finished paragraphs
+                        are memoized, the streaming tail stays raw with a
+                        blinking caret (provided by StreamMarkdown). */}
+                    <StreamMarkdown text={msg.content} isStreaming={msg.isStreaming} />
                   </div>
                 ) : (
                   <p className="text-xs leading-relaxed">{msg.content}</p>
@@ -647,22 +643,9 @@ ATURAN JAWABAN:
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(139,92,246,0.3); border-radius: 2px; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(139,92,246,0.5); }
-        /* QA7-F1: terminal-style blinking caret shown while AI tokens stream */
-        .zx-stream-cursor {
-          display: inline-block;
-          width: 7px;
-          height: 13px;
-          margin-left: 2px;
-          vertical-align: text-bottom;
-          border-radius: 1.5px;
-          background: linear-gradient(180deg, #a78bfa, #7c3aed);
-          box-shadow: 0 0 8px rgba(139, 92, 246, 0.65);
-          animation: zx-caret-blink 0.85s steps(1) infinite;
-        }
-        @keyframes zx-caret-blink {
-          0%, 55% { opacity: 1; }
-          56%, 100% { opacity: 0; }
-        }
+        /* QA8-C: the .zx-stream-cursor caret + blink keyframes now ship with
+           <StreamMarkdown> so every streaming host can use them (identical
+           rules, rendered via a de-duplicated hoisted <style> there). */}
       `}</style>
     </motion.div>
   );

@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "motion/react";
+import { List, useDynamicRowHeight, type RowComponentProps } from "react-window";
 import {
   Terminal,
   RefreshCw,
@@ -13,10 +14,12 @@ import {
   Bug,
   CircleSlash,
   Clock,
+  Layers,
+  SlidersHorizontal,
 } from "lucide-react";
 
 /* ────────────────────────────────────────────────────────────────────────────
-   SystemLogsPanel — QA4-F1 (ronde QA #4)
+   SystemLogsPanel — QA4-F1 (ronde QA #4) · QA8-B (virtualisasi + LOG_LEVEL)
    ----------------------------------------------------------------------------
    Panel operator untuk LOG SISTEM TERSTRUKTUR (QA3-F1). Membaca
    GET /api/system/logs (requireAuth — sesi cookie otomatis terkirim).
@@ -29,10 +32,43 @@ import {
        (email → u***@, JWT/token → mask, kunci sensitif → [REDACTED])
      — ?level= mem-filter severity MINIMUM; ?limit= 1..500
 
-   Fitur: filter level, pencarian, batas entri, auto-refresh 30 dtk
-   (default ON), baris expandable (payload data JSON), statistik level,
-   estetika terminal konsisten dengan Settings Hub. Semua label jujur —
-   tidak ada klaim "real-time streaming": ini polling ring buffer.
+   QA8-B FITUR 1 — VIRTUALISASI (react-window v2, API baru — BUKAN v1):
+     • <List rowComponent rowProps rowCount rowHeight overscanCount> —
+       rowComponent menerima { ariaAttributes, index, style } + rowProps.
+     • Tinggi variabel (baris expandable): rowHeight menerima objek
+       DynamicRowHeight dari hook useDynamicRowHeight({ defaultRowHeight, key }).
+       List memasang ResizeObserver pada tiap baris yang ter-render
+       (observeRowElements) → tinggi nyata terukur otomatis → cache
+       diperbarui lewat setRowHeight → offset baris berikut digeser.
+     • RESET cache: opsi `key` pada useDynamicRowHeight menghapus seluruh
+       cache tinggi saat nilainya berubah (padanan "resetAfterIndex" v1 —
+       v2 tidak punya API imperatif itu; reset per-key adalah mekanismenya).
+       Key diikat ke BENTUK dataset (filter level / limit / pencarian).
+       Saat polling 30 dtk menggeser indeks (entri baru masuk di depan),
+       cache TIDAK direset; baris terlihat terukur ulang otomatis oleh
+       ResizeObserver saat kontennya berubah → deviasi posisi scroll yang
+       kecil dan sesaat mungkin terjadi (jujur: self-healing begitu baris
+       ter-render; ini trade-off agar tidak ada loncatan tiap 30 detik).
+     • Toggle expand: tinggi estimasi di-seed SEGERA via setRowHeight
+       (44px collapsed; expanded = header + aproksimasi tinggi payload JSON
+       dari panjang teks + jumlah baris) supaya offset baris di bawahnya
+       kira-kira benar sebelum ResizeObserver melaporkan tinggi sebenarnya.
+       Estimasi memang aproksimasi — koreksi otomatis menyusul.
+     • Catatan jujur di UI: "Baris divirtualisasi — hanya area terlihat
+       yang dirender".
+
+   QA8-B FITUR 2 — TOGGLE LOG_LEVEL RUNTIME (server-side):
+     • GET  /api/system/logs/level → level runtime saat ini.
+     • POST /api/system/logs/level { level } → setLogLevel + entri audit
+       warn (module "system") di ring buffer. CSRF double-submit ditangani
+       wrapper global window.fetch di main.tsx (header X-CSRF-Token dari
+       cookie zaytrix_csrf + satu retry transparan bila cookie basi) —
+       pola yang sama persis dengan semua POST lain di aplikasi ini.
+
+   Fitur asli QA4-F1 dipertahankan: filter level + count, pencarian,
+   batas entri, auto-refresh 30 dtk (default ON, polling — BUKAN klaim
+   streaming), baris expandable (payload JSON), statistik level, state
+   loading/empty/error jujur, kartu "Catatan Integritas Log".
    ──────────────────────────────────────────────────────────────────────────── */
 
 type LogLevel = "debug" | "info" | "warn" | "error";
@@ -50,6 +86,13 @@ interface LogsResponse {
   total: number;
   ringCapacity: number;
   entries: LogEntry[];
+}
+
+interface LevelResponse {
+  success: boolean;
+  level?: string;
+  note?: string;
+  error?: string;
 }
 
 const LEVEL_CONFIG: Record<LogLevel, { label: string; chip: string; text: string; icon: React.ReactNode }> = {
@@ -79,9 +122,24 @@ const LEVEL_CONFIG: Record<LogLevel, { label: string; chip: string; text: string
   },
 };
 
+/* Tooltip tombol toggle LOG_LEVEL (QA8-B) — penjelasan konsekuensi tiap level. */
+const LEVEL_TOGGLE_TIP: Record<LogLevel, string> = {
+  debug: "Semua entri dicatat (debug + info + warn + error) — paling rinci.",
+  info: "Entri info/warn/error dicatat; entri debug disembunyikan (default LOG_LEVEL produksi).",
+  warn: "Hanya entri warning dan error yang dicatat.",
+  error: "Hanya entri error yang dicatat — paling senyap.",
+};
+
 const LEVEL_ORDER: LogLevel[] = ["debug", "info", "warn", "error"];
 const AUTO_REFRESH_MS = 30_000;
 const LIMIT_OPTIONS = [50, 100, 200, 500];
+
+/* ── Konstanta virtualisasi (QA8-B) ───────────────────────────────────────── */
+const LIST_VIEWPORT_PX = 420;   // tinggi viewport daftar (dahulu max-h-[420px])
+const ROW_DEFAULT_HEIGHT = 44;  // estimasi baris collapsed (spesifikasi QA8-B)
+const PRE_CLAMP_PX = 160;       // max-h-40 pada <pre> payload (scroll internal)
+const EST_CHARS_PER_LINE = 110; // aproksimasi karakter per baris mono 9.5px
+const EST_LINE_HEIGHT_PX = 14;  // aproksimasi tinggi baris teks 9.5px
 
 function formatClock(d: Date): string {
   return d.toLocaleTimeString("id-ID", { hour12: false });
@@ -93,6 +151,104 @@ function shortTime(ts: string): string {
   } catch {
     return "--:--:--";
   }
+}
+
+function isLogLevel(v: unknown): v is LogLevel {
+  return v === "debug" || v === "info" || v === "warn" || v === "error";
+}
+
+/* Format payload data untuk baris expandable — dipakai render DAN estimasi
+   tinggi (satu sumber kebenaran supaya estimasi menghitung teks yang sama). */
+function formatPayload(entry: LogEntry): string {
+  if (!Array.isArray(entry.data) || entry.data.length === 0) return "";
+  return entry.data
+    .map((d) => {
+      try {
+        return typeof d === "string" ? d : JSON.stringify(d, null, 2);
+      } catch {
+        return String(d);
+      }
+    })
+    .join("\n\n— argumen berikutnya —\n\n");
+}
+
+/* Estimasi tinggi baris (QA8-B): collapsed ~44px; expanded = header +
+ * aproksimasi tinggi <pre> payload (jumlah baris eksplisit vs baris hasil
+ * word-wrap, di-clamp max-h-40). Ini APROKSIMASI — ResizeObserver react-window
+ * mengoreksi dengan tinggi sebenarnya begitu baris ter-render. */
+function estimateRowHeight(entry: LogEntry, expanded: boolean): number {
+  if (!expanded || !Array.isArray(entry.data) || entry.data.length === 0) {
+    return ROW_DEFAULT_HEIGHT;
+  }
+  const payload = formatPayload(entry);
+  const explicitLines = payload.split("\n").length;
+  const wrappedLines = Math.ceil(payload.length / EST_CHARS_PER_LINE);
+  const lines = Math.max(explicitLines, wrappedLines, 1);
+  const preContent = 16 + lines * EST_LINE_HEIGHT_PX; // padding p-2 + tinggi baris
+  const pre = Math.min(preContent, PRE_CLAMP_PX); // <pre> scroll internal di atas 160px
+  return ROW_DEFAULT_HEIGHT + 8 + pre; // header + margin mb-2 + <pre>
+}
+
+/* ── Komponen baris virtual (module scope — identitas stabil supaya memo
+      internal react-window tetap efektif; rowProps membawa data + state). ── */
+interface LogRowProps {
+  entries: LogEntry[];
+  expandedIdx: number | null;
+  onToggle: (index: number) => void;
+}
+
+function LogRow({ ariaAttributes, index, style, entries, expandedIdx, onToggle }: RowComponentProps<LogRowProps>) {
+  const entry = entries[index];
+  if (!entry) return null;
+  const conf = LEVEL_CONFIG[entry.level] ?? LEVEL_CONFIG.info;
+  const hasData = Array.isArray(entry.data) && entry.data.length > 0;
+  const expanded = expandedIdx === index;
+  const isLastRow = index === entries.length - 1;
+  return (
+    <div
+      {...ariaAttributes}
+      style={style}
+      className={`group hover:bg-slate-900/40 transition-colors ${isLastRow ? "" : "border-b border-slate-900/80"}`}
+    >
+      <button
+        onClick={() => hasData && onToggle(index)}
+        className="w-full text-left px-3 py-1.5 flex items-start gap-2 font-mono"
+        aria-expanded={hasData ? expanded : undefined}
+        aria-label={hasData ? `${entry.level} ${entry.module}: ${entry.msg} — tampilkan detail data` : undefined}
+      >
+        <span className="shrink-0 mt-0.5 text-slate-600">
+          {hasData ? (
+            expanded ? (
+              <ChevronDown className="w-3 h-3" />
+            ) : (
+              <ChevronRight className="w-3 h-3" />
+            )
+          ) : (
+            <span className="inline-block w-3 h-3" />
+          )}
+        </span>
+        <span className="shrink-0 text-[9.5px] text-slate-500">{shortTime(entry.ts)}</span>
+        <span className={`shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded border ${conf.chip}`}>{conf.label}</span>
+        <span className="shrink-0 text-[9px] font-bold text-teal-300/80">[{entry.module}]</span>
+        <span className="text-[10.5px] text-slate-300 leading-relaxed break-all min-w-0">{entry.msg}</span>
+      </button>
+      <AnimatePresence>
+        {expanded && hasData && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="overflow-hidden"
+          >
+            <pre className="mx-3 mb-2 p-2 rounded bg-slate-950 border border-slate-900 text-[9.5px] font-mono text-slate-400 whitespace-pre-wrap break-all max-h-40 overflow-y-auto custom-scrollbar">
+              {formatPayload(entry)}
+            </pre>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
 }
 
 export default function SystemLogsPanel() {
@@ -110,7 +266,11 @@ export default function SystemLogsPanel() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
 
-  const listRef = useRef<HTMLDivElement>(null);
+  /* QA8-B: state level log runtime server-side */
+  const [serverLevel, setServerLevel] = useState<LogLevel | null>(null);
+  const [levelLoading, setLevelLoading] = useState(true);
+  const [postingLevel, setPostingLevel] = useState<LogLevel | null>(null);
+  const [levelError, setLevelError] = useState<string | null>(null);
 
   const load = useCallback(
     async (silent: boolean) => {
@@ -142,6 +302,65 @@ export default function SystemLogsPanel() {
     [levelFilter, limit]
   );
 
+  /* QA8-B: muat level runtime saat mount (GET /api/system/logs/level) */
+  const loadServerLevel = useCallback(async () => {
+    setLevelLoading(true);
+    setLevelError(null);
+    try {
+      const res = await fetch("/api/system/logs/level");
+      if (!res.ok) {
+        if (res.status === 401) throw new Error("Sesi tidak valid — silakan masuk kembali.");
+        throw new Error(`Server merespon dengan kode ${res.status}.`);
+      }
+      const json = (await res.json()) as LevelResponse;
+      if (!json.success || !isLogLevel(json.level)) throw new Error("Respons level server tidak valid.");
+      setServerLevel(json.level);
+    } catch (e) {
+      setServerLevel(null);
+      setLevelError(e instanceof Error ? e.message : "Gagal memuat level log server.");
+    } finally {
+      setLevelLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadServerLevel();
+  }, [loadServerLevel]);
+
+  /* QA8-B: ubah level runtime (POST). Kalau server menolak/gagal → state
+   * TIDAK berubah + pesan error inline jujur. CSRF double-submit ditangani
+   * wrapper global window.fetch (main.tsx): header X-CSRF-Token otomatis
+   * dari cookie zaytrix_csrf + satu retry transparan bila cookie basi —
+   * pola yang sama dengan semua POST lain di aplikasi ini. */
+  const changeServerLevel = useCallback(
+    async (level: LogLevel) => {
+      if (postingLevel !== null) return;
+      setPostingLevel(level);
+      setLevelError(null);
+      try {
+        const res = await fetch("/api/system/logs/level", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ level }),
+        });
+        const json = (await res.json().catch(() => null)) as LevelResponse | null;
+        if (!res.ok || !json?.success) {
+          throw new Error(json?.error || `Server menolak perubahan level (kode ${res.status}).`);
+        }
+        // Level aktif diambil dari respons SERVER (bukan asumsi lokal) — jujur.
+        setServerLevel(isLogLevel(json.level) ? json.level : level);
+        // Entri audit perubahan level langsung terlihat: refresh senyap ring buffer.
+        void load(true);
+      } catch (e) {
+        setLevelError(e instanceof Error ? e.message : "Gagal mengubah level log server.");
+      } finally {
+        setPostingLevel(null);
+      }
+    },
+    [postingLevel, load]
+  );
+
   /* Initial load + re-load on filter change */
   useEffect(() => {
     load(false);
@@ -155,13 +374,32 @@ export default function SystemLogsPanel() {
   }, [autoRefresh, load]);
 
   /* Client-side search (msg + module) */
-  const visibleEntries = query.trim()
-    ? entries.filter(
-        (e) =>
-          e.msg.toLowerCase().includes(query.toLowerCase()) ||
-          e.module.toLowerCase().includes(query.toLowerCase())
-      )
-    : entries;
+  const visibleEntries = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return entries;
+    return entries.filter((e) => e.msg.toLowerCase().includes(q) || e.module.toLowerCase().includes(q));
+  }, [entries, query]);
+
+  /* QA8-B: cache tinggi dinamis react-window v2. Key reset diikat ke BENTUK
+   * dataset (filter/limit/pencarian) — bukan tiap polling — supaya tidak
+   * ada loncatan tiap 30 dtk; baris terlihat ter-ukur ulang otomatis oleh
+   * ResizeObserver saat konten bergeser (deviasi kecil sesaat, diakui jujur). */
+  const heightCacheKey = `${levelFilter}:${limit}:${query.trim()}`;
+  const dynamicRowHeight = useDynamicRowHeight({ defaultRowHeight: ROW_DEFAULT_HEIGHT, key: heightCacheKey });
+
+  /* Toggle expand: seed tinggi estimasi SEKARANG supaya offset baris di
+   * bawahnya kira-kira benar sebelum ResizeObserver melaporkan tinggi nyata
+   * (yang kemudian mengoreksi nilai estimasi ini). */
+  const handleToggle = useCallback(
+    (index: number) => {
+      const entry = visibleEntries[index];
+      if (!entry || !Array.isArray(entry.data) || entry.data.length === 0) return;
+      const willExpand = expandedIdx !== index;
+      dynamicRowHeight.setRowHeight(index, estimateRowHeight(entry, willExpand));
+      setExpandedIdx(willExpand ? index : null);
+    },
+    [expandedIdx, visibleEntries, dynamicRowHeight]
+  );
 
   const stats = LEVEL_ORDER.reduce(
     (acc, lv) => {
@@ -289,7 +527,60 @@ export default function SystemLogsPanel() {
             </div>
           </div>
 
-          {/* Info bar: redaksi + ring */}
+          {/* QA8-B: toggle LOG_LEVEL runtime (server-side, jujur) */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 pt-2 border-t border-slate-900/70">
+            <span className="inline-flex items-center gap-1 text-[9.5px] font-mono font-bold text-slate-500">
+              <SlidersHorizontal className="w-3 h-3" />
+              LOG_LEVEL SERVER
+            </span>
+            <div className="flex items-center gap-1 flex-wrap" role="group" aria-label="Ubah level log server (berlaku runtime)">
+              {LEVEL_ORDER.map((lv) => {
+                const active = serverLevel === lv;
+                const posting = postingLevel === lv;
+                return (
+                  <button
+                    key={lv}
+                    onClick={() => void changeServerLevel(lv)}
+                    disabled={postingLevel !== null}
+                    aria-pressed={active}
+                    title={`${LEVEL_TOGGLE_TIP[lv]} Berlaku untuk entri baru selama proses hidup; restart mengembalikan ke LOG_LEVEL env.`}
+                    className={`text-[9.5px] font-mono font-bold px-2 py-1 rounded border transition-colors inline-flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed ${
+                      active
+                        ? LEVEL_CONFIG[lv].chip
+                        : "bg-transparent text-slate-500 border-slate-800 hover:text-slate-300"
+                    }`}
+                  >
+                    {LEVEL_CONFIG[lv].icon}
+                    {LEVEL_CONFIG[lv].label}
+                    {posting && <span aria-hidden="true">…</span>}
+                  </button>
+                );
+              })}
+              {levelLoading && (
+                <span className="text-[9px] font-mono text-slate-500" role="status">
+                  memuat level server…
+                </span>
+              )}
+            </div>
+            <p className="basis-full sm:basis-auto sm:ml-auto text-[9px] font-mono text-slate-500">
+              Level berlaku untuk entri BARU selama proses hidup; entri lama di ring tidak diubah; restart mengembalikan
+              ke LOG_LEVEL env.
+            </p>
+            {levelError && (
+              <p className="basis-full text-[9.5px] font-mono text-rose-400 inline-flex items-center gap-2" role="alert">
+                <AlertTriangle className="w-3 h-3 shrink-0" />
+                <span className="min-w-0 break-all">{levelError}</span>
+                <button
+                  onClick={() => void loadServerLevel()}
+                  className="shrink-0 underline decoration-dotted hover:text-rose-300"
+                >
+                  muat ulang level
+                </button>
+              </p>
+            )}
+          </div>
+
+          {/* Info bar: redaksi + ring + virtualisasi */}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[9.5px] font-mono text-slate-500">
             <span className="inline-flex items-center gap-1">
               <ShieldCheck className="w-3 h-3 text-emerald-400/70" />
@@ -299,11 +590,17 @@ export default function SystemLogsPanel() {
               <Activity className="w-3 h-3 text-teal-300/70" />
               Ring buffer {entries.length}/{ringCapacity} entri · poll 30 dtk (bukan streaming)
             </span>
+            <span className="inline-flex items-center gap-1">
+              <Layers className="w-3 h-3 text-violet-300/70" />
+              Baris divirtualisasi — hanya area terlihat yang dirender
+            </span>
           </div>
         </div>
 
-        {/* Log list */}
-        <div ref={listRef} className="max-h-[420px] overflow-y-auto bg-[#05070d] custom-scrollbar" role="log" aria-label="Daftar log sistem">
+        {/* Log list — react-window v2 (QA8-B): hanya baris terlihat + overscan
+            yang dirender; scroll native pada elemen daftar; keyboard tetap
+            natural (tab ke baris fokus → browser auto-scroll-kan ke area fokus). */}
+        <div className="bg-[#05070d]">
           {loading && (
             <div className="p-4 space-y-2">
               {[...Array(6)].map((_, i) => (
@@ -338,66 +635,17 @@ export default function SystemLogsPanel() {
           )}
 
           {!loading && !error && visibleEntries.length > 0 && (
-            <div className="divide-y divide-slate-900/80">
-              {visibleEntries.map((entry, idx) => {
-                const conf = LEVEL_CONFIG[entry.level] ?? LEVEL_CONFIG.info;
-                const hasData = Array.isArray(entry.data) && entry.data.length > 0;
-                const expanded = expandedIdx === idx;
-                return (
-                  <div key={`${entry.ts}-${idx}`} className="group hover:bg-slate-900/40 transition-colors">
-                    <button
-                      onClick={() => hasData && setExpandedIdx(expanded ? null : idx)}
-                      className="w-full text-left px-3 py-1.5 flex items-start gap-2 font-mono"
-                      aria-expanded={hasData ? expanded : undefined}
-                      aria-label={hasData ? `${entry.level} ${entry.module}: ${entry.msg} — tampilkan detail data` : undefined}
-                    >
-                      <span className="shrink-0 mt-0.5 text-slate-600">
-                        {hasData ? (
-                          expanded ? (
-                            <ChevronDown className="w-3 h-3" />
-                          ) : (
-                            <ChevronRight className="w-3 h-3" />
-                          )
-                        ) : (
-                          <span className="inline-block w-3 h-3" />
-                        )}
-                      </span>
-                      <span className="shrink-0 text-[9.5px] text-slate-500">{shortTime(entry.ts)}</span>
-                      <span
-                        className={`shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded border ${conf.chip}`}
-                      >
-                        {conf.label}
-                      </span>
-                      <span className="shrink-0 text-[9px] font-bold text-teal-300/80">[{entry.module}]</span>
-                      <span className="text-[10.5px] text-slate-300 leading-relaxed break-all min-w-0">{entry.msg}</span>
-                    </button>
-                    <AnimatePresence>
-                      {expanded && hasData && (
-                        <motion.div
-                          initial={{ height: 0, opacity: 0 }}
-                          animate={{ height: "auto", opacity: 1 }}
-                          exit={{ height: 0, opacity: 0 }}
-                          transition={{ duration: 0.18 }}
-                          className="overflow-hidden"
-                        >
-                          <pre className="mx-3 mb-2 p-2 rounded bg-slate-950 border border-slate-900 text-[9.5px] font-mono text-slate-400 whitespace-pre-wrap break-all max-h-40 overflow-y-auto custom-scrollbar">
-                            {entry.data!
-                              .map((d, i) => {
-                                try {
-                                  return typeof d === "string" ? d : JSON.stringify(d, null, 2);
-                                } catch {
-                                  return String(d);
-                                }
-                              })
-                              .join("\n\n— argumen berikutnya —\n\n")}
-                          </pre>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </div>
-                );
-              })}
-            </div>
+            <List
+              className="custom-scrollbar bg-[#05070d]"
+              style={{ height: LIST_VIEWPORT_PX, maxHeight: LIST_VIEWPORT_PX }}
+              defaultHeight={LIST_VIEWPORT_PX}
+              rowCount={visibleEntries.length}
+              rowHeight={dynamicRowHeight}
+              rowComponent={LogRow}
+              rowProps={{ entries: visibleEntries, expandedIdx, onToggle: handleToggle }}
+              overscanCount={6}
+              aria-label="Daftar log sistem"
+            />
           )}
         </div>
 
@@ -447,8 +695,17 @@ export default function SystemLogsPanel() {
           <li className="flex items-start gap-2">
             <Bug className="w-3 h-3 text-zinc-400 mt-0.5 shrink-0" />
             <span>
-              Level DEBUG hanya tampil bila server berjalan dengan LOG_LEVEL=debug (default: info di produksi, debug di
-              dev).
+              Level server (LOG_LEVEL) kini dapat <span className="text-slate-200 font-semibold">diubah runtime</span>{" "}
+              dari panel ini — berlaku untuk entri BARU saja; entri lama di ring tidak diubah; restart mengembalikan ke
+              nilai LOG_LEVEL env (default: info di produksi, debug di dev).
+            </span>
+          </li>
+          <li className="flex items-start gap-2">
+            <Layers className="w-3 h-3 text-violet-300 mt-0.5 shrink-0" />
+            <span>
+              Daftar baris <span className="text-slate-200 font-semibold">divirtualisasi</span> (react-window): hanya
+              area terlihat (+ beberapa baris overscan) yang dirender — tinggi baris expandable diukur otomatis;
+              estimasi awal bisa menyimpang sedikit sesaat sebelum terukur ulang.
             </span>
           </li>
         </ul>
