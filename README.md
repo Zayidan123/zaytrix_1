@@ -184,9 +184,9 @@ git add .github/ && git commit -m "ci: activate pipeline" && git push
 
 **Verifikasi ronde:** tsc 0 error · vitest 37/37 · smoke 18/18 PASS (0 page/console error) · **browser E2E**: analisis on-chain streaming live (thinking → `ANALISIS MENGALIR…` → selesai, `HASIL GEMINI` live non-fallback, 0 console error) · toggle LOG_LEVEL (DEBUG→WARN aktif → entri audit terlihat → baris expand → payload JSON ter-render → kembali DEBUG) · whale radar filter SPOT bekerja · **SSE trading-signals via curl**: 23+ frame token `⚡ openrouter · glm-4.5-air` mengalir nyata · 0 console error di semua skenario.
 
-### 🧪 Ronde QA Runtime #9 (3 Sep — REFACTOR MONOLITH: server.ts 5.521 → 444 baris, 12 modul terpisah)
+### 🧪 Ronde QA Runtime #9 (3 Sep — REFACTOR MONOLITH: server.ts 5.521 → 436 baris, 12 modul terpisah)
 
-**QA9-R3: item #3 yang di-skip ronde #8 dikerjakan — pemecahan monolith backend.** `server.ts` (5.521 baris, route + helper + state + background job tercampur dalam satu file) dipecah menjadi **12 modul fokus** di `src/server/` dengan `server.ts` tinggal composition root 444 baris (middleware global → wiring job latar → registrasi route → mount router lama → catch-all):
+**QA9-R3: item #3 yang di-skip ronde #8 dikerjakan — pemecahan monolith backend.** `server.ts` (5.521 baris, route + helper + state + background job tercampur dalam satu file) dipecah menjadi **12 modul fokus** di `src/server/` dengan `server.ts` tinggal composition root 436 baris (middleware global → wiring job latar → registrasi route → mount router lama → catch-all):
 
 | Modul baru | Isi (semua "extracted verbatim" — asal baris didokumentasikan di header tiap modul) |
 |---|---|
@@ -307,7 +307,7 @@ bun run test
 
 ```
 zaytrix_1/
-├── server.ts                    # Composition root Express (444 baris — middleware + wiring + registrasi 12 modul)
+├── server.ts                    # Composition root Express (436 baris — middleware + wiring + registrasi 12 modul)
 ├── prisma/schema.prisma         # 11 model + shadow Decimal/DateTime
 ├── src/
 │   ├── main.tsx                 # Entry + CSRF-aware fetch wrapper
@@ -337,7 +337,7 @@ zaytrix_1/
 | Bug QA runtime (9 ronde) | 15 ditemukan → semua diperbaiki |
 | Data fabrication tersisa | 0 |
 | Type errors | 0 |
-| Ukuran server.ts | 5.521 → 444 baris (12 modul, invariant route 45/45) |
+| Ukuran server.ts | 5.521 → 436 baris (12 modul, invariant route 45/45) |
 | Build produksi | ✅ (ESM, 492.9kb server) |
 | Test suite | ✅ 37/37 self-booting (FUNC-14 selesai) |
 | Commits | audit + 9 ronde QA runtime |
