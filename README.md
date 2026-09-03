@@ -8,7 +8,7 @@
 
 ---
 
-## 📅 Changelog — 31 Agustus 2026 (v5.2.0)
+## 📅 Changelog — 31 Ag s/d 3 Sep 2026 (v5.2.0 + 9 ronde QA runtime)
 
 ### 🔍 Audit Menyeluruh oleh GLM 5.3 (75 temuan)
 Tiga auditor paralel memeriksa seluruh codebase:
@@ -321,6 +321,7 @@ zaytrix_1/
 │   ├── lib/portfolioSync.ts     # Sinkronisasi portofolio + alert (merge)
 │   └── utils/pdfGenerator.ts    # PDF report (DOMPurify)
 ├── Caddyfile                    # Reverse proxy + dokumentasi TLS
+├── docs/github-actions-ci.yml   # Template CI (tinggal diaktifkan, lihat Roadmap)
 ├── scripts/
 │   └── purge-db-from-history.sh # Helper purge git history SEC-1 (QA #2)
 └── .env.example                 # Template env LENGKAP
@@ -328,7 +329,7 @@ zaytrix_1/
 
 ---
 
-## 📊 Status: v5.2.0 (31 Aug 2026)
+## 📊 Status: v5.2.0 (update terakhir: 3 Sep 2026)
 
 | Metric | Value |
 |--------|-------|
@@ -341,6 +342,35 @@ zaytrix_1/
 | Build produksi | ✅ (ESM, 492.9kb server) |
 | Test suite | ✅ 37/37 self-booting (FUNC-14 selesai) |
 | Commits | audit + 9 ronde QA runtime |
+
+---
+
+## 🗺️ Roadmap & Arah Tujuan (per 3 Sep 2026)
+
+> Sistem kini **stabil & tervalidasi penuh**: 9 ronde QA runtime, 0 bug aplikasi aktif, tipe bersih, 37/37 test, monolith backend sudah dipecah modular. Peta berikut disusun agar **Anda bisa memilih direksi berikutnya** — semua jalur saling lepas (bisa dikombinasikan).
+
+### ✅ Quick wins — siap dieksekusi kapan saja (rekomendasi QA)
+| # | Item | Nilai | Effort |
+|---|------|-------|--------|
+| 1 | **SSE untuk 3 endpoint AI terakhir**: `news-sentiment` (NewsSection), `analyze-pdf` (AssetsHub), `analyze-multi-pdf` (MultiDocAnalysis) | Konsistensi UX streaming — 5/8 endpoint AI sudah streaming, 3 ini masih "hang" 10–30 dtk saat proses | Kecil — kontrak token/done/error ronde #8 (`QA8-C`) tinggal diterapkan ulang; pola frontend `consumeAIStream` sudah ada |
+| 2 | Investigasi flake console "Maximum update depth exceeded" (React) | Console 100% bersih | Kecil — flake langka & pre-existing; semua interaksi tetap berfungsi |
+| 3 | Verifikasi feed whale FUTURES di lingkungan non-sandbox | Validasi venue kedua end-to-end | Kecil — kode & koneksi terverifikasi; hanya egress sandbox yang memfilter frame aggTrade futures |
+
+### 🧭 Direksi strategis — butuh keputusan Anda
+| Direksi | Isi | Kenapa siap |
+|---------|-----|-------------|
+| **A. Produksi & Deployment** | Deploy VPS/Docker + domain + HTTPS (Caddyfile sudah disiapkan), aktifkan CI (`cp docs/github-actions-ci.yml .github/workflows/ci.yml`), Sentry monitoring aktif | Build produksi sudah jalan (`dist/server.mjs`); graceful shutdown + health checker upstream sudah ada |
+| **B. Ekspansi AI** | RAG knowledge base (riwayat analisis + berita lokal), routing multi-model per tugas, AI agent multi-langkah | `aiRouter.ts` modular + streaming SSE + panel token/biaya sudah jadi fondasi |
+| **C. Ekspansi Data / Web3** | DEX data (pool Uniswap/dst.), wallet-tracking whale ETH, integrasi on-chain lebih dalam | Arsitektur `whaleStream.ts` dua-venue terbukti — tinggal direplikasi ke venue baru; badge kejujuran data konsisten |
+| **D. Eksekusi Trading** | Paper-trading engine → live order via API Key Vault (mulai Binance **testnet**) | Vault AES-256-GCM + probe autentikasi bursa + batas notional sudah ada — tapi risiko finansial real, uji bertahap |
+| **E. Mobile / PWA** | PWA offline-first + push notification mobile | Frontend responsif penuh; alert Telegram/Discord/WA sudah ada sebagai baseline notifikasi |
+| **F. SaaS Multi-user** | Tier langganan, billing, fitur tim | Auth enterprise-grade sudah ada — keputusan ini lebih bisnis daripada teknis |
+
+### ⚠️ Hutang keamanan — WAJIB dulu sebelum produksi (aksi Anda)
+1. Rotasi password semua user DB lama + purge sesi (SEC-1).
+2. Rotasi `SESSION_SECRET`, `ENCRYPTION_KEY`, `CSRF_SECRET` di `.env`.
+3. Aktifkan CI (satu perintah di atas).
+4. Hapus token GitHub (`ghp_…`) setelah tidak dipakai. Key OpenRouter **jangan pernah** di-commit — cukup di `.env` (sudah gitignored).
 
 ---
 
