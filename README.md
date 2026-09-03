@@ -168,6 +168,24 @@ git add .github/ && git commit -m "ci: activate pipeline" && git push
 
 ---
 
+### 🧪 Ronde QA Runtime #8 (3 Sep — SSE untuk SEMUA endpoint AI + whale futures + virtualisasi log + LOG_LEVEL runtime)
+
+**Fitur baru (5):**
+- **QA8-F1: Streaming SSE untuk 4 endpoint AI lainnya** — pola `chat-stream` ronde #7 kini berlaku untuk seluruh analisis yang lambat (10–30 dtk sebelumnya terasa "hang"):
+  - Endpoint: `POST /api/gemini/analyze`, `news-chat`, `analyze-onchain`, `trading-signals/analyze` — body yang sama + `"stream": true` → respons `text/event-stream` token-demi-token.
+  - Kontrak jujur: event `token` (konten bertahap) → `done` (payload **persis sama** dengan JSON non-stream — fallback report `isFallback` tetap dikirim saat AI gagal, jadi degradasi tidak pernah diam-diam) → `error`. Cache `geminiCacheSet` dan pencatatan sinyal tetap dieksekusi hanya saat stream tuntas (konten parsial tidak pernah di-cache). Abort klien → upstream fetch ikut di-abort.
+  - Frontend (`AssetsHub`, `Projections`, `NewsSection`, `AiSignals`, `OnChainData`): helper bersama `src/lib/aiStream.ts` (`consumeAIStream`); progres token dirender langsung; **error sebelum token pertama → retry sekali ke path non-stream lama** (path JSON lama 100% utuh sebagai jaring pengaman).
+- **QA8-F2: `StreamMarkdown` — render markdown bertahap saat streaming** — komponen bersama baru: paragraf yang sudah selesai di-render sebagai markdown **ter-memoisasi** (tidak di-parse ulang tiap token → beban render O(token baru), bukan O(seluruh teks)); paragraf ekor (masih mengalir) tampil sebagai teks mentah + kursor terminal — menghilangkan blok kode parsial yang tampak "rusak" sekejap. Dipakai `MarketSentimentChat` + kartu analisis streaming.
+- **QA8-F3: Whale Radar dua pasar — SPOT + FUTURES Binance** — `whaleStream.ts` kini menjaga **dua WebSocket persisten** (`stream.binance.com` spot + `fstream.binance.com` futures, 7 simbol `@aggTrade` masing-masing): satu buffer bersama dengan dedup `(market, symbol, tradeId)`, cap 900 baris / prune 30 menit; UI: badge SPOT (teal) / FUTURES (amber) per baris + chip filter SEMUA/SPOT/FUTURES + indikator kesehatan per-market (S●/F●) + statistik tekanan beli/jual terpisah per pasar; chip `WS LIVE` = minimal satu pasar terhubung (status per-market diekspos jujur di endpoint).
+- **QA8-F4: Virtualisasi daftar log sistem** (`react-window` v2) — panel "Log Sistem & Diagnostik" kini merender hanya baris terlihat (+overscan) dengan tinggi baris terukur otomatis (ResizeObserver — baris expandable dengan payload JSON tetap didukung, estimasi tinggi dikoreksi otomatis setelah render). Fitur ronde #4 (filter level + count, pencarian, limit, auto-refresh 30 dtk, expand) semuanya dipertahankan.
+- **QA8-F5: Toggle `LOG_LEVEL` runtime** — operator kini mengubah level logger **tanpa restart**: `GET/POST /api/system/logs/level` (requireAuth; validasi manual; perubahan ter-audit sebagai entri warn di ring buffer itu sendiri) + 4 tombol DEBUG/INFO/WARN/ERROR di panel log. Jujur: berlaku untuk entri BARU selama proses hidup — `LOG_LEVEL` env tetap default saat boot.
+
+**0 bug aplikasi baru ditemukan** — ronde fokus fitur murni (tren ronde #4+ berlanjut; 1 temuan QA skrip: filter baris log berdata langka di tampilan default — bukan bug, entri berdata kini deterministik hadir via entri audit LOG_LEVEL).
+
+**Verifikasi ronde:** tsc 0 error · vitest 37/37 · smoke 18/18 PASS (0 page/console error) · **browser E2E**: analisis on-chain streaming live (thinking → `ANALISIS MENGALIR…` → selesai, `HASIL GEMINI` live non-fallback, 0 console error) · toggle LOG_LEVEL (DEBUG→WARN aktif → entri audit terlihat → baris expand → payload JSON ter-render → kembali DEBUG) · whale radar filter SPOT bekerja · **SSE trading-signals via curl**: 23+ frame token `⚡ openrouter · glm-4.5-air` mengalir nyata · 0 console error di semua skenario.
+
+---
+
 ## 🚀 Fitur Utama
 
 ### 🔒 Keamanan Enterprise
@@ -185,7 +203,7 @@ git add .github/ && git commit -m "ci: activate pipeline" && git push
 - Binance WS (likuidasi + ticker), Binance Futures (funding/OI/LSR), CoinGecko (rankings+7d+sparkline), Coinpaprika, Alternative.me (Fear&Greed), Mempool.space, Blockchain.info, Coinmetrics, Santiment, CFTC, Yahoo Finance (IDX), RSS news, open.er-api (kurs USD/IDR live)
 - **Badge transparansi**: `isStale` / `EST` / `OFFLINE` / `isSimulation` / `isFallback` tampil di UI kapan pun data tidak 100% live
 
-### 🖥️ On-Chain Terminal (9 tab) · 📊 Trading & Portfolio (Backtester, DCA, Tax PMK-68, Risk VaR/CVaR, Rebalancing, Correlation) · 🤖 AI Streaming SSE (OpenRouter + Gemini fallback, panel token/biaya) · 🔔 Price Alerts + Telegram/Discord/WhatsApp
+### 🖥️ On-Chain Terminal (9 tab + Whale Radar SPOT/FUTURES) · 📊 Trading & Portfolio (Backtester, DCA, Tax PMK-68, Risk VaR/CVaR, Rebalancing, Correlation) · 🤖 AI Streaming SSE di SEMUA endpoint (OpenRouter + Gemini fallback, panel token/biaya, render markdown bertahap) · 🖥️ Konsol Operator (log virtualisasi + LOG_LEVEL runtime) · 🔔 Price Alerts + Telegram/Discord/WhatsApp
 
 ---
 
@@ -285,12 +303,12 @@ zaytrix_1/
 |--------|-------|
 | Temuan audit (GLM 5.3) | 75 (26 SEC + 25 DATA + 24 FUNC) |
 | Temuan ditangani | 75 / 75 |
-| Bug QA runtime (2 ronde) | 9 ditemukan → semua diperbaiki |
+| Bug QA runtime (8 ronde) | 15 ditemukan → semua diperbaiki |
 | Data fabrication tersisa | 0 |
 | Type errors | 0 |
 | Build produksi | ✅ (ESM, 492.9kb server) |
 | Test suite | ✅ 37/37 self-booting (FUNC-14 selesai) |
-| Commits | audit + 2 batch QA runtime |
+| Commits | audit + 8 ronde QA runtime |
 
 ---
 
