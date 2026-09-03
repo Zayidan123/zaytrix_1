@@ -12,9 +12,13 @@
  *   - Suggested quick-prompts (chips)
  *   - Live market context badge (Fear & Greed value + classification)
  *   - Loading + error states with graceful fallback when AI is unavailable
- *   - Persisted chat history to localStorage (per-user)
+ *   - Persisted chat history to localStorage (per-user) — fallback offline
  *   - Auto-scroll to latest message
  *   - Provider badge (OpenRouter / Gemini / fallback)
+ *   - QA7-F1: SSE streaming (token-by-token)
+ *   - QA10-E: riwayat percakapan per-user dari SERVER (GET /api/ai/history)
+ *     + pemilih model AI per request + tombol hapus riwayat (2 langkah)
+ *     + penanganan kuota harian (HTTP 429) + chip "MEMORI".
  */
 
 import React, { useEffect, useState, useRef, useCallback } from "react";
@@ -31,6 +35,8 @@ import {
   User,
   TrendingUp,
   Zap,
+  Check,
+  X,
 } from "lucide-react";
 
 interface ChatMessage {
@@ -47,6 +53,9 @@ interface ChatMessage {
   /** QA7-F2: token accounting from the final stream chunk */
   tokensUsed?: number;
   latencyMs?: number;
+  /** QA10-E: dimuat dari riwayat server (bukan sesi berjalan) — dipakai
+   * untuk menyisipkan pemisah "— riwayat sebelumnya —". */
+  fromHistory?: boolean;
 }
 
 interface MarketContext {
@@ -59,6 +68,25 @@ interface MarketContext {
 }
 
 const STORAGE_KEY = "zaytrix_market_chat_history";
+
+// QA10-E: kunci persistensi model AI pilihan user (per perangkat).
+const AI_MODEL_STORAGE_KEY = "zx-ai-model";
+
+// QA10-E: opsi pemilih model.
+// SINKRON dengan getAvailableModels() di src/server/aiRouter.ts — id HARUS
+// sama persis (server memvalidasi id; id tak dikenal didegradasi ke default
+// dengan log warn, bukan error). Kalau backend menambah model, daftar ini
+// (dan endpoint GET /api/ai/models) harus ikut diperbarui.
+const AI_MODEL_OPTIONS = [
+  { id: "z-ai/glm-4.5-air", label: "GLM 4.5 Air" },
+  { id: "meta-llama/llama-3.3-70b-instruct", label: "Llama 3.3 70B" },
+  { id: "google/gemma-3-27b-it", label: "Gemma 3 27B" },
+];
+
+// QA10-E: item render chat — pesan biasa atau pemisah riwayat/sesi.
+type ChatItem =
+  | { kind: "sep"; key: string }
+  | { kind: "msg"; key: string; msg: ChatMessage };
 
 const QUICK_PROMPTS = [
   "Apa sentimen pasar saat ini?",
@@ -90,16 +118,81 @@ export default function MarketSentimentChat() {
   const [contextLoading, setContextLoading] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Load persisted chat history
+  // QA10-E: model AI pilihan user (persist "zx-ai-model") + state UI riwayat.
+  const [aiModel, setAiModel] = useState<string>(AI_MODEL_OPTIONS[0].id);
+  const [historyUnavailable, setHistoryUnavailable] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false); // konfirmasi hapus 2-langkah
+  const [clearingHistory, setClearingHistory] = useState(false);
+  const [clearError, setClearError] = useState<string | null>(null);
+
+  // QA10-E: muat pilihan model tersimpan (validasi id agar tidak menyimpan
+  // id basi dari versi frontend lama).
   useEffect(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) setMessages(parsed);
-      }
+      const saved = localStorage.getItem(AI_MODEL_STORAGE_KEY);
+      if (saved && AI_MODEL_OPTIONS.some((m) => m.id === saved)) setAiModel(saved);
     } catch {}
   }, []);
+
+  // QA10-E: muat riwayat percakapan per-user dari SERVER (GET /api/ai/history)
+  // — sumber kebenaran lintas perangkat. Gagal → fallback diam ke localStorage
+  // lama + chip "riwayat tidak tersedia" (chat tetap bisa dipakai).
+  // Guard `prev.length === 0`: jangan menimpa pesan yang sudah dikirim user
+  // saat fetch riwayat masih berjalan (race mount vs input cepat).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/ai/history");
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (data?.success && Array.isArray(data.messages)) {
+          const restored: ChatMessage[] = data.messages.map((m: any) => ({
+            id: String(m?.id ?? `h-${Math.random().toString(36).slice(2)}`),
+            role: m?.role === "assistant" ? "assistant" : "user",
+            content: typeof m?.content === "string" ? m.content : "",
+            timestamp: m?.createdAt ? Date.parse(m.createdAt) : Date.now(),
+            model: typeof m?.model === "string" && m.model ? m.model : undefined,
+            fromHistory: true,
+          }));
+          if (!cancelled) {
+            setMessages((prev) => (prev.length === 0 ? restored : prev));
+          }
+          return; // sukses — localStorage tidak dibaca (hindari duplikat)
+        }
+        throw new Error(data?.error || "format respons tidak dikenal");
+      } catch {
+        // Riwayat server tidak tersedia → fallback lama (localStorage), silent.
+        if (!cancelled) setHistoryUnavailable(true);
+        try {
+          const saved = localStorage.getItem(STORAGE_KEY);
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed) && parsed.length && !cancelled) {
+              setMessages((prev) => (prev.length === 0 ? parsed : prev));
+            }
+          }
+        } catch {}
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // QA10-E: auto-reset konfirmasi hapus (langkah 1 kedaluwarsa setelah 5 dtk).
+  useEffect(() => {
+    if (!confirmClear) return;
+    const t = setTimeout(() => setConfirmClear(false), 5000);
+    return () => clearTimeout(t);
+  }, [confirmClear]);
+
+  // QA10-E: chip error hapus riwayat hilang sendiri setelah 5 dtk.
+  useEffect(() => {
+    if (!clearError) return;
+    const t = setTimeout(() => setClearError(null), 5000);
+    return () => clearTimeout(t);
+  }, [clearError]);
 
   // Persist chat history
   useEffect(() => {
@@ -198,8 +291,51 @@ ATURAN JAWABAN:
         systemPrompt,
         maxTokens: 1000,
         temperature: 0.7,
+        // QA10-E: model pilihan user (pemilih di header) — server memvalidasi
+        // ulang terhadap getAvailableModels(); id tak dikenal didegradasi jujur.
+        model: aiModel,
       }),
     });
+
+    // QA10-E: kuota AI harian tercapai — server menjawab 429 JSON (BUKAN SSE)
+    // dengan bentuk { success:false, error, quota:{ used, limit, resetsAt,
+    // unlimited } }. Tampilkan pesan jujur di area chat; jangan jatuh ke
+    // fallback non-stream (permintaan memang ditolak, bukan gagal transport).
+    if (res.status === 429) {
+      let used = "?";
+      let limit = "?";
+      let resetLabel = "tengah malam UTC";
+      try {
+        const data = await res.json();
+        const q = data?.quota;
+        if (q && typeof q === "object") {
+          if (typeof q.used === "number") used = String(q.used);
+          if (typeof q.limit === "number") limit = String(q.limit);
+          if (typeof q.resetsAt === "string" && q.resetsAt) {
+            const t = new Date(q.resetsAt);
+            if (!Number.isNaN(t.getTime())) {
+              resetLabel = `${t.toLocaleTimeString("id-ID", {
+                hour: "2-digit",
+                minute: "2-digit",
+              })} (waktu lokal)`;
+            }
+          }
+        }
+      } catch {}
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `a-${Date.now()}`,
+          role: "assistant",
+          content: `**Kuota AI harian tercapai (${used}/${limit})** — reset sekitar pukul ${resetLabel}.\n\nPermintaan ini tidak diproses agar biaya AI tetap terkendali. Kuota dihitung ulang otomatis setiap hari (UTC). Menghapus riwayat percakapan tidak memulihkan kuota.`,
+          timestamp: Date.now(),
+          isFallback: true,
+          error: true,
+        },
+      ]);
+      return true; // terminal state — pemanggil tidak perlu fallback non-stream
+    }
+
     if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
 
     const streamId = `a-${Date.now()}`;
@@ -358,14 +494,52 @@ ATURAN JAWABAN:
     }
   };
 
-  const clearChat = () => {
-    setMessages([]);
+  // QA10-E: simpan pilihan model user (localStorage "zx-ai-model").
+  const handleModelChange = (id: string) => {
+    setAiModel(id);
     try {
-      localStorage.removeItem(STORAGE_KEY);
+      localStorage.setItem(AI_MODEL_STORAGE_KEY, id);
     } catch {}
   };
 
+  // QA10-E: hapus riwayat — konfirmasi 2-langkah inline di header; langkah 2
+  // memanggil DELETE /api/ai/history. Sukses → kosongkan tampilan + cache
+  // lokal. Gagal → tampilan TIDAK dikosongkan (jujur: data masih ada di
+  // server) + chip error singkat; chat tetap berfungsi.
+  const handleConfirmClear = async () => {
+    setConfirmClear(false);
+    setClearingHistory(true);
+    setClearError(null);
+    try {
+      const res = await fetch("/api/ai/history", { method: "DELETE" });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.error || `HTTP ${res.status}`);
+      }
+      setMessages([]);
+      setHistoryUnavailable(false);
+      try {
+        localStorage.removeItem(STORAGE_KEY);
+      } catch {}
+    } catch (e: any) {
+      setClearError(e?.message || "gagal");
+    } finally {
+      setClearingHistory(false);
+    }
+  };
+
   const fgColor = context ? getFearGreedColor(context.fearGreedValue) : "#eab308";
+
+  // QA10-E: daftar render chat — sisipkan pemisah halus "— riwayat
+  // sebelumnya —" di batas pesan riwayat server (fromHistory) dan pesan
+  // yang dikirim pada sesi berjalan.
+  const chatItems: ChatItem[] = [];
+  messages.forEach((msg, i) => {
+    if (i > 0 && !msg.fromHistory && messages[i - 1]?.fromHistory) {
+      chatItems.push({ kind: "sep", key: `sep-${msg.id}` });
+    }
+    chatItems.push({ kind: "msg", key: msg.id, msg });
+  });
 
   return (
     <motion.div
@@ -403,12 +577,19 @@ ATURAN JAWABAN:
               >
                 STREAM
               </span>
+              {/* QA10-E: memori percakapan per-user aktif */}
+              <span
+                className="text-[8px] px-1 py-px rounded bg-emerald-950/60 text-emerald-300 border border-emerald-800/50"
+                title="Memori percakapan aktif — 16 pesan terakhir Anda dikirim sebagai konteks ke AI"
+              >
+                MEMORI
+              </span>
             </p>
           </div>
         </div>
 
-        {/* Live context badge */}
-        <div className="flex items-center gap-2">
+        {/* Live context badge + pemilih model + hapus riwayat (QA10-E) */}
+        <div className="flex items-center gap-1.5 sm:gap-2">
           {!contextLoading && context && (
             <motion.div
               initial={{ opacity: 0, scale: 0.9 }}
@@ -422,18 +603,88 @@ ATURAN JAWABAN:
               </span>
             </motion.div>
           )}
-          <button
-            onClick={clearChat}
-            aria-label="Clear chat"
-            className="p-1.5 rounded-lg bg-slate-950/40 border border-slate-800/60 hover:bg-slate-950/80 hover:border-red-700/40 hover:text-red-400 text-slate-400 transition-colors"
+          {/* QA10-E: pemilih model AI per request (id sinkron dengan
+              getAvailableModels() aiRouter.ts — lihat AI_MODEL_OPTIONS). */}
+          <select
+            value={aiModel}
+            onChange={(e) => handleModelChange(e.target.value)}
+            aria-label="Pilih model AI"
+            title="Model AI untuk jawaban berikutnya — pilihan tersimpan di perangkat ini"
+            className="bg-slate-950/60 border border-slate-800 rounded-lg px-1.5 py-1 text-[10px] font-mono text-slate-300 outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/30 cursor-pointer max-w-[105px] sm:max-w-[130px]"
           >
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
+            {AI_MODEL_OPTIONS.map((m) => (
+              <option key={m.id} value={m.id} className="bg-slate-900 text-slate-200">
+                {m.label}
+              </option>
+            ))}
+          </select>
+          {/* QA10-E: hapus riwayat — konfirmasi 2-langkah inline. */}
+          {confirmClear ? (
+            <div
+              className="flex items-center gap-1"
+              role="group"
+              aria-label="Konfirmasi hapus riwayat"
+            >
+              <span className="text-[9px] font-mono text-red-300 hidden md:inline">Hapus riwayat?</span>
+              <button
+                onClick={handleConfirmClear}
+                disabled={clearingHistory}
+                aria-label="Konfirmasi hapus riwayat"
+                className="p-1.5 rounded-lg bg-red-950/60 border border-red-800/60 text-red-300 hover:bg-red-900/60 transition-colors disabled:opacity-40"
+              >
+                {clearingHistory ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Check className="w-3.5 h-3.5" />
+                )}
+              </button>
+              <button
+                onClick={() => setConfirmClear(false)}
+                aria-label="Batal hapus riwayat"
+                className="p-1.5 rounded-lg bg-slate-950/40 border border-slate-800/60 text-slate-400 hover:text-slate-200 hover:bg-slate-950/80 transition-colors"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setConfirmClear(true)}
+              aria-label="Hapus riwayat"
+              title="Hapus riwayat percakapan (konfirmasi 2 langkah)"
+              className="p-1.5 rounded-lg bg-slate-950/40 border border-slate-800/60 hover:bg-slate-950/80 hover:border-red-700/40 hover:text-red-400 text-slate-400 transition-colors"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
       </div>
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar relative z-10">
+        {/* QA10-E: chip status riwayat (tidak memblokir chat) — muncul bila
+            riwayat server gagal dimuat ATAU penghapusan riwayat gagal. */}
+        {(historyUnavailable || clearError) && (
+          <div className="flex justify-center">
+            <div className="flex items-center gap-2 flex-wrap justify-center">
+              {historyUnavailable && (
+                <span
+                  className="text-[9px] font-mono text-amber-500/90 px-2 py-0.5 rounded-full border border-amber-800/40 bg-amber-950/20"
+                  title="Gagal memuat riwayat percakapan dari server — chat tetap berfungsi"
+                >
+                  riwayat tidak tersedia
+                </span>
+              )}
+              {clearError && (
+                <span
+                  className="text-[9px] font-mono text-red-300 px-2 py-0.5 rounded-full border border-red-800/40 bg-red-950/30"
+                  title={`Gagal menghapus riwayat di server: ${clearError}`}
+                >
+                  gagal menghapus riwayat
+                </span>
+              )}
+            </div>
+          </div>
+        )}
         {messages.length === 0 && (
           <motion.div
             initial={{ opacity: 0, y: 10 }}
@@ -470,9 +721,31 @@ ATURAN JAWABAN:
         )}
 
         <AnimatePresence initial={false}>
-          {messages.map((msg) => (
+          {chatItems.map((item) => {
+            // QA10-E: pemisah halus antara riwayat server & pesan sesi berjalan.
+            if (item.kind === "sep") {
+              return (
+                <motion.div
+                  key={item.key}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  role="separator"
+                  aria-label="Riwayat sebelumnya — pesan di atasnya adalah riwayat tersimpan"
+                  className="flex items-center gap-2 py-1"
+                >
+                  <span className="flex-1 h-px bg-slate-800/60" />
+                  <span className="text-[9px] font-mono text-slate-500 whitespace-nowrap">
+                    — riwayat sebelumnya —
+                  </span>
+                  <span className="flex-1 h-px bg-slate-800/60" />
+                </motion.div>
+              );
+            }
+            const msg = item.msg;
+            return (
             <motion.div
-              key={msg.id}
+              key={item.key}
               layout
               initial={{ opacity: 0, y: 10, scale: 0.95 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -567,7 +840,8 @@ ATURAN JAWABAN:
                 </div>
               )}
             </motion.div>
-          ))}
+            );
+          })}
         </AnimatePresence>
 
         {/* Loading indicator — hidden once stream tokens are flowing

@@ -1,3 +1,9 @@
+/// <reference types="vite/client" />
+// QA10-D (PWA): proyek ini tidak memiliki src/vite-env.d.ts, sehingga tipe
+// ImportMeta.env tidak dikenal tsc. Directive referensi di atas (standar
+// idiom Vite) menambahkannya tanpa file baru — efek compile-time saja,
+// nol dampak runtime. Dipakai oleh blok registrasi service worker di akhir
+// file ini.
 import { StrictMode, Component, ErrorInfo, ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -279,3 +285,13 @@ createRoot(document.getElementById('root')!).render(
     </QueryClientProvider>
   </StrictMode>,
 );
+
+// QA10-D (PWA): register service worker hanya pada build produksi — dev
+// server Vite tidak boleh di-cache SW (HMR rusak + data dev basi).
+if ("serviceWorker" in navigator && import.meta.env.PROD) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch((err) => {
+      console.warn("[PWA] Service worker gagal terdaftar:", err);
+    });
+  });
+}

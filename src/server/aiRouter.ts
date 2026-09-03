@@ -27,6 +27,10 @@ const log = createLogger("aiRouter");
 
 import { GoogleGenAI } from "@google/genai";
 import { logAudit } from "./audit";
+// QA10-E: prisma untuk persistensi AiUsageEvent (kuota harian per-user).
+// Hanya satu arah (aiRouter → db) — TIDAK ada import balik dari aiMemory
+// supaya graf dependensi bebas siklus (aiMemory boleh import aiRouter).
+import { prisma } from "./db";
 
 // ─── Configuration ───────────────────────────────────────────────────
 const OPENROUTER_ENDPOINT = process.env.OPENROUTER_ENDPOINT || "https://openrouter.ai/api/v1/chat/completions";
@@ -57,6 +61,9 @@ export interface AIRequest {
   context?: string; // additional context (e.g., on-chain data)
   endpoint?: string; // usage attribution label (e.g. "chat-stream", "gemini-compat")
   abortSignal?: AbortSignal; // client disconnect propagation (streaming)
+  // QA10-E: id model pilihan user (harus salah satu getAvailableModels().id).
+  // undefined → chain default (OPENROUTER_MODEL + fallback) — perilaku lama.
+  model?: string;
 }
 
 export type AIProviderName = "openrouter" | "gemini" | "cache" | "none";
@@ -103,16 +110,48 @@ interface AIUsageRecord {
   streamed: boolean;
   costUsd?: number; // OpenRouter reports this in the final stream chunk
   error?: string;
+  // QA10-E: user pemilik event (untuk AiUsageEvent.userId + kuota harian).
+  // Optional supaya semua call-site lama tetap valid tanpa perubahan.
+  userId?: string;
 }
 
 const usageRecords: AIUsageRecord[] = [];
 const MAX_USAGE_RECORDS = 300;
 
 function recordUsage(rec: AIUsageRecord): void {
+  // (1) In-memory ring buffer — PERSIS seperti sebelumnya (panel operator
+  //     /api/ai/usage tidak berubah satu bit).
   usageRecords.push(rec);
   if (usageRecords.length > MAX_USAGE_RECORDS) {
     usageRecords.splice(0, usageRecords.length - MAX_USAGE_RECORDS);
   }
+  // (2) QA10-E: persist ke DB fire-and-forget → AiUsageEvent (kuota harian
+  //     per-user + jejak lintas restart). Signature & return TIDAK berubah;
+  //     gagal tulis DB hanya di-log — flow utama AI tidak boleh terganggu.
+  //     Catatan mapping: AIUsageRecord hanya punya `tokens` total (OpenRouter
+  //     melaporkan total_tokens gabungan) → dicatat sebagai tokensOut,
+  //     tokensIn = 0. Kuota menghitung JUMLAH EVENT, bukan token, jadi
+  //     mapping ini tidak memengaruhi penegakan kuota.
+  prisma
+    .aiUsageEvent
+    .create({
+      data: {
+        userId: rec.userId ?? null,
+        endpoint: rec.endpoint,
+        provider: rec.provider,
+        model: rec.model ?? null,
+        tokensIn: 0,
+        tokensOut: rec.tokens ?? 0,
+        costUsd: rec.costUsd ?? 0,
+      },
+    })
+    .catch((error: unknown) => {
+      log.warn(
+        `[aiRouter] gagal menulis AiUsageEvent (fire-and-forget, flow AI lanjut): ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    });
 }
 
 export interface AIUsageSummary {
@@ -166,6 +205,62 @@ export function getAIUsage(): AIUsageSummary {
   };
 }
 
+// ─── QA10-E: Kuota AI harian per-user (fondasi Direksi F — tier) ──────
+// Dihitung dari AiUsageEvent DB (createdAt >= awal hari UTC) — persisten
+// lintas restart, melengkapi ring in-memory di atas. Penegakan kuota
+// (429 dsb.) di-wiring orkestrator server.ts; fungsi ini hanya menghitung
+// + memberi bentuk respons yang jujur.
+export interface AIQuotaInfo {
+  used: number; // jumlah event AI hari ini (UTC) milik user
+  limit: number; // AI_DAILY_LIMIT (default 500); 0 saat unlimited
+  remaining: number; // max(0, limit - used); 0 saat unlimited
+  resetsAt: string; // ISO — tengah malam UTC berikutnya
+  unlimited: boolean; // true = tidak dibatasi (userId kosong / DB error)
+}
+
+/** Tengah malam UTC berikutnya sebagai ISO string (waktu reset kuota). */
+function nextUtcMidnightIso(now = new Date()): string {
+  const next = new Date(now);
+  next.setUTCHours(24, 0, 0, 0); // 24:00 hari ini = 00:00 besok (roll-over)
+  return next.toISOString();
+}
+
+export async function getUserAiQuota(userId: string | undefined): Promise<AIQuotaInfo> {
+  const resetsAt = nextUtcMidnightIso();
+
+  // Tanpa identitas (panggilan internal / anonim) → unlimited jujur.
+  // JSON tidak bisa membawa Infinity — pakai limit:0 + flag unlimited:true.
+  if (!userId || typeof userId !== "string") {
+    return { used: 0, limit: 0, remaining: 0, resetsAt, unlimited: true };
+  }
+
+  const limit = Number(process.env.AI_DAILY_LIMIT || 500);
+
+  try {
+    const startOfDayUtc = new Date();
+    startOfDayUtc.setUTCHours(0, 0, 0, 0);
+    const used = await prisma.aiUsageEvent.count({
+      where: { userId, createdAt: { gte: startOfDayUtc } },
+    });
+    return {
+      used,
+      limit,
+      remaining: Math.max(0, limit - used),
+      resetsAt,
+      unlimited: false,
+    };
+  } catch (error: unknown) {
+    // Fail-open JUJUR: bug counting tidak boleh mematikan chat — tapi
+    // kegagalan ini WAJIB terlihat di log operator (bukan gagal diam-diam).
+    log.warn(
+      `[aiRouter] gagal menghitung kuota harian user (fail-open unlimited): ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    return { used: 0, limit: 0, remaining: 0, resetsAt, unlimited: true };
+  }
+}
+
 // ─── OpenRouter low-level call (OpenAI-compatible) ───────────────────
 interface OpenRouterMessage {
   role: "system" | "user";
@@ -189,6 +284,64 @@ interface OpenRouterCallResult {
 
 export function openRouterModelName(): string {
   return OPENROUTER_MODEL;
+}
+
+// ─── QA10-E: Pemilih model per-request (Direksi B) ────────────────────
+// Daftar model yang BOLEH dipilih user — HANYA id yang memang ada di
+// konfigurasi file ini (primary + fallback chain), tidak ada id karangan.
+// Frontend memakai daftar ini untuk dropdown; server memvalidasi ulang.
+export interface AIModelOption {
+  id: string; // id OpenRouter persis (mis. "z-ai/glm-4.5-air")
+  label: string; // label ramah bahasa Indonesia
+  description: string; // deskripsi singkat untuk UI
+}
+
+// Label/deskripsi ramah untuk id yang dikenal; env override (OPENROUTER_MODEL /
+// OPENROUTER_FALLBACK_MODELS) tetap didukung — id tak dikenal ditampilkan apa adanya.
+const MODEL_LABELS: Record<string, { label: string; description: string }> = {
+  "z-ai/glm-4.5-air": {
+    label: "GLM 4.5 Air",
+    description: "Model utama — cepat, hemat token, bahasa Indonesia natural",
+  },
+  "meta-llama/llama-3.3-70b-instruct": {
+    label: "Llama 3.3 70B",
+    description: "Alternatif seimbang — analisis umum yang stabil",
+  },
+  "google/gemma-3-27b-it": {
+    label: "Gemma 3 27B",
+    description: "Cadangan ringan — konsisten untuk pertanyaan sederhana",
+  },
+};
+
+export function getAvailableModels(): AIModelOption[] {
+  return [OPENROUTER_MODEL, ...OPENROUTER_FALLBACK_MODELS]
+    .filter((id, i, arr) => arr.indexOf(id) === i) // dedup id ganda dari env
+    .map((id) => ({
+      id,
+      label: MODEL_LABELS[id]?.label ?? id,
+      description: MODEL_LABELS[id]?.description ?? "Model OpenRouter dari konfigurasi server",
+    }));
+}
+
+/**
+ * QA10-E: tentukan chain model untuk satu request.
+ * - req.model VALID (ada di getAvailableModels) → model pilihan user dicoba
+ *   PERTAMA, sisa chain fallback tetap di belakangnya (resilience lama utuh:
+ *   model pilihan gagal → fallback otomatis jalan seperti biasa).
+ * - req.model TIDAK valid → log.warn SEKALI per request + chain default
+ *   (degradasi jujur, BUKAN error — chat tidak boleh gagal karena pilihan).
+ * - req.model undefined → chain default (perilaku lama, byte-identik).
+ */
+function resolveModelChain(req: AIRequest): string[] {
+  const defaultChain = [OPENROUTER_MODEL, ...OPENROUTER_FALLBACK_MODELS];
+  if (!req.model) return defaultChain;
+  if (!getAvailableModels().some((m) => m.id === req.model)) {
+    log.warn(
+      `[aiRouter] model "${req.model}" tidak ada di daftar model yang diizinkan — memakai model default (${OPENROUTER_MODEL})`
+    );
+    return defaultChain;
+  }
+  return [req.model, ...defaultChain.filter((m) => m !== req.model)];
 }
 
 /**
@@ -266,7 +419,8 @@ async function openRouterCallOnce(opts: OpenRouterCallOptions): Promise<OpenRout
  */
 async function callOpenRouter(req: AIRequest): Promise<AIResponse> {
   const startTime = Date.now();
-  const models = [OPENROUTER_MODEL, ...OPENROUTER_FALLBACK_MODELS];
+  // QA10-E: chain = model pilihan user (jika valid) + fallback default.
+  const models = resolveModelChain(req);
   const messages: OpenRouterMessage[] = [];
   if (req.systemPrompt) {
     messages.push({ role: "system", content: req.systemPrompt });
@@ -299,6 +453,7 @@ async function callOpenRouter(req: AIRequest): Promise<AIResponse> {
         latencyMs: Date.now() - startTime,
         success: true,
         streamed: false,
+        userId: req.userId, // QA10-E: kuota harian per-user
       });
 
       return {
@@ -331,6 +486,7 @@ async function callOpenRouter(req: AIRequest): Promise<AIResponse> {
     success: false,
     streamed: false,
     error: lastError.substring(0, 150),
+    userId: req.userId, // QA10-E: kuota harian per-user
   });
 
   return {
@@ -392,6 +548,7 @@ async function callGemini(req: AIRequest): Promise<AIResponse> {
       latencyMs,
       success: true,
       streamed: false,
+      userId: req.userId, // QA10-E: kuota harian per-user
     });
 
     return {
@@ -492,7 +649,8 @@ export async function callAIStream(
   const startTime = Date.now();
 
   if (OPENROUTER_API_KEY && providerHealth["openrouter"].available) {
-    const models = [OPENROUTER_MODEL, ...OPENROUTER_FALLBACK_MODELS];
+    // QA10-E: chain = model pilihan user (jika valid) + fallback default.
+    const models = resolveModelChain(req);
     const messages: OpenRouterMessage[] = [];
     if (req.systemPrompt) messages.push({ role: "system", content: req.systemPrompt });
     messages.push({ role: "user", content: req.prompt });
@@ -615,6 +773,7 @@ export async function callAIStream(
           success: true,
           streamed: true,
           costUsd: streamCostUsd,
+          userId: req.userId, // QA10-E: kuota harian per-user
         });
         if (req.userId) {
           logAudit(req.userId, "AI_CALL_OPENROUTER_STREAM", null, true, {
@@ -642,6 +801,7 @@ export async function callAIStream(
             success: false,
             streamed: true,
             error: errorMessage.substring(0, 150),
+            userId: req.userId, // QA10-E: kuota harian per-user
           });
           onEvent({ type: "error", error: `Stream terputus: ${errorMessage.substring(0, 120)}` });
           return;
@@ -666,6 +826,7 @@ export async function callAIStream(
       success: false,
       streamed: true,
       error: lastError.substring(0, 150),
+      userId: req.userId, // QA10-E: kuota harian per-user
     });
   }
 

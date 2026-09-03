@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useGlobalStore } from "../store";
+import StreamMarkdown from "./StreamMarkdown";
+import { consumeAIStream } from "../lib/aiStream";
 import {
   Files,
   Upload,
@@ -45,6 +47,8 @@ export default function MultiDocAnalysis() {
   const [analysisError, setAnalysisError] = useState("");
   const [isFallback, setIsFallback] = useState(false);
   const [loadingStatusIndex, setLoadingStatusIndex] = useState(0);
+  /** QA10-A: true while the comparison report SSE tokens are arriving. */
+  const [isReportStreaming, setIsReportStreaming] = useState(false);
 
   const loadingStatuses = [
     "[ZAYTRIX Engine] Mengunggah buffer sirkuit berkas multi-komparasi...",
@@ -220,6 +224,32 @@ export default function MultiDocAnalysis() {
     setAnalysisReport("");
     setAnalysisError("");
     setIsFallback(false);
+    setIsReportStreaming(false);
+
+    // QA10-A: legacy non-stream transport (exact old fetch path) — used when
+    // the server answers JSON (older deployment) and as the single retry when
+    // SSE fails BEFORE the first token arrives.
+    const requestNonStream = async (baseBody: object) => {
+      const res = await fetch("/api/gemini/analyze-multi-pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(baseBody)
+      });
+
+      const contentType = res.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        throw new Error(`Koneksi gagal atau server tidak merespon dengan benar (HTTP ${res.status}).`);
+      }
+
+      if (!res.ok) {
+        const errObj = await res.json();
+        throw new Error(errObj.error || "Gagal menghubungi server analitik.");
+      }
+
+      const data = await res.json();
+      setAnalysisReport(data.analysis || "");
+      setIsFallback(!!data.isFallback);
+    };
 
     try {
       // Convert files to base64, leaving url-type alone so they are passed cleanly
@@ -242,40 +272,67 @@ export default function MultiDocAnalysis() {
         })
       );
 
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json"
+      const baseBody = {
+        files: preparedFiles,
+        category: category,
+        aiTone: settings.aiTone,
+        aiMaxTokens: settings.aiMaxTokens,
+        aiTemperature: settings.aiTemperature,
+        aiThinkingMode: settings.aiThinkingMode || "high"
       };
 
+      // QA10-A: request the SSE stream first — the comparison report flows in
+      // over SSE (token frames + the authoritative done frame).
       const res = await fetch("/api/gemini/analyze-multi-pdf", {
         method: "POST",
-        headers,
-        body: JSON.stringify({
-          files: preparedFiles,
-          category: category,
-          aiTone: settings.aiTone,
-          aiMaxTokens: settings.aiMaxTokens,
-          aiTemperature: settings.aiTemperature,
-          aiThinkingMode: settings.aiThinkingMode || "high"
-        })
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...baseBody, stream: true })
       });
+      const contentType = res.headers.get("content-type") || "";
 
-      const contentType = res.headers.get("content-type");
-      if (!contentType || !contentType.includes("application/json")) {
-        throw new Error(`Koneksi gagal atau server tidak merespon dengan benar (HTTP ${res.status}).`);
+      if (res.ok && contentType.includes("text/event-stream") && res.body) {
+        let gotToken = false;
+        let streamError: string | null = null;
+        setIsReportStreaming(true);
+        await consumeAIStream(res, {
+          onToken: (chunk) => {
+            gotToken = true;
+            setAnalysisReport((prev) => prev + chunk);
+          },
+          onDone: (payload) => {
+            // The done frame is authoritative — apply it exactly like the
+            // non-stream JSON response (incl. the honest isFallback label).
+            if (payload && typeof payload.analysis === "string") {
+              setAnalysisReport(payload.analysis);
+            }
+            setIsFallback(!!(payload && payload.isFallback));
+          },
+          onError: (msg) => {
+            streamError = msg;
+          }
+        });
+        setIsReportStreaming(false);
+
+        if (streamError && !gotToken) {
+          // QA10-A: SSE failed before any content — retry ONCE over the legacy
+          // non-stream path so the user still gets a report.
+          await requestNonStream(baseBody);
+          return;
+        }
+        if (streamError) {
+          // Error after partial content — keep the partial text + honest note.
+          setAnalysisError(`Aliran data AI terputus: ${streamError}`);
+        }
+        return;
       }
 
-      if (!res.ok) {
-        const errObj = await res.json();
-        throw new Error(errObj.error || "Gagal menghubungi server analitik.");
-      }
-
-      const data = await res.json();
-      setAnalysisReport(data.analysis || "");
-      setIsFallback(!!data.isFallback);
+      // Server answered JSON (no stream support) — legacy handling.
+      await requestNonStream(baseBody);
     } catch (err: any) {
       console.error(err);
       setAnalysisError(err.message || "Gagal mengolah dokumen multi-analisis. Harap coba lagi.");
     } finally {
+      setIsReportStreaming(false);
       setIsAnalyzing(false);
     }
   };
@@ -623,8 +680,9 @@ export default function MultiDocAnalysis() {
             </div>
           )}
 
-          {/* Active Processing / Analyzing State */}
-          {isAnalyzing && (
+          {/* Active Processing / Analyzing State — QA10-A: hidden once the
+              streaming report text starts flowing (the report view takes over). */}
+          {isAnalyzing && !analysisReport && (
             <div className="flex-1 flex flex-col items-center justify-center text-center p-6 max-w-lg mx-auto space-y-6">
               <div className="relative">
                 <div className="w-16 h-16 border-4 border-amber-500/20 border-t-amber-500 rounded-full animate-spin mx-auto" />
@@ -680,15 +738,20 @@ export default function MultiDocAnalysis() {
           )}
 
           {/* Presentation of Audit Report */}
-          {analysisReport && !isAnalyzing && (
+          {analysisReport && (!isAnalyzing || isReportStreaming) && (
             <div className="flex-1 flex flex-col justify-between" id="multi-doc-report-viewer">
               {/* Header with quick download option */}
               <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-4 shrink-0 select-none">
                 <div className="flex items-center space-x-2">
                   <CheckCircle className="w-4 h-4 text-emerald-400" />
                   <span className="text-[10px] font-bold font-mono tracking-wider text-slate-400 uppercase">
-                    Hasil Analisis Komparatif bersilang ZAYTRIX
+                    {isReportStreaming ? "Laporan Komparatif Mengalir" : "Hasil Analisis Komparatif bersilang ZAYTRIX"}
                   </span>
+                  {isReportStreaming && (
+                    <span className="text-[8px] font-mono px-1.5 py-0.5 rounded border bg-amber-500/10 border-amber-500/25 text-amber-300 flex items-center gap-1" title="Laporan mengalir token demi token (SSE)">
+                      <span className="w-1 h-1 rounded-full bg-amber-400 animate-pulse" /> streaming…
+                    </span>
+                  )}
                 </div>
                 
                 <button
@@ -713,56 +776,15 @@ export default function MultiDocAnalysis() {
                 </div>
               )}
 
-              {/* Parsed report markdown content */}
+              {/* Parsed report markdown content — QA10-A: progressive render
+                  (memoized paragraphs, raw streaming tail + caret) replaces
+                  the old per-line hand parser. */}
               <div className="flex-1 overflow-y-auto pr-1 text-slate-300 text-xs tracking-wide leading-relaxed space-y-4 max-h-[500px]" style={{ direction: 'ltr' }}>
-                <div className="markdown-body font-sans text-xs select-text">
-                  {analysisReport.split("\n").map((line, idx) => {
-                    const trimmed = line.trim();
-                    if (trimmed.startsWith("### ")) {
-                      return (
-                        <h3 key={idx} className="text-sm font-black text-amber-400 border-b border-slate-800 pb-1 mt-5 mb-3 uppercase tracking-wide font-mono">
-                          {trimmed.substring(4)}
-                        </h3>
-                      );
-                    } else if (trimmed.startsWith("#### ")) {
-                      return (
-                        <h4 key={idx} className="text-xs font-bold text-slate-200 mt-4 mb-2">
-                          {trimmed.substring(5)}
-                        </h4>
-                      );
-                    } else if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
-                      return (
-                        <li key={idx} className="list-disc ml-5 mb-1.5 text-slate-300">
-                          {trimmed.substring(2).replace(/\*\*(.*?)\*\*/g, "$1")}
-                        </li>
-                      );
-                    } else if (trimmed.startsWith("|")) {
-                      // Simple markdown table rows check
-                      const cells = trimmed.split("|").filter(c => c.trim() !== "");
-                      const isHeader = line.includes("---");
-                      if (isHeader) {
-                        return <div key={idx} className="h-px bg-slate-800 my-1" />;
-                      }
-                      return (
-                        <div key={idx} className="grid grid-cols-4 gap-2 bg-slate-950/40 p-2 border border-slate-850 text-[11px] font-mono rounded">
-                          {cells.map((cell, cIdx) => (
-                            <span key={cIdx} className={`${cIdx === 0 ? "font-semibold text-slate-300" : "text-center text-slate-400"}`}>
-                              {cell.trim().replace(/\*\*(.*?)\*\*/g, "$1")}
-                            </span>
-                          ))}
-                        </div>
-                      );
-                    } else if (trimmed === "") {
-                      return <div key={idx} className="h-2.5" />;
-                    } else {
-                      return (
-                        <p key={idx} className="mb-3 text-slate-300 text-justify leading-relaxed indent-2.5">
-                          {trimmed.replace(/\*\*(.*?)\*\*/g, "$1")}
-                        </p>
-                      );
-                    }
-                  })}
-                </div>
+                <StreamMarkdown
+                  className="markdown-body font-sans text-xs select-text"
+                  text={analysisReport}
+                  isStreaming={isReportStreaming}
+                />
               </div>
 
               {/* Bottom Print / Copy banner */}

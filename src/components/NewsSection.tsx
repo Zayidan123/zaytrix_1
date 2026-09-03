@@ -155,6 +155,54 @@ interface NewsSentimentResult {
   isFallback?: boolean;
 }
 
+// QA10-A: best-effort client-side extraction of the partial "summary" string
+// from a streamed (still incomplete) news-sentiment JSON payload — the stream
+// emits the raw model JSON token by token, and "summary" is the first
+// human-readable field of the schema. Escape-sequence tolerant (an escape may
+// be cut at a chunk boundary). Display-only: the authoritative final object
+// always arrives in the SSE "done" frame and replaces whatever this returned.
+function extractPartialSentimentSummary(raw: string): string | null {
+  const keyIdx = raw.indexOf('"summary"');
+  if (keyIdx === -1) return null;
+  let i = keyIdx + '"summary"'.length;
+  while (i < raw.length && /\s/.test(raw[i])) i++;
+  if (raw[i] !== ":") return null;
+  i++;
+  while (i < raw.length && /\s/.test(raw[i])) i++;
+  if (raw[i] !== '"') return null;
+  i++;
+  let out = "";
+  while (i < raw.length) {
+    const ch = raw[i];
+    if (ch === "\\") {
+      // Escape sequence — may be cut mid-sequence at a chunk boundary.
+      const next = raw[i + 1];
+      if (next === undefined) break;
+      if (next === "n") out += "\n";
+      else if (next === "t") out += "\t";
+      else if (next === "r") out += "\r";
+      else if (next === '"') out += '"';
+      else if (next === "\\") out += "\\";
+      else if (next === "/") out += "/";
+      else if (next === "u") {
+        const hex = raw.slice(i + 2, i + 6);
+        if (hex.length < 4 || !/^[0-9a-fA-F]{4}$/.test(hex)) {
+          break; // \u escape cut at a chunk boundary — freeze the display here
+        }
+        out += String.fromCharCode(parseInt(hex, 16));
+        i += 6;
+        continue;
+      } else out += next;
+      i += 2;
+      continue;
+    }
+    if (ch === '"') break; // closing quote — summary field complete
+    out += ch;
+    i++;
+  }
+  return out || null;
+}
+
 // IMPL-C3: getStaticSentiment removed. The hardcoded switch returned fake
 // BULLISH/NEUTRAL scores inconsistent with the live /api/gemini/news-sentiment
 // analysis. Cards now show a neutral "AI: —" badge that does not fabricate a
@@ -176,6 +224,10 @@ export default function NewsSection() {
   const [sentimentLoading, setSentimentLoading] = useState(false);
   const [sentimentResult, setSentimentResult] = useState<NewsSentimentResult | null>(null);
   const [sentimentError, setSentimentError] = useState<string | null>(null);
+  /** QA10-A: true while the sentiment SSE tokens are arriving. */
+  const [sentimentStreaming, setSentimentStreaming] = useState(false);
+  /** QA10-A: live partial "summary" text extracted from the streaming JSON. */
+  const [sentimentLiveSummary, setSentimentLiveSummary] = useState<string | null>(null);
 
   // AI Chat States
   const [newsQuestion, setNewsQuestion] = useState("");
@@ -223,10 +275,18 @@ export default function NewsSection() {
     setReloadKey(k => k + 1);
   };
 
+  // QA10-A: sentiment analysis — streams the raw JSON token-by-token over SSE
+  // when the server supports it (the partial "summary" field is shown live);
+  // retries ONCE over the legacy non-stream transport when SSE fails BEFORE
+  // the first token; the done frame is applied exactly like the old JSON
+  // response. Dependencies stay [selectedArticleId] (same as before) so the
+  // 5-minute article refreshes never re-trigger a running analysis.
   useEffect(() => {
     if (!selectedArticleId) {
       setSentimentResult(null);
       setSentimentError(null);
+      setSentimentStreaming(false);
+      setSentimentLiveSummary(null);
       setNewsChatHistory([]);
       return;
     }
@@ -237,19 +297,97 @@ export default function NewsSection() {
     setSentimentLoading(true);
     setSentimentResult(null);
     setSentimentError(null);
-    
-    fetch("/api/gemini/news-sentiment", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(article)
-    })
-      .then(res => {
-        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-        return res.json();
-      })
-      .then(data => {
-        setSentimentResult(data);
-      })
+    setSentimentStreaming(false);
+    setSentimentLiveSummary(null);
+
+    // Legacy non-stream transport (exact old fetch path) — kept intact as the
+    // JSON fallback and as the single retry when SSE fails before any token.
+    const requestNonStream = async () => {
+      const res = await fetch("/api/gemini/news-sentiment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(article)
+      });
+      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+      const data = await res.json();
+      setSentimentResult(data);
+    };
+
+    const runStream = async () => {
+      const res = await fetch("/api/gemini/news-sentiment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...article, stream: true })
+      });
+      const contentType = res.headers.get("content-type") || "";
+
+      if (res.ok && contentType.includes("text/event-stream") && res.body) {
+        let raw = "";
+        let gotToken = false;
+        let streamError: string | null = null;
+        let finalResult: NewsSentimentResult | null = null;
+        setSentimentStreaming(true);
+        await consumeAIStream(res, {
+          onToken: (chunk) => {
+            gotToken = true;
+            raw += chunk;
+            // Raw chunks are JSON tokens — extract the partial "summary" field
+            // for the live display (display-only; the done frame is
+            // authoritative and applied below).
+            setSentimentLiveSummary(extractPartialSentimentSummary(raw));
+          },
+          onDone: (payload) => {
+            // The done frame is authoritative — applied exactly like the old
+            // JSON response (incl. the honest isFallback label).
+            if (payload && typeof payload.sentiment === "string" && typeof payload.summary === "string") {
+              finalResult = payload as NewsSentimentResult;
+            }
+          },
+          onError: (msg) => {
+            streamError = msg;
+          }
+        });
+        setSentimentStreaming(false);
+        setSentimentLiveSummary(null);
+
+        if (streamError && !gotToken) {
+          // QA10-A: SSE failed before any content — retry ONCE over the
+          // legacy non-stream path so the user still gets the analysis.
+          await requestNonStream();
+          return;
+        }
+        if (finalResult) {
+          setSentimentResult(finalResult);
+          return;
+        }
+        if (streamError) {
+          // Error after partial content — honest error + the partial summary
+          // that actually arrived (nothing fabricated).
+          const partial = extractPartialSentimentSummary(raw);
+          setSentimentError(
+            partial
+              ? `Aliran analisis AI terputus: ${streamError}. Ringkasan parsial: ${partial}`
+              : `Aliran analisis AI terputus: ${streamError}`
+          );
+          return;
+        }
+        // Terminal frame arrived without a usable payload — honest error.
+        const partial = extractPartialSentimentSummary(raw);
+        setSentimentError(
+          partial
+            ? `Respons stream AI tidak valid. Ringkasan parsial: ${partial}`
+            : "Respons stream AI tidak valid."
+        );
+        return;
+      }
+
+      // Server answered JSON (cache hit / no stream support) — legacy path.
+      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+      const data = await res.json();
+      setSentimentResult(data);
+    };
+
+    runStream()
       .catch(err => {
         console.error("Failed to load news sentiment", err);
         setSentimentError(err.message || "Gagal memproses sentimen berita.");
@@ -786,11 +924,18 @@ export default function NewsSection() {
                           </div>
                         </div>
                         
-                        {sentimentResult?.isFallback && (
-                          <span className="text-[8px] bg-slate-900 border border-slate-800 text-slate-400 px-2 py-0.5 rounded font-mono uppercase">
-                            OFFLINE INDEX ACTIVE
-                          </span>
-                        )}
+                        <div className="flex items-center gap-1.5">
+                          {sentimentStreaming && (
+                            <span className="text-[8px] font-mono px-1.5 py-0.5 rounded border bg-cyan-500/10 border-cyan-500/25 text-cyan-300 flex items-center gap-1" title="Analisis sentimen mengalir token demi token (SSE)">
+                              <span className="w-1 h-1 rounded-full bg-cyan-400 animate-pulse" /> streaming…
+                            </span>
+                          )}
+                          {sentimentResult?.isFallback && (
+                            <span className="text-[8px] bg-slate-900 border border-slate-800 text-slate-400 px-2 py-0.5 rounded font-mono uppercase">
+                              OFFLINE INDEX ACTIVE
+                            </span>
+                          )}
+                        </div>
                       </div>
 
                       {sentimentLoading ? (
@@ -800,8 +945,18 @@ export default function NewsSection() {
                             <div className="absolute inset-0 rounded-full border-2 border-t-amber-500 animate-spin" />
                           </div>
                           <div className="space-y-1">
-                            <p className="text-xs text-slate-300 font-black animate-pulse">Menghubungi AI Z-Capital...</p>
-                            <p className="text-[10px] text-slate-500">Mengekstrak korelasi makro & sentimen tokenomik</p>
+                            <p className="text-xs text-slate-300 font-black animate-pulse">
+                              {sentimentStreaming ? "Analisis Sentimen AI Mengalir..." : "Menghubungi AI Z-Capital..."}
+                            </p>
+                            {/* QA10-A: while the JSON tokens flow, the partial
+                                "summary" text streams in live below the loader. */}
+                            {sentimentLiveSummary ? (
+                              <p className="text-[10px] text-amber-300/90 font-mono max-w-md mx-auto leading-relaxed text-left border-l-2 border-amber-500/30 pl-3">
+                                {sentimentLiveSummary}
+                              </p>
+                            ) : (
+                              <p className="text-[10px] text-slate-500">Mengekstrak korelasi makro & sentimen tokenomik</p>
+                            )}
                           </div>
                         </div>
                       ) : sentimentError ? (

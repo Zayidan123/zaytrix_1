@@ -545,6 +545,12 @@ app.post("/api/gemini/analyze", async (req, res) => {
 app.post("/api/gemini/news-sentiment", async (req, res) => {
   const { id, title, summary, content, category, tags } = req.body;
 
+  // QA10-A: generation config shared by BOTH transports (stream + non-stream)
+  // so the two paths can never drift apart.
+  const newsSentimentTemperature = 0.15;
+  const newsSentimentMaxTokens = 1000;
+  const newsSentimentSystemInstruction = "Anda adalah analis keuangan AI senior yang menghasilkan analisis sentimen berita dalam format JSON terstruktur murni.";
+
   try {
     const prompt = `
       Sebagai seorang Analis Pasar Kripto & Makroekonomi Senior, lakukan analisis sentimen mendalam berbasis AI untuk berita finansial berikut:
@@ -580,6 +586,58 @@ app.post("/api/gemini/news-sentiment", async (req, res) => {
       }
     }
 
+    // QA10-A: SSE streaming branch — same body + "stream": true. Token frames
+    // carry the raw progressive JSON (the client extracts the partial
+    // "summary" field for its live display); the done frame carries the exact
+    // fields of the non-stream JSON payload (the parsed sentiment object).
+    // AI failure (stream error / empty / invalid JSON) degrades to the same
+    // honest offline fallback the non-stream catch returns — never to a
+    // fabricated sentiment.
+    if (req.body.stream === true) {
+      await runSSEStream(req, res, async (send, abortSignal) => {
+        const aiClient = getAiClient(req);
+        if (!aiClient) {
+          const offline = getOfflineNewsSentiment(id, title);
+          send({ type: "done", ...offline, isFallback: true, errorReason: "Gemini client is not initialized" });
+          return;
+        }
+        try {
+          const { fullText, streamError } = await streamViaAIRouter({
+            prompt,
+            systemPrompt: newsSentimentSystemInstruction,
+            maxTokens: newsSentimentMaxTokens,
+            temperature: newsSentimentTemperature,
+            userId: req.user?.sub,
+            endpoint: "gemini-news-sentiment-stream",
+            abortSignal,
+          }, send);
+          if (abortSignal.aborted) return; // client disconnected — no cache write for a partial stream
+          if (streamError || !fullText.trim()) {
+            const offline = getOfflineNewsSentiment(id, title);
+            send({ type: "done", ...offline, isFallback: true, errorReason: streamError || "Respons stream AI kosong" });
+            return;
+          }
+          // Streaming requests run without upstream jsonMode, so the model may
+          // wrap its JSON in fences — parse strictly first (identical to the
+          // non-stream path), then best-effort extract the outermost object.
+          const parsed = parseSignalJsonLoose(fullText);
+          if (!parsed) {
+            const offline = getOfflineNewsSentiment(id, title);
+            send({ type: "done", ...offline, isFallback: true, errorReason: "Respons AI bukan JSON valid" });
+            return;
+          }
+          // Same cache side effect as the non-stream success path (the raw
+          // model output text — exactly what the non-stream path stores).
+          geminiCacheSet(cacheKey, fullText);
+          send({ type: "done", ...parsed, isFallback: false });
+        } catch (err: any) {
+          const offline = getOfflineNewsSentiment(id, title);
+          send({ type: "done", ...offline, isFallback: true, errorReason: err?.message || String(err) });
+        }
+      });
+      return;
+    }
+
     const aiClient = getAiClient(req);
     if (!aiClient) {
       log.info("[Fallback] No AI client, generating offline sentiment analysis for", id);
@@ -591,10 +649,10 @@ app.post("/api/gemini/news-sentiment", async (req, res) => {
       model: "gemini-2.5-flash",
       contents: prompt,
       config: {
-        temperature: 0.15,
-        maxOutputTokens: 1000,
+        temperature: newsSentimentTemperature,
+        maxOutputTokens: newsSentimentMaxTokens,
         responseMimeType: "application/json",
-        systemInstruction: "Anda adalah analis keuangan AI senior yang menghasilkan analisis sentimen berita dalam format JSON terstruktur murni."
+        systemInstruction: newsSentimentSystemInstruction
       }
     });
 
@@ -857,13 +915,10 @@ app.post("/api/gemini/analyze-pdf", async (req, res) => {
       return res.json({ analysis: geminiCache.get(cacheKey) });
     }
 
-    const aiClient = getAiClient(req);
-    if (!aiClient) {
-      log.info("Gemini Client not initialized, returning resilient expert PDF report info.");
-      const fallback = generateResilientPdfReportFallback(fileCleanName, selectedCategory);
-      return res.json({ analysis: fallback });
-    }
-
+    // QA10-A: prompt + generation config shared by BOTH transports (stream +
+    // non-stream) so the two paths can never drift apart. Pure declarations
+    // (no awaits/side effects) — hoisting them above the client check is
+    // behavior-neutral for the non-stream path.
     const systemInstruction = "Anda adalah asisten AI Analis Keuangan Senior dan Pengelola Portofolio Internasional. Anda memiliki sertifikasi CFA (Chartered Financial Analyst) dan FRM (Financial Risk Manager) dengan pengalaman analisis taktis lebih dari 30 tahun. Tugas Anda adalah menyajikan evaluasi tingkat tinggi yang sangat tajam, kuantitatif, komprehensif, obyektif, dan berbasis data dari dokumen (Laporan Keuangan atau Whitepaper) yang dilampirkan. Gunakan bahasa Indonesia profesional tingkat tinggi, berwibawa, dingin, saksama, tanpa jargon pemasaran kosong atau retorika penjualan.";
 
     const promptText = `
@@ -911,6 +966,65 @@ Sajikan secara dingin, logis, obyektif, bernilai tinggi.
     const tokens = aiMaxTokens !== undefined ? Number(aiMaxTokens) : 1000;
     const thinkingVal = mapThinkingLevel(aiThinkingMode);
 
+    // QA10-A: SSE streaming branch — same body (pdfData/fileName/category/…)
+    // + "stream": true. The OpenAI-compatible streaming router
+    // (callAIStream) is text-only — PDF inlineData parts cannot traverse it —
+    // so this branch deliberately does NOT swap the generation call: it runs
+    // the SAME PDF-aware generateContentWithRetry as the non-stream path (the
+    // AI always sees the actual document bytes; the SSE keep-alive covers the
+    // long generation) and emits the finished report as token frames before
+    // the authoritative done frame. A text-prompt-only stream would let the
+    // model "analyze" a document it never received — fabrication — which is
+    // exactly what this codebase's honest-fallback work removed.
+    if (req.body.stream === true) {
+      await runSSEStream(req, res, async (send, abortSignal) => {
+        const aiClient = getAiClient(req);
+        if (!aiClient) {
+          const fallback = generateResilientPdfReportFallback(fileCleanName, selectedCategory);
+          send({ type: "done", analysis: fallback, isFallback: true, errorReason: "Gemini client is not initialized" });
+          return;
+        }
+        try {
+          const response = await generateContentWithRetry(aiClient, {
+            model: "gemini-2.5-flash",
+            contents: { parts: [pdfPart, textPart] },
+            config: {
+              temperature: temp,
+              maxOutputTokens: tokens,
+              thinkingConfig: { thinkingLevel: thinkingVal },
+              systemInstruction: systemInstruction
+            }
+          });
+          const outputText = response.text || "";
+          if (abortSignal.aborted) return; // client disconnected — no cache write
+          if (!outputText.trim()) {
+            const fallback = generateResilientPdfReportFallback(fileCleanName, selectedCategory);
+            send({ type: "done", analysis: fallback, isFallback: true, errorReason: "Respons AI kosong" });
+            return;
+          }
+          // Emit the finished report as token frame(s) — the exact content of
+          // the non-stream response body — then the authoritative done frame.
+          send({ type: "token", text: outputText });
+          // Same cache side effect as the non-stream success path.
+          geminiCacheSet(cacheKey, outputText);
+          send({ type: "done", analysis: outputText, isFallback: false });
+        } catch (err: any) {
+          // Mirrors the non-stream catch fallback (raw fileName/category —
+          // argument-for-argument identical).
+          const fallback = generateResilientPdfReportFallback(fileName || "Berkas.pdf", category);
+          send({ type: "done", analysis: fallback, isFallback: true, errorReason: err?.message || String(err) });
+        }
+      });
+      return;
+    }
+
+    const aiClient = getAiClient(req);
+    if (!aiClient) {
+      log.info("Gemini Client not initialized, returning resilient expert PDF report info.");
+      const fallback = generateResilientPdfReportFallback(fileCleanName, selectedCategory);
+      return res.json({ analysis: fallback });
+    }
+
     const response = await generateContentWithRetry(aiClient, {
       model: "gemini-2.5-flash",
       contents: { parts: [pdfPart, textPart] },
@@ -946,34 +1060,34 @@ app.post("/api/gemini/analyze-multi-pdf", async (req, res) => {
   try {
     const selectedCategory = category === "crypto" ? "crypto" : "stock";
 
-    const aiClient = getAiClient(req);
-    if (!aiClient) {
-      log.info("Gemini Client not initialized, returning resilient expert Multi-PDF report info.");
-      const fallback = generateResilientMultiPdfReportFallback(files.map(f => f.fileName), selectedCategory);
-      return res.json({ analysis: fallback });
-    }
+    // QA10-A: shared async prompt/parts/config builder — used by BOTH
+    // transports (stream + non-stream) so the two paths can never drift
+    // apart. Kept as a builder (not hoisted statements) because it awaits
+    // URL scrapes; calling it AFTER each path's own AI-client check preserves
+    // the non-stream flow exactly (no-client returns fast without scraping,
+    // same as before).
+    const buildMultiPdfRequest = async () => {
+      const systemInstruction = "Anda adalah asisten AI Analis Keuangan Senior dan Pengelola Portofolio Internasional. Anda memiliki sertifikasi CFA (Chartered Financial Analyst) dan FRM (Financial Risk Manager) dengan pengalaman analisis taktis lebih dari 30 tahun. Tugas Anda adalah melakukan analisis komparatif head-to-head yang sangat tajam, kuantitatif, komprehensif, obyektif, dan berbasis data dari beberapa dokumen (Laporan Keuangan Korporasi, Whitepaper Kripto, atau Situs Web Proyek) yang dilampirkan secara bersamaan. Hubungkan dengan kinerja finansial historis (misalnya 5 tahun ke belakang jika tersedia). Gunakan bahasa Indonesia profesional tingkat tinggi, berwibawa, dingin, saksama, tanpa jargon pemasaran kosong atau retorika penjualan.";
 
-    const systemInstruction = "Anda adalah asisten AI Analis Keuangan Senior dan Pengelola Portofolio Internasional. Anda memiliki sertifikasi CFA (Chartered Financial Analyst) dan FRM (Financial Risk Manager) dengan pengalaman analisis taktis lebih dari 30 tahun. Tugas Anda adalah melakukan analisis komparatif head-to-head yang sangat tajam, kuantitatif, komprehensif, obyektif, dan berbasis data dari beberapa dokumen (Laporan Keuangan Korporasi, Whitepaper Kripto, atau Situs Web Proyek) yang dilampirkan secara bersamaan. Hubungkan dengan kinerja finansial historis (misalnya 5 tahun ke belakang jika tersedia). Gunakan bahasa Indonesia profesional tingkat tinggi, berwibawa, dingin, saksama, tanpa jargon pemasaran kosong atau retorika penjualan.";
-
-    const fileNamesList = files.map(f => `"${f.fileName}"`).join(", ");
-    let promptText = `
+      const fileNamesList = files.map(f => `"${f.fileName}"`).join(", ");
+      let promptText = `
 Dokumen/sumber terlampir adalah ${selectedCategory === "stock" ? "Laporan Keuangan Korporasi (Financial Statements)" : "Whitepapers Proyek Crypto / Token"} yang ingin dibandingkan secara bersilang hibrida.
 Daftar berkas/sumber asli: ${fileNamesList}.
 `;
 
-    // Process URLs if any
-    const urlSources = files.filter(f => f.type === "url" && f.webUrl);
-    if (urlSources.length > 0) {
-      promptText += `\n--- KONTEN SITUS WEB / WHITEPAPER LIVE DIBAWAH INI TELAH DIAMBIL SECARA REAL-TIME SEBAGAI SUMBER ANALISIS: ---\n`;
-      for (const src of urlSources) {
-        const scrapedText = await scrapeWebsiteContent(src.webUrl);
-        promptText += `\n[SUMBER WEB: "${src.fileName}" - URL: ${src.webUrl}]\n`;
-        promptText += `Konten scrap teks dari situs web tersebut:\n"""\n${scrapedText}\n"""\n`;
+      // Process URLs if any
+      const urlSources = files.filter(f => f.type === "url" && f.webUrl);
+      if (urlSources.length > 0) {
+        promptText += `\n--- KONTEN SITUS WEB / WHITEPAPER LIVE DIBAWAH INI TELAH DIAMBIL SECARA REAL-TIME SEBAGAI SUMBER ANALISIS: ---\n`;
+        for (const src of urlSources) {
+          const scrapedText = await scrapeWebsiteContent(src.webUrl);
+          promptText += `\n[SUMBER WEB: "${src.fileName}" - URL: ${src.webUrl}]\n`;
+          promptText += `Konten scrap teks dari situs web tersebut:\n"""\n${scrapedText}\n"""\n`;
+        }
+        promptText += `\n--------------------------------------------------\n`;
       }
-      promptText += `\n--------------------------------------------------\n`;
-    }
 
-    promptText += `
+      promptText += `
 Tolong buat Laporan Evaluasi Komparatif Finansial Berbobot Tinggi setingkat CFA Research Institute & FRM Risk Assessment Board. Dokumen laporan harus membandingkan semua berkas/sumber di atas (${files.length} sumber) secara side-by-side. Gunakan markdown terstruktur dengan tajuk-tajuk berikut secara presisi:
 
 ### 📑 1. RINGKASAN EKSEKUTIF KOMPARATIF BERSILANG (CROSS-AUDIT EXECUTIVE SUMMARY)
@@ -1000,23 +1114,87 @@ Tolong buat Laporan Evaluasi Komparatif Finansial Berbobot Tinggi setingkat CFA 
 - Tentukan kondisi akumulasi terbaik atau pemicu rebalancing / stop-loss.
 `;
 
-    // Extract PDF pieces (only files with type !== "url" and containing pdfData)
-    const pdfParts = files
-      .filter(file => file.type !== "url" && file.pdfData)
-      .map(file => ({
-        inlineData: {
-          mimeType: "application/pdf",
-          data: file.pdfData
-        }
-      }));
+      // Extract PDF pieces (only files with type !== "url" and containing pdfData)
+      const pdfParts = files
+        .filter(file => file.type !== "url" && file.pdfData)
+        .map(file => ({
+          inlineData: {
+            mimeType: "application/pdf",
+            data: file.pdfData
+          }
+        }));
 
-    const textPart = {
-      text: promptText
+      const textPart = {
+        text: promptText
+      };
+
+      const temp = aiTemperature !== undefined ? Number(aiTemperature) : 0.38;
+      const tokens = aiMaxTokens !== undefined ? Number(aiMaxTokens) : 1200;
+      const thinkingVal = mapThinkingLevel(aiThinkingMode);
+
+      return { systemInstruction, pdfParts, textPart, temp, tokens, thinkingVal };
     };
 
-    const temp = aiTemperature !== undefined ? Number(aiTemperature) : 0.38;
-    const tokens = aiMaxTokens !== undefined ? Number(aiMaxTokens) : 1200;
-    const thinkingVal = mapThinkingLevel(aiThinkingMode);
+    // QA10-A: SSE streaming branch — same body (files/category/…) + "stream":
+    // true. The OpenAI-compatible streaming router (callAIStream) is
+    // text-only — PDF inlineData parts cannot traverse it — so this branch
+    // deliberately does NOT swap the generation call: it runs the SAME
+    // PDF-aware generateContentWithRetry as the non-stream path (the AI
+    // always sees the actual documents; the SSE keep-alive covers the URL
+    // scrapes + long generation) and emits the finished report as token
+    // frames before the authoritative done frame. A text-prompt-only stream
+    // would let the model "analyze" documents it never received.
+    if (req.body.stream === true) {
+      await runSSEStream(req, res, async (send, abortSignal) => {
+        const aiClient = getAiClient(req);
+        if (!aiClient) {
+          const fallback = generateResilientMultiPdfReportFallback(files.map(f => f.fileName), selectedCategory);
+          send({ type: "done", analysis: fallback, isFallback: true, errorReason: "Gemini client is not initialized" });
+          return;
+        }
+        try {
+          const { systemInstruction, pdfParts, textPart, temp, tokens, thinkingVal } = await buildMultiPdfRequest();
+          const response = await generateContentWithRetry(aiClient, {
+            model: "gemini-2.5-flash",
+            contents: { parts: [...pdfParts, textPart] },
+            config: {
+              temperature: temp,
+              maxOutputTokens: tokens,
+              thinkingConfig: { thinkingLevel: thinkingVal },
+              systemInstruction: systemInstruction
+            }
+          });
+          const outputText = response.text || "";
+          if (abortSignal.aborted) return; // client disconnected — no partial work delivered
+          if (!outputText.trim()) {
+            const mockFileNames = files.map(f => f.fileName);
+            const fallback = generateResilientMultiPdfReportFallback(mockFileNames, category);
+            send({ type: "done", analysis: fallback, isFallback: true, errorReason: "Respons AI kosong" });
+            return;
+          }
+          // Emit the finished report as token frame(s) — the exact content of
+          // the non-stream response body — then the authoritative done frame.
+          send({ type: "token", text: outputText });
+          send({ type: "done", analysis: outputText, isFallback: false });
+        } catch (err: any) {
+          // Mirrors the non-stream catch fallback (mockFileNames + raw
+          // category — argument-for-argument identical).
+          const mockFileNames = files.map(f => f.fileName);
+          const fallback = generateResilientMultiPdfReportFallback(mockFileNames, category);
+          send({ type: "done", analysis: fallback, isFallback: true, errorReason: err?.message || String(err) });
+        }
+      });
+      return;
+    }
+
+    const aiClient = getAiClient(req);
+    if (!aiClient) {
+      log.info("Gemini Client not initialized, returning resilient expert Multi-PDF report info.");
+      const fallback = generateResilientMultiPdfReportFallback(files.map(f => f.fileName), selectedCategory);
+      return res.json({ analysis: fallback });
+    }
+
+    const { systemInstruction, pdfParts, textPart, temp, tokens, thinkingVal } = await buildMultiPdfRequest();
 
     const response = await generateContentWithRetry(aiClient, {
       model: "gemini-2.5-flash",

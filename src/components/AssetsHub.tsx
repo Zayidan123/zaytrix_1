@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from "react";
-import Markdown from "react-markdown";
 import StreamMarkdown from "./StreamMarkdown";
 import { consumeAIStream } from "../lib/aiStream";
 import { useGlobalStore } from "../store";
@@ -52,6 +51,8 @@ export default function AssetsHub({ assets }: AssetsHubProps) {
   const [pdfAnalysisReport, setPdfAnalysisReport] = useState("");
   const [pdfAnalysisError, setPdfAnalysisError] = useState("");
   const [loadingStatusIndex, setLoadingStatusIndex] = useState(0);
+  /** QA10-A: true while the PDF report SSE tokens are arriving. */
+  const [isPdfStreaming, setIsPdfStreaming] = useState(false);
 
   const loadingStatuses = [
     "Mengamankan saluran enkripsi transmisi berkas...",
@@ -324,20 +325,32 @@ export default function AssetsHub({ assets }: AssetsHubProps) {
     setPdfAnalysisError("");
     setLoadingStatusIndex(0);
     setIsPdfReportFallback(false);
+    setIsPdfStreaming(false);
 
     const intervalId = setInterval(() => {
       setLoadingStatusIndex((prev) => (prev < loadingStatuses.length - 1 ? prev + 1 : prev));
     }, 2800);
 
-    try {
-      const base64pdf = await convertToBase64(uploadedFile);
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json"
-      };
-
+    // QA10-A: legacy non-stream transport, kept verbatim as the fallback when
+    // the server answers plain JSON (cache hit / older deployment) and for the
+    // single retry when SSE fails BEFORE the first token arrives.
+    const applyJsonResponse = async (res: Response) => {
+      const contentType = res.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        throw new Error(`Format data tidak valid dari server (HTTP ${res.status}).`);
+      }
+      const data = await res.json();
+      if (res.ok) {
+        setPdfAnalysisReport(data.analysis);
+        setIsPdfReportFallback(!!data.isFallback);
+      } else {
+        setPdfAnalysisError(data.error || "Gagal melakukan riset audit atas dokumen.");
+      }
+    };
+    const requestNonStream = async (base64pdf: string) => {
       const res = await fetch("/api/gemini/analyze-pdf", {
         method: "POST",
-        headers,
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           pdfData: base64pdf,
           fileName: uploadedFile.name,
@@ -348,25 +361,75 @@ export default function AssetsHub({ assets }: AssetsHubProps) {
           aiThinkingMode: settings.aiThinkingMode || "high"
         })
       });
+      await applyJsonResponse(res);
+    };
+
+    try {
+      const base64pdf = await convertToBase64(uploadedFile);
+      const baseBody = {
+        pdfData: base64pdf,
+        fileName: uploadedFile.name,
+        category: pdfCategory,
+        aiTone: settings.aiTone,
+        aiMaxTokens: settings.aiMaxTokens,
+        aiTemperature: settings.aiTemperature,
+        aiThinkingMode: settings.aiThinkingMode || "high"
+      };
+
+      // QA10-A: request the SSE stream first — the audit report flows in over
+      // SSE (token frames + the authoritative done frame).
+      const res = await fetch("/api/gemini/analyze-pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...baseBody, stream: true })
+      });
+      const contentType = res.headers.get("content-type") || "";
 
       clearInterval(intervalId);
 
-      const contentType = res.headers.get("content-type");
-      if (!contentType || !contentType.includes("application/json")) {
-        throw new Error(`Format data tidak valid dari server (HTTP ${res.status}).`);
+      if (res.ok && contentType.includes("text/event-stream") && res.body) {
+        let gotToken = false;
+        let streamError: string | null = null;
+        setIsPdfStreaming(true);
+        await consumeAIStream(res, {
+          onToken: (chunk) => {
+            gotToken = true;
+            setPdfAnalysisReport((prev) => prev + chunk);
+          },
+          onDone: (payload) => {
+            // The done frame is authoritative — apply it exactly like the
+            // non-stream JSON response (incl. the honest isFallback label).
+            if (payload && typeof payload.analysis === "string") {
+              setPdfAnalysisReport(payload.analysis);
+            }
+            setIsPdfReportFallback(!!(payload && payload.isFallback));
+          },
+          onError: (msg) => {
+            streamError = msg;
+          }
+        });
+        setIsPdfStreaming(false);
+
+        if (streamError && !gotToken) {
+          // QA10-A: SSE failed before any content — retry ONCE over the legacy
+          // non-stream path so the user still gets a report.
+          await requestNonStream(base64pdf);
+          return;
+        }
+        if (streamError) {
+          // Error after partial content — keep the partial text + honest note.
+          setPdfAnalysisError(`Aliran data AI terputus: ${streamError}`);
+        }
+        return;
       }
 
-      const data = await res.json();
-      if (res.ok) {
-        setPdfAnalysisReport(data.analysis);
-        setIsPdfReportFallback(!!data.isFallback);
-      } else {
-        setPdfAnalysisError(data.error || "Gagal melakukan riset audit atas dokumen.");
-      }
+      // Server answered JSON (cache hit / no stream support) — legacy path.
+      await applyJsonResponse(res);
     } catch (err: any) {
       clearInterval(intervalId);
       setPdfAnalysisError("Koneksi gagal atau ukuran file melebihi kapasitas transfer server: " + err.message);
     } finally {
+      setIsPdfStreaming(false);
       setIsAnalyzingPdf(false);
     }
   };
@@ -914,8 +977,9 @@ export default function AssetsHub({ assets }: AssetsHubProps) {
                 </div>
               )}
 
-              {/* Live Loading Tickers */}
-              {isAnalyzingPdf && (
+              {/* Live Loading Tickers — QA10-A: hidden once the streaming
+                  report text starts flowing (the report view takes over). */}
+              {isAnalyzingPdf && !pdfAnalysisReport && (
                 <div className="m-auto text-center space-y-6 max-w-md p-12">
                   <div className="relative w-16 h-16 mx-auto">
                     <div className="absolute inset-0 rounded-full border-4 border-slate-850" />
@@ -942,20 +1006,25 @@ export default function AssetsHub({ assets }: AssetsHubProps) {
               )}
 
               {/* Dynamic Beautiful CFA/FRM Analysis Report Viewer */}
-              {pdfAnalysisReport && !isAnalyzingPdf && (
+              {pdfAnalysisReport && (!isAnalyzingPdf || isPdfStreaming) && (
                 <div className="space-y-6">
                   {/* Top Control Action Row */}
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-800 pb-4 mb-2 gap-4">
                     <div className="flex items-center space-x-2">
-                      <div className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse" />
+                      <div className={`w-3 h-3 rounded-full bg-emerald-500 animate-pulse`} />
                       <div>
                         <span className="uppercase font-mono text-[10px] tracking-wider text-emerald-400 font-bold block">
-                          MEMORANDUM ADVISORI SELESAI
+                          {isPdfStreaming ? "MEMORANDUM ADVISORI MENGALIR" : "MEMORANDUM ADVISORI SELESAI"}
                         </span>
                         <span className="text-[11px] text-slate-400 block font-sans">
                           Sertifikasi Hasil Audit Komite Internasional CFA/FRM
                         </span>
                       </div>
+                      {isPdfStreaming && (
+                        <span className="text-[8px] font-mono px-1.5 py-0.5 rounded border bg-emerald-500/10 border-emerald-500/25 text-emerald-300 flex items-center gap-1" title="Laporan mengalir token demi token (SSE)">
+                          <span className="w-1 h-1 rounded-full bg-emerald-400 animate-pulse" /> streaming…
+                        </span>
+                      )}
                     </div>
                     
                     <button
@@ -1002,7 +1071,9 @@ export default function AssetsHub({ assets }: AssetsHubProps) {
                   {/* The Document Report Main Presentation Container */}
                   <div className="bg-slate-950/45 shadow-xl border border-slate-850 p-6 rounded-xl max-h-[580px] overflow-y-auto prose prose-invert prose-xs text-xs text-slate-300">
                     <div className="markdown-body leading-relaxed text-[11.5px] font-sans antialiased text-slate-300">
-                      <Markdown>{pdfAnalysisReport}</Markdown>
+                      {/* QA10-A: progressive markdown — memoized paragraphs,
+                          raw streaming tail + caret. */}
+                      <StreamMarkdown text={pdfAnalysisReport} isStreaming={isPdfStreaming} />
                     </div>
                   </div>
                 </div>

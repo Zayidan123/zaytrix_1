@@ -14,6 +14,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Radar,
+  CandlestickChart,
+  FlaskConical,
   Settings as SettingsIcon,
   LogOut,
   User as UserIcon,
@@ -59,6 +61,8 @@ export default function Sidebar({
     { id: "news", name: "Newsroom Feed", icon: Newspaper, status: "THE BLOCK" },
     { id: "assets", name: "Crypto Hub", icon: Coins },
     { id: "whale-tracker", name: "On-Chain Data", icon: Radar, status: "MEMPOOL LIVE" },
+    { id: "dex", name: "DEX Radar", icon: CandlestickChart, status: "SCREENER" },
+    { id: "paper", name: "Paper Trading", icon: FlaskConical, status: "VIRTUAL $10K" },
     { id: "ai-signals", name: "AI Trade Signals", icon: LineChart, status: "LIVE ON-CHAIN" },
     { id: "market-chat", name: "AI Market Chat", icon: MessageCircle, status: "LIVE" },
     { id: "multi-doc", name: "AI Multi-Doc Compare", icon: Files, status: "VIP" },
@@ -129,6 +133,8 @@ export default function Sidebar({
               : item.id === "ai-signals" ? "violet"
               : item.id === "market-chat" ? "violet"
               : item.id === "whale-tracker" ? "cyan"
+              : item.id === "dex" ? "teal"
+              : item.id === "paper" ? "emerald"
               : item.id === "news" ? "rose"
               : item.id === "coins" ? "blue"
               : "slate";

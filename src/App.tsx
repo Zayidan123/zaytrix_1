@@ -29,7 +29,9 @@ import {
   Settings as SettingsIcon,
   Palette,
   LogOut,
-  RotateCw
+  RotateCw,
+  CandlestickChart,
+  FlaskConical
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useGlobalStore } from "./store";
@@ -47,6 +49,8 @@ import MultiDocAnalysis from "./components/MultiDocAnalysis";
 import AiSignals from "./components/AiSignals";
 import MarketSentimentChat from "./components/MarketSentimentChat";
 import OnChainData from "./components/OnChainData";
+import DexRadar from "./components/DexRadar";
+import PaperTrading from "./components/PaperTrading";
 import Settings from "./components/Settings";
 import Ledger from "./components/Ledger";
 import NewsSection from "./components/NewsSection";
@@ -422,6 +426,8 @@ export default function App() {
       { id: "nav-news", name: "Newsroom Feed", group: "NAVIGASI", icon: Newspaper, hint: "berita", keywords: "berita news the block", action: () => { setActiveTab("news"); setIsMobileSidebarOpen(false); } },
       { id: "nav-assets", name: "Crypto Hub", group: "NAVIGASI", icon: Coins, hint: "aset", keywords: "aset portfolio crypto hub wallet", action: () => { setActiveTab("assets"); setIsMobileSidebarOpen(false); } },
       { id: "nav-whale", name: "On-Chain Data & Whale Radar", group: "NAVIGASI", icon: Radar, hint: "whale", keywords: "onchain on-chain whale radar radar whale binance aggtrades", action: () => { setActiveTab("whale-tracker"); setIsMobileSidebarOpen(false); } },
+      { id: "nav-dex", name: "DEX Radar", group: "NAVIGASI", icon: CandlestickChart, hint: "dex", keywords: "dex screener uniswap pool likuiditas pancakeswap aerodrome", action: () => { setActiveTab("dex"); setIsMobileSidebarOpen(false); } },
+      { id: "nav-paper", name: "Paper Trading (Simulasi)", group: "NAVIGASI", icon: FlaskConical, hint: "paper", keywords: "paper trading simulasi virtual order posisi uji", action: () => { setActiveTab("paper"); setIsMobileSidebarOpen(false); } },
       { id: "nav-ai-signals", name: "AI Trade Signals", group: "NAVIGASI", icon: LineChart, hint: "sinyal", keywords: "ai sinyal signal trading", action: () => { setActiveTab("ai-signals"); setIsMobileSidebarOpen(false); } },
       { id: "nav-market-chat", name: "AI Market Chat", group: "NAVIGASI", icon: MessageCircle, hint: "chat", keywords: "ai chat percakapan gemini", action: () => { setActiveTab("market-chat"); setIsMobileSidebarOpen(false); } },
       { id: "nav-multi-doc", name: "AI Multi-Doc Compare", group: "NAVIGASI", icon: Files, hint: "dokumen", keywords: "dokumen document compare multi doc vip", action: () => { setActiveTab("multi-doc"); setIsMobileSidebarOpen(false); } },
@@ -1405,6 +1411,14 @@ export default function App() {
 
               {activeTab === "whale-tracker" && (
                 <OnChainData />
+              )}
+
+              {activeTab === "dex" && (
+                <DexRadar />
+              )}
+
+              {activeTab === "paper" && (
+                <PaperTrading />
               )}
 
               {activeTab === "settings" && (

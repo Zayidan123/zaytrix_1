@@ -96,6 +96,11 @@ import { registerSignalRoutes, updatePendingSignals, bootstrapRealTimeSignals } 
 import { registerOnchainRoutes } from "./src/server/onchainStore";
 import { registerAutomatedAnalysisRoutes } from "./src/server/automatedAnalysis";
 import { registerNewsFxRoutes } from "./src/server/newsFxRoutes";
+// QA10 (ronde #10): modul baru — DEX Radar (publik read-only), Paper Trading
+// (self-mount requireAuth), AI memory/quota routes (self-mount requireAuth).
+import { registerDexRoutes } from "./src/server/dexRoutes";
+import { registerPaperTrading } from "./src/server/paperTrading";
+import { registerAiMemoryRoutes } from "./src/server/aiMemory";
 // Boots the Binance Futures liquidation WS worker on import (was server.ts:3349).
 import "./src/server/binanceDerivatives";
 
@@ -128,6 +133,11 @@ registerSignalRoutes(app);             // /api/trading-signals/history + generat
 registerOnchainRoutes(app);            // /api/onchain/* (metrics, data, orderbook, altseason, oi, dominance, correlations)
 registerAutomatedAnalysisRoutes(app);  // /api/gemini/automated-analysis(+trigger) — after the /api/gemini auth gate
 registerNewsFxRoutes(app);             // /api/fx/usd-idr + /api/news
+// QA10: rute fitur baru — dexRoutes publik read-only (seperti /api/assets);
+// paperTrading & aiMemory self-mount requireAuth per-route (pola signalEngine).
+registerDexRoutes(app);                // QA10-C: /api/dex/pairs + /api/dex/search
+registerPaperTrading(app);             // QA10-B: /api/paper/* (order virtual market-only)
+registerAiMemoryRoutes(app);           // QA10-E: /api/ai/history|models (memori percakapan)
 
 // ===========================================================================
 // SEC-BACKEND: protect sensitive trade endpoints with requireAuth.
@@ -200,7 +210,8 @@ try {
 
 // ─── AI Router (OpenRouter primary + Gemini fallback) ────────────────────
 try {
-  const { callAI, callAIStream, getAIUsage, getAIProviderHealth, testOpenRouterConnection } = await import("./src/server/aiRouter");
+  const { callAI, callAIStream, getAIUsage, getAIProviderHealth, testOpenRouterConnection, getUserAiQuota } = await import("./src/server/aiRouter");
+  const { getRecentChatHistory, saveChatMessage, CHAT_CONTEXT_LIMIT } = await import("./src/server/aiMemory");
 
   // GET /api/ai/health — AI provider health status (public, for monitoring)
   app.get("/api/ai/health", (req, res) => {
@@ -215,7 +226,7 @@ try {
 
   // POST /api/ai/chat — generic AI chat with automatic fallback
   app.post("/api/ai/chat", requireAuth, async (req: any, res) => {
-    const { prompt, systemPrompt, maxTokens, temperature } = req.body;
+    const { prompt, systemPrompt, maxTokens, temperature, model } = req.body;
     if (!prompt) return res.status(400).json({ success: false, error: "Prompt wajib diisi." });
 
     const result = await callAI({
@@ -223,6 +234,7 @@ try {
       systemPrompt,
       maxTokens,
       temperature,
+      model, // QA10-E: pilihan model user (divalidasi aiRouter — invalid → default jujur)
       userId: req.user?.sub,
       endpoint: "chat",
     });
@@ -234,9 +246,40 @@ try {
   // Same auth + prompt contract as /api/ai/chat; response is an
   // text/event-stream of JSON events: {type:"start"|"token"|"done"|"error", ...}.
   // Client disconnect aborts the upstream OpenRouter fetch (no orphan streams).
+  // QA10-E (ronde #10): + model pilihan user + kuota harian (429 JSON sebelum
+  // stream dimulai) + memori percakapan (16 pesan terakhir sebagai konteks;
+  // pesan user & asisten disimpan HANYA saat stream tuntas — teks parsial
+  // akibat putus di tengah TIDAK pernah masuk memori).
   app.post("/api/ai/chat-stream", requireAuth, async (req: any, res) => {
-    const { prompt, systemPrompt, maxTokens, temperature } = req.body;
+    const { prompt, systemPrompt, maxTokens, temperature, model } = req.body;
     if (!prompt) return res.status(400).json({ success: false, error: "Prompt wajib diisi." });
+
+    // QA10-E: kuota AI harian per-user. getUserAiQuota fail-open JUJUR (userId
+    // kosong / DB error → unlimited:true) sehingga counting bug tidak pernah
+    // mematikan chat — hanya kuota benar-benar tercapai yang menolak (429).
+    const quota = await getUserAiQuota(req.user?.sub);
+    if (!quota.unlimited && quota.used >= quota.limit) {
+      return res.status(429).json({
+        success: false,
+        error: `Kuota AI harian tercapai (${quota.used}/${quota.limit}). Kuota reset otomatis setiap tengah malam UTC.`,
+        quota,
+      });
+    }
+
+    // QA10-E: muat riwayat terbaru sebagai konteks. Gagal DB → [] (helper)
+    // — chat tetap jalan tanpa memori, jangan crash.
+    const history = await getRecentChatHistory(req.user?.sub, CHAT_CONTEXT_LIMIT);
+    const historyLines = history
+      .map((m) => `${m.role === "assistant" ? "Asisten" : "Pengguna"}: ${String(m.content).slice(0, 2000)}`)
+      .join("\n");
+    const contextualPrompt = historyLines
+      ? `Riwayat percakapan sebelumnya (konteks — jangan ulangi isinya, jawab pertanyaan terbaru):
+${historyLines}
+
+---
+Pertanyaan terbaru:
+${prompt}`
+      : prompt;
 
     res.writeHead(200, {
       "Content-Type": "text/event-stream; charset=utf-8",
@@ -274,18 +317,39 @@ try {
     }, 15_000);
 
     try {
+      // QA10-E: akumulasi teks + model final — event "done" tidak membawa
+      // teks penuh, jadi route mengumpulkan token untuk disimpan ke memori.
+      let fullText = "";
+      let doneReceived = false;
+      let finalModel: string | undefined;
       await callAIStream(
         {
-          prompt,
+          prompt: contextualPrompt,
           systemPrompt,
           maxTokens,
           temperature,
+          model, // QA10-E: pilihan model user (divalidasi aiRouter — invalid → default jujur)
           userId: req.user?.sub,
           endpoint: "chat-stream",
           abortSignal: clientAbort.signal,
         },
-        (ev) => send(ev)
+        (ev) => {
+          send(ev);
+          if (ev && typeof ev === "object") {
+            if (ev.type === "token" && typeof ev.text === "string") fullText += ev.text;
+            if (ev.type === "done") {
+              doneReceived = true;
+              finalModel = typeof ev.model === "string" ? ev.model : undefined;
+            }
+          }
+        }
       );
+      // QA10-E: simpan ke memori HANYA bila stream tuntas (event done)
+      // DAN klien masih terhubung (abort → teks parsial tidak pernah disimpan).
+      if (doneReceived && !clientClosed && fullText.trim()) {
+        saveChatMessage(req.user?.sub, "user", prompt);
+        saveChatMessage(req.user?.sub, "assistant", fullText, finalModel);
+      }
     } catch (e: any) {
       send({ type: "error", error: String(e?.message || e).substring(0, 150) });
     } finally {
