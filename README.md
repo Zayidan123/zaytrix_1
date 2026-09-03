@@ -184,6 +184,34 @@ git add .github/ && git commit -m "ci: activate pipeline" && git push
 
 **Verifikasi ronde:** tsc 0 error · vitest 37/37 · smoke 18/18 PASS (0 page/console error) · **browser E2E**: analisis on-chain streaming live (thinking → `ANALISIS MENGALIR…` → selesai, `HASIL GEMINI` live non-fallback, 0 console error) · toggle LOG_LEVEL (DEBUG→WARN aktif → entri audit terlihat → baris expand → payload JSON ter-render → kembali DEBUG) · whale radar filter SPOT bekerja · **SSE trading-signals via curl**: 23+ frame token `⚡ openrouter · glm-4.5-air` mengalir nyata · 0 console error di semua skenario.
 
+### 🧪 Ronde QA Runtime #9 (3 Sep — REFACTOR MONOLITH: server.ts 5.521 → 444 baris, 12 modul terpisah)
+
+**QA9-R3: item #3 yang di-skip ronde #8 dikerjakan — pemecahan monolith backend.** `server.ts` (5.521 baris, route + helper + state + background job tercampur dalam satu file) dipecah menjadi **12 modul fokus** di `src/server/` dengan `server.ts` tinggal composition root 444 baris (middleware global → wiring job latar → registrasi route → mount router lama → catch-all):
+
+| Modul baru | Isi (semua "extracted verbatim" — asal baris didokumentasikan di header tiap modul) |
+|---|---|
+| `httpUtils.ts` | `fetchWithTimeout` bersama (dipakai 30+ call site) |
+| `geminiHelpers.ts` | Plumbing AI bersama: cache prompt LRU 500, retry backoff, helper SSE, parser JSON longgar, factory klien AI (`ai` live-binding), mapping thinking-level |
+| `ssrfGuard.ts` | Allowlist host webhook + allowlist domain scrape + blokir IP privat + scraper aman |
+| `assetsStore.ts` | Registry aset + refresh 2 dtk Binance/Yahoo (flag stale/warmup) + **hook registry** `registerAssetsRefreshHook()` |
+| `marketRoutes.ts` | `/api/history`, `/api/assets(+register)`, `/api/coins/*`, `/api/stocks/fundamentals` |
+| `newsFxRoutes.ts` | `/api/fx/usd-idr` + `/api/news` (RSS multi-sumber) |
+| `onchainStore.ts` | `fetchLatestOnChainData`, cache BTC on-chain 60 dtk + `getOnChainMetrics()`, seluruh `/api/onchain/*` (metrics, data, orderbook, altseason, oi-history, dominance, correlations) |
+| `binanceDerivatives.ts` | Worker WS likuidasi Futures `!forceOrder@arr` (boot saat import) + cache funding/OI/basis |
+| `signalEngine.ts` | `signalHistory` + `recordGeneratedSignal` + `updatePendingSignals` + `bootstrapRealTimeSignals` + endpoint `/api/trading-signals/*` |
+| `notifications.ts` | `/api/send-alert` (relay webhook SSRF-safe) + config per-user + Telegram + daemon alert on-chain latar + `/api/settings/notifications` |
+| `automatedAnalysis.ts` | Analisis Gemini periodik 10 menit + endpoint `automated-analysis(+trigger)` |
+| `geminiRoutes.ts` | Seluruh `/api/gemini/*` (analyze, news-sentiment, news-chat, analyze-onchain, analyze-pdf, analyze-multi-pdf, trading-signals/analyze) + fallback report + gate `requireAuth` |
+
+- **Metode aman (tidak ada tulis-ulang manual):** ekstraksi baris verbatim via script satu-tembakan dengan **invariant terukur** — jumlah pernyataan `app.(get|post|put|delete|patch|use)` dihitung: asli 45 → hasil 15 (server.ts) + 30 (modul) = **45, identik** (tidak ada route hilang/ditambah/duplikat); scanner brace/template memastikan tidak ada potongan terpotong; urutan registrasi = urutan definisi asli persis (semantik middleware Express terjaga: parser 15 mb path-scoped sebelum parser global, gate `requireAuth /api/gemini` sebelum semua route AI, gate `/api/trade` sebelum router trade, `apiNotFound` tetap paling akhir).
+- **Deps satu arah, tanpa circular import:** `signalEngine → assetsStore` lewat hook registry (panggilan langsung `updatePendingSignals()` di dalam refresh harga kini jadi subscribe hook — arah dependensi tetap searah dan teruji); `automatedAnalysis → geminiRoutes` (fallback report dibagikan); tiap modul punya logger sendiri (`createLogger("namaModul")`) sehingga log operator kini **bernama modul asal**.
+- **Keputusan stack (merespons opsi ganti bahasa):** backend **tetap TypeScript single-runtime (tsx/bun)** — Python/Solidity TIDAK diadopsi: safety net yang membuktikan refactor ini (37 test + smoke 18 langkah + tsc) hanya berlaku karena satu bahasa/satu runtime; rewrite lintas bahasa = regresi tak terdeteksi tanpa keuntungan arsitektural. Solidity tidak relevan (tidak ada smart contract di scope ZAYTRIX). Struktur modular hasil split kini siap diekstrak ke service terpisah bila skala menuntut (per modul sudah boundary bersih).
+- **Kebersihan:** import tidak terpakai di `server.ts` dibersihkan; backup & script refactor disimpan di `.qa-tmp/` (gitignored, dihapus).
+
+**0 bug baru ditemukan.** Catatan jujur: 1 console warning React "Maximum update depth exceeded" muncul SEKALI pada smoke run #1 (non-deterministik — run #2 & #3 dengan kode identik 0 error; diduga burst data WS live 2 dtk vs re-render; kode frontend ronde ini tidak tersentuh → bukan regresi refactor; dicatat sebagai flake untuk dipantau).
+
+**Verifikasi ronde:** tsc 0 error · vitest **37/37** (port test 4170, self-boot) · smoke **18/18 PASS** (dijalankan 2×) · curl golden-path: 9 endpoint publik 200, `/api/trading-signals/history` 200 dengan session (sinyal bootstrap nyata ter-render), gate `/api/gemini/*` 403 tanpa session, `/api/history/BTC` 200 (404 utk simbol tak dikenal — perilaku asli) · **browser E2E (agent-browser)**: register→auto-login→15 tab, Whale Radar live (`binance-spotfutures-ws-live`, chip WS LIVE), **AI chat SSE** bubble ter-render + badge `openrouter · glm-4.5-air` + statistik token (diverifikasi visual via VLM), 0 console error · WS likuidasi Futures & whale spot/futures terhubung saat boot · harga Binance/Yahoo refresh tiap 2 dtk.
+
 ---
 
 ## 🚀 Fitur Utama
@@ -279,14 +307,17 @@ bun run test
 
 ```
 zaytrix_1/
-├── server.ts                    # Express monolith (auth, data, AI, WS)
+├── server.ts                    # Composition root Express (444 baris — middleware + wiring + registrasi 12 modul)
 ├── prisma/schema.prisma         # 11 model + shadow Decimal/DateTime
 ├── src/
 │   ├── main.tsx                 # Entry + CSRF-aware fetch wrapper
 │   ├── App.tsx                  # Routing + auth + alert sync server
 │   ├── store.ts                 # Zustand (boot log jujur)
 │   ├── components/              # 29 komponen (mock data dihapus)
-│   ├── server/                  # 19 modul backend (security, auth, vault, trade, dst.)
+│   ├── server/                  # 31 modul backend (ronde #9: + httpUtils, geminiHelpers,
+│   │                            #   ssrfGuard, assetsStore, marketRoutes, newsFxRoutes,
+│   │                            #   onchainStore, binanceDerivatives, signalEngine,
+│   │                            #   notifications, automatedAnalysis, geminiRoutes)
 │   ├── lib/portfolioSync.ts     # Sinkronisasi portofolio + alert (merge)
 │   └── utils/pdfGenerator.ts    # PDF report (DOMPurify)
 ├── Caddyfile                    # Reverse proxy + dokumentasi TLS
@@ -303,12 +334,13 @@ zaytrix_1/
 |--------|-------|
 | Temuan audit (GLM 5.3) | 75 (26 SEC + 25 DATA + 24 FUNC) |
 | Temuan ditangani | 75 / 75 |
-| Bug QA runtime (8 ronde) | 15 ditemukan → semua diperbaiki |
+| Bug QA runtime (9 ronde) | 15 ditemukan → semua diperbaiki |
 | Data fabrication tersisa | 0 |
 | Type errors | 0 |
+| Ukuran server.ts | 5.521 → 444 baris (12 modul, invariant route 45/45) |
 | Build produksi | ✅ (ESM, 492.9kb server) |
 | Test suite | ✅ 37/37 self-booting (FUNC-14 selesai) |
-| Commits | audit + 8 ronde QA runtime |
+| Commits | audit + 9 ronde QA runtime |
 
 ---
 
