@@ -4,6 +4,7 @@
 // All 13 files import { prisma } from "./db" — no changes needed.
 //
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { COLUMN_MAP } from "./columnMap";
 
 // ─── Configuration ───────────────────────────
 const SUPABASE_URL = process.env.SUPABASE_URL || "https://mtvaoftwuojntmrqhyyb.supabase.co";
@@ -30,6 +31,7 @@ function camelKeysToSnake(obj: Record<string, any>): Record<string, any> {
 }
 
 function snakeToCamel(str: string): string {
+  if (COLUMN_MAP[str]) return COLUMN_MAP[str];
   return str.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
 }
 
@@ -232,9 +234,32 @@ function createModel(modelName: string): ModelDb {
     },
 
     async create(opts: CreateOptions): Promise<any> {
-      const { data, error } = await client.from(modelName).insert(camelKeysToSnake(opts.data)).select(buildSelect(opts.select)).single();
-      if (error) throw error;
-      return data ? toCamelSingle(data) : null;
+      let data = camelKeysToSnake(opts.data);
+      const now = new Date().toISOString();
+      const createdAtKey = camelToSnake("createdAt");
+      const updatedAtKey = camelToSnake("updatedAt");
+      if (!data[createdAtKey]) data[createdAtKey] = now;
+      if (!data[updatedAtKey]) data[updatedAtKey] = now;
+      const { data: result, error } = await client
+        .from(modelName)
+        .insert(data)
+        .select(buildSelect(opts.select))
+        .single();
+      if (error) {
+        const tsKeys = {} as Record<string, any>;
+        tsKeys[createdAtKey] = data[createdAtKey];
+        tsKeys[updatedAtKey] = data[updatedAtKey];
+        if (Object.values(tsKeys).some(v => v) && !error.message?.includes("successfully")) {
+          const filtered = { ...data };
+          delete filtered[createdAtKey];
+          delete filtered[updatedAtKey];
+          const r2 = await client.from(modelName).insert(filtered).select(buildSelect(opts.select)).single();
+          if (r2.error) throw r2.error;
+          return r2.data ? toCamelSingle(r2.data) : null;
+        }
+        throw error;
+      }
+      return result ? toCamelSingle(result) : null;
     },
 
     async upsert(opts: UpsertOptions): Promise<any> {
@@ -245,11 +270,25 @@ function createModel(modelName: string): ModelDb {
     },
 
     async update(opts: UpdateOptions): Promise<any> {
-      let query = client.from(modelName).update(camelKeysToSnake(opts.data)).select(buildSelect(opts.select));
+      let data = camelKeysToSnake(opts.data);
+      const updatedAtKey = camelToSnake("updatedAt");
+      if (data[camelToSnake("createdAt")] !== undefined) delete data[camelToSnake("createdAt")];
+      data[updatedAtKey] = new Date().toISOString();
+      let query = client.from(modelName).update(data).select(buildSelect(opts.select));
       query = buildWhere(query, opts.where);
-      const { data, error } = await query.single();
-      if (error) throw error;
-      return data ? toCamelSingle(data) : null;
+      const { data: result, error } = await query.single();
+      if (error) {
+        if ((error.code === "42703" || error.code === "PGRST204") && data[updatedAtKey]) {
+          delete data[updatedAtKey];
+          let q2 = client.from(modelName).update(data).select(buildSelect(opts.select));
+          q2 = buildWhere(q2, opts.where);
+          const { data: d2, error: e2 } = await q2.single();
+          if (e2) throw e2;
+          return d2 ? toCamelSingle(d2) : null;
+        }
+        throw error;
+      }
+      return result ? toCamelSingle(result) : null;
     },
 
     async updateMany(opts: { where: Record<string, any>; data: Record<string, any> }): Promise<{ count: number }> {
