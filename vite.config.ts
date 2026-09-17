@@ -23,6 +23,9 @@ export default defineConfig(() => {
       // Bind to all interfaces so the gateway/Caddy reverse proxy can connect.
       host: '0.0.0.0',
     },
+    // SEC-ARCH: lightningcss native binary is incompatible with Termux Proot ARM64.
+    // Use esbuild CSS transformer (pure JS, works on all platforms).
+    css: { transformer: 'esbuild' },
     // Exclude non-app directories from Vite module resolution.
     // `entries` restricts the dependency scanner to the real app entry so
     // Vite does not try to parse hundreds of unrelated HTML files in skills/.
