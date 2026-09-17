@@ -283,18 +283,44 @@ Database lama (`db/custom.db`) pernah ter-commit publik berisi email, hash bcryp
    ```bash
    bash scripts/purge-db-from-history.sh --push
    ```
-   Script memakai `git filter-repo`, membuat backup branch lokal, memverifikasi `db/*.db` hilang dari seluruh history, lalu force-push. (Prasyarat: `pip install git-filter-repo`.)
+     Script memakai `git filter-repo`, membuat backup branch lokal, memverifikasi `db/*.db` hilang dari seluruh history, lalu force-push. (Prasyarat: `pip install git-filter-repo`.)
 
----
+   ---
 
-## 🔧 Tech Stack
+   ### 🧠 Phase 3 — AI Enhancement (Selesai 17 Sep 2026)
+
+   Integrasi kemampuan AI dengan dual-provider routing (9router lokal + OpenRouter cloud).
+
+   **Bug yang diperbaiki (4 bugs):**
+   | Bug | Root Cause | Fix |
+   |-----|-----------|-----|
+   | `breachChecked.toISOString is not a function` | Supabase adapter mengembalikan string, bukan Date | Handle all types in `publicUser()` |
+   | **Session ALWAYS gagal** | `convertDate()` mengembalikan Date, tapi `toCamelResults/toCamelSingle` merekursi Date via `Object.entries(Date)=[]` → menghasilkan `{}` | Guard `instanceof Date` di kedua fungsi |
+   | `lastSeen` NOT NULL violation | `recordSession` tidak setel field wajib | Tambah `lastSeen: new Date()` |
+   | tsx cache tidak pick-up perubahan | tsx menyimpan kompilasi TypeScript | `--no-cache` flag wajib untuk restart |
+
+   **Konfigurasi Provider:**
+   | Provider | Status | Model | Keterangan |
+   |----------|--------|-------|------------|
+   | **9router** (PRIMARY) | ✅ Active | `kc/openrouter/free` + 11 model free lainnya | Lokal, gratis, Port 20128 |
+   | **OpenRouter** (FALLBACK) | ✅ Active | `z-ai/glm-4.5-air` + 2 fallback | Cloud, API key di .env |
+   | **Gemini** | ⏭️ Skip | — | Tidak digunakan per instruksi |
+
+   **Perubahan kode:**
+   - `src/server/aiRouter.ts`: Tambah `NINEROUTER_API_KEY` config + `Authorization: Bearer` header di `call9Router()`
+   - `src/server/auth.ts`: Fix `breachChecked` type, `lastSeen`, `validateSession` expiry check
+   - `src/server/db.ts`: Fix `convertDate()` regex untuk timestamp tanpa timezone
+
+   ---
+
+   ## 🔧 Tech Stack
 - **Framework**: Vite + React 19 + Express (server.ts)
 - **Language**: TypeScript 5 (strict typecheck bersih)
 - **Styling**: Tailwind CSS 4
 - **Database**: Prisma ORM + SQLite (`db/custom.db`, tidak di-track)
 - **State**: Zustand + TanStack Query
 - **Auth**: JWT httpOnly + bcrypt + 2FA TOTP + WebAuthn + OAuth (CSRF enforced)
-- **AI**: OpenRouter (`z-ai/glm-4.5-air` + fallback model `llama-3.3-70b` / `gemma-3-27b`) → Gemini 2.5-flash (fallback)
+- **AI**: 9router PRIMARY (localhost:20128, 12 model free) → OpenRouter fallback (`z-ai/glm-4.5-air` + 2 fallback) → Gemini 2.5-flash (skip)
 - **Real-time**: Binance WebSocket
 - **DevOps**: Graceful shutdown, 30s timeout, upstream health checker, Sentry (PII scrubbed)
 
@@ -363,8 +389,10 @@ zaytrix_1/
 | Temuan audit (GLM 5.3) | 75 (26 SEC + 25 DATA + 24 FUNC) |
 | Temuan ditangani | 75 / 75 |
 | Bug QA runtime (11 ronde) | 16 ditemukan → semua diperbaiki |
+| Phase 3 AI bug fixes | 4 ditemukan → semua diperbaiki |
 | Data fabrication tersisa | 0 |
 | Type errors | 0 |
+| AI Chat | ✅ 9router PRIMARY + OpenRouter FALLBACK |
 | Ukuran server.ts | 5.521 → 436 baris (12 modul, invariant route 45/45) |
 | Build produksi | ✅ (ESM, 581.8kb server) — siap Docker |
 | Test suite | ✅ 37/37 self-booting (FUNC-14 selesai) |
@@ -396,6 +424,16 @@ zaytrix_1/
 | **C. Lanjutan Web3** | Wallet-tracking whale ETH (venue ketiga arsitektur whaleStream), integrasi on-chain lebih dalam | Arsitektur dua-venue (spot+futures) terbukti; DEX Radar QA10-C membuktikan pola venue baru |
 | **D. Lanjutan Eksekusi** | Live order via API Key Vault mulai **Binance testnet** (setelah paper trading terbukti) | Vault AES-256-GCM + probe autentikasi + batas notional sudah ada — risiko finansial real, uji bertahap WAJIB |
 | **F. Lanjutan SaaS** | Integrasi pembayaran (Stripe/Midtrans), multi-seat, feature-gate keras per plan | Tier plan-aware + CLI operator + UI meter sudah hidup — tinggal hubungkan billing |
+
+### 🏗️ Phase Roadmap (6 Phase)
+| Phase | Status | Deskripsi |
+|-------|--------|-----------|
+| 1. Backend | ✅ Selesai | Express + Prisma + Supabase adapter, 31 modul backend |
+| 2. Frontend Sync | ✅ Selesai | SPA sinkron dengan backend, 29 komponen |
+| 3. AI Enhancement | ✅ Selesai | 9router + OpenRouter dual-provider, SSE streaming, audit logging, 4 bug fixed |
+| 4. Exchange/Wallet | 🔜 Berikutnya | Binance/Bybit order execution, API Key Vault, paper trading → live |
+| 5. Risk Engine | 🔜 Planning | VaR, MDD, Kelly criterion, position sizing, 2% risk per trade |
+| 6. Data Sources | 🔜 Planning | Upstream health checker, multi-source redundancy, cached fallbacks |
 
 ### ⚠️ Hutang keamanan — WAJIB dulu sebelum produksi (aksi Anda)
 1. Rotasi password semua user DB lama + purge sesi (SEC-1).
