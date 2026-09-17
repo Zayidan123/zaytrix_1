@@ -50,7 +50,7 @@ function toCamelResults(data: any[]): any[] {
       const result: Record<string, any> = {};
       for (const [key, val] of Object.entries(item)) {
         const converted = convertDate(val);
-        result[snakeToCamel(key)] = (converted && typeof converted === "object") ? toCamelResults([converted])[0] : converted;
+        result[snakeToCamel(key)] = (converted && typeof converted === "object" && !(converted instanceof Date)) ? toCamelResults([converted])[0] : converted;
       }
       return result;
     }
@@ -64,7 +64,7 @@ function toCamelSingle(data: any): any {
     const result: Record<string, any> = {};
     for (const [key, val] of Object.entries(data)) {
       const converted = convertDate(val);
-      result[snakeToCamel(key)] = (converted && typeof converted === "object" && !Array.isArray(converted)) ? toCamelSingle(converted) : converted;
+      result[snakeToCamel(key)] = (converted && typeof converted === "object" && !(converted instanceof Date) && !Array.isArray(converted)) ? toCamelSingle(converted) : converted;
     }
     return result;
   }
