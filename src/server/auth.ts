@@ -232,6 +232,7 @@ export async function recordSession(req: Request, userId: string, token: string)
         tokenHash: hashToken(token),
         ip: req.ip || req.socket?.remoteAddress || null,
         userAgent: req.headers["user-agent"] ? String(req.headers["user-agent"]) : null,
+        lastSeen: new Date(),
         expiresAt: new Date(Date.now() + TOKEN_TTL_MS),
       },
     });
@@ -432,7 +433,8 @@ function publicUser(u: {
     emailVerified: !!u.emailVerified,
     oauthProvider: u.oauthProvider || null,
     breachCount: typeof u.breachCount === "number" ? u.breachCount : 0,
-    breachChecked: u.breachChecked ? u.breachChecked.toISOString() : null,
+    breachChecked: typeof u.breachChecked === "string" ? u.breachChecked :
+                    u.breachChecked instanceof Date ? u.breachChecked.toISOString() : null,
   };
 }
 

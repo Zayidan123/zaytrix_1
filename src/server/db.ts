@@ -35,13 +35,22 @@ function snakeToCamel(str: string): string {
   return str.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
 }
 
+function convertDate(val: any): any {
+  if (typeof val === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$/.test(val)) {
+    const d = new Date(val);
+    if (!isNaN(d.getTime())) return d;
+  }
+  return val;
+}
+
 function toCamelResults(data: any[]): any[] {
   return data.map(item => {
     if (Array.isArray(item)) return toCamelResults(item);
     if (item && typeof item === "object") {
       const result: Record<string, any> = {};
       for (const [key, val] of Object.entries(item)) {
-        result[snakeToCamel(key)] = (val && typeof val === "object") ? toCamelResults([val])[0] : val;
+        const converted = convertDate(val);
+        result[snakeToCamel(key)] = (converted && typeof converted === "object") ? toCamelResults([converted])[0] : converted;
       }
       return result;
     }
@@ -54,7 +63,8 @@ function toCamelSingle(data: any): any {
   if (data && typeof data === "object") {
     const result: Record<string, any> = {};
     for (const [key, val] of Object.entries(data)) {
-      result[snakeToCamel(key)] = (val && typeof val === "object" && !Array.isArray(val)) ? toCamelSingle(val) : val;
+      const converted = convertDate(val);
+      result[snakeToCamel(key)] = (converted && typeof converted === "object" && !Array.isArray(converted)) ? toCamelSingle(converted) : converted;
     }
     return result;
   }
