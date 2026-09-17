@@ -909,20 +909,25 @@ export default function OnChainData() {
             
             if (payload.derivatives) {
               setLiveDerivatives(payload.derivatives);
-              
+
               // Map real live values to simulation panel for default display!
+              // BUGFIX QA11: upstream dapat mengembalikan fundingRate/openInterest = null
+              // (egress terblokir / endpoint upstream berubah). Sebelumnya nilai null
+              // langsung di-set ke state slider simulasi → `null.toFixed(3)` di render →
+              // crash seluruh tab On-Chain (ErrorBoundary). Slider simulasi adalah INPUT
+              // pengguna: bila nilai live tidak tersedia, slider mempertahankan nilai
+              // sekarang (tidak pernah difabrikasi dari null).
+              const mapDerivativesToSim = (d: any) => {
+                if (typeof d.fundingRate === "number" && isFinite(d.fundingRate)) setSimFundingRate(d.fundingRate);
+                if (typeof d.longShortRatio === "number" && isFinite(d.longShortRatio)) setSimLongShort(d.longShortRatio);
+                if (typeof d.openInterest === "number" && isFinite(d.openInterest)) setSimOpenInterest(Math.round(d.openInterest / 1000000));
+              };
               if (selectedAiSymbol === "BTC" && payload.derivatives.btc) {
-                setSimFundingRate(payload.derivatives.btc.fundingRate);
-                setSimLongShort(payload.derivatives.btc.longShortRatio);
-                setSimOpenInterest(Math.round(payload.derivatives.btc.openInterest / 1000000));
+                mapDerivativesToSim(payload.derivatives.btc);
               } else if (selectedAiSymbol === "ETH" && payload.derivatives.eth) {
-                setSimFundingRate(payload.derivatives.eth.fundingRate);
-                setSimLongShort(payload.derivatives.eth.longShortRatio);
-                setSimOpenInterest(Math.round(payload.derivatives.eth.openInterest / 1000000));
+                mapDerivativesToSim(payload.derivatives.eth);
               } else if (selectedAiSymbol === "SOL" && payload.derivatives.sol) {
-                setSimFundingRate(payload.derivatives.sol.fundingRate);
-                setSimLongShort(payload.derivatives.sol.longShortRatio);
-                setSimOpenInterest(Math.round(payload.derivatives.sol.openInterest / 1000000));
+                mapDerivativesToSim(payload.derivatives.sol);
               }
             }
 
@@ -1423,26 +1428,29 @@ export default function OnChainData() {
             </div>
 
             <div className="grid grid-cols-3 gap-6 md:gap-12 w-full md:w-auto">
+              {/* BUGFIX QA11: fundingRate/openInterest/longShortRatio dari upstream bisa null
+                  (egress terblokir). Null tetap null — tampil "—", TIDAK PERNAH 0 palsu
+                  dan TIDAK PERNAH crash .toFixed(null). */}
               <div className="space-y-1">
                 <span className="text-[10px] font-mono text-slate-500 font-bold block">BTC LIVE OI / FUNDING</span>
                 <div className="font-mono text-xs font-bold text-white">
-                  ${(liveDerivatives.btc.openInterest / 1e9).toFixed(2)}B <span className="text-purple-400 ml-1">{(liveDerivatives.btc.fundingRate).toFixed(3)}%</span>
+                  {typeof liveDerivatives.btc.openInterest === "number" ? `$${(liveDerivatives.btc.openInterest / 1e9).toFixed(2)}B` : "—"} <span className="text-purple-400 ml-1">{typeof liveDerivatives.btc.fundingRate === "number" ? `${liveDerivatives.btc.fundingRate.toFixed(3)}%` : "—"}</span>
                 </div>
-                <div className="text-[10px] text-slate-400 font-mono">L/S Account: {liveDerivatives.btc.longShortRatio}x</div>
+                <div className="text-[10px] text-slate-400 font-mono">L/S Account: {typeof liveDerivatives.btc.longShortRatio === "number" ? `${liveDerivatives.btc.longShortRatio}x` : "—"}</div>
               </div>
               <div className="space-y-1">
                 <span className="text-[10px] font-mono text-slate-500 font-bold block">ETH LIVE OI / FUNDING</span>
                 <div className="font-mono text-xs font-bold text-white">
-                  ${(liveDerivatives.eth.openInterest / 1e9).toFixed(2)}B <span className="text-purple-400 ml-1">{(liveDerivatives.eth.fundingRate).toFixed(3)}%</span>
+                  {typeof liveDerivatives.eth.openInterest === "number" ? `$${(liveDerivatives.eth.openInterest / 1e9).toFixed(2)}B` : "—"} <span className="text-purple-400 ml-1">{typeof liveDerivatives.eth.fundingRate === "number" ? `${liveDerivatives.eth.fundingRate.toFixed(3)}%` : "—"}</span>
                 </div>
-                <div className="text-[10px] text-slate-400 font-mono">L/S Account: {liveDerivatives.eth.longShortRatio}x</div>
+                <div className="text-[10px] text-slate-400 font-mono">L/S Account: {typeof liveDerivatives.eth.longShortRatio === "number" ? `${liveDerivatives.eth.longShortRatio}x` : "—"}</div>
               </div>
               <div className="space-y-1">
                 <span className="text-[10px] font-mono text-slate-500 font-bold block">SOL LIVE OI / FUNDING</span>
                 <div className="font-mono text-xs font-bold text-white">
-                  ${(liveDerivatives.sol.openInterest / 1e6).toFixed(1)}M <span className="text-purple-400 ml-1">{(liveDerivatives.sol.fundingRate).toFixed(3)}%</span>
+                  {typeof liveDerivatives.sol.openInterest === "number" ? `$${(liveDerivatives.sol.openInterest / 1e6).toFixed(1)}M` : "—"} <span className="text-purple-400 ml-1">{typeof liveDerivatives.sol.fundingRate === "number" ? `${liveDerivatives.sol.fundingRate.toFixed(3)}%` : "—"}</span>
                 </div>
-                <div className="text-[10px] text-slate-400 font-mono">L/S Account: {liveDerivatives.sol.longShortRatio}x</div>
+                <div className="text-[10px] text-slate-400 font-mono">L/S Account: {typeof liveDerivatives.sol.longShortRatio === "number" ? `${liveDerivatives.sol.longShortRatio}x` : "—"}</div>
               </div>
             </div>
           </div>

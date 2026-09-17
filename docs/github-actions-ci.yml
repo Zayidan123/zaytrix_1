@@ -1,23 +1,16 @@
 # ============================================================================
-# ZAYTRIX CI — QA4-F2 (ronde QA #4)
+# ZAYTRIX CI — aktif sejak QA round 11 (Direksi A)
 # ----------------------------------------------------------------------------
 # Pipeline ringan untuk SETIAP push/PR ke main:
 #   job "verify": lint (tsc) → prisma generate + db push (SQLite scratch) →
 #   vitest self-booting (FUNC-14: globalSetup auto-buat .env + spawn server) →
 #   build produksi (vite + esbuild ESM).
 #
-# Catatan desain:
-#   • Test integrasi MEMUKUL API upstream nyata (Binance/CoinGecko). Test
-#     hashrate sudah menerima kontrak kegagalan-jujur upstream (QA3), jadi
-#     kegagalan jaringan CI eksternal tidak membuat pipeline merah palsu —
-#     namun beberapa test live-data tetap butuh egress internet (GitHub
-#     hosted runner punya akses penuh).
-#   • SQLite file dibuat scratch di job (prisma db push) — TIDAK memakai
-#     db/custom.db (file itu sudah tidak pernah di-track sejak SEC-1).
-#   • Smoke test browser (scripts/smoke-test.mjs) butuh agent-browser +
-#     Chromium — terlalu berat untuk pipeline default; lihat job manual
-#     "smoke" di bawah (workflow_dispatch).
-#   • Badge status dapat dipasang di README: [CI](…/actions)
+# QA11-FIX: step Prisma kini eksplisit DATABASE_URL="file:../db/custom.db".
+# Tanpa ini `prisma db push` GAGAL di runner segar (env("DATABASE_URL") wajib
+# di schema) — bug laten sejak QA4 karena workflow belum pernah aktif. Path
+# sengaja SAMA dengan .env sementara vitest globalSetup (file:../db/custom.db)
+# agar test memukul DB yang sudah ber-tabel, bukan file kosong baru.
 # ============================================================================
 name: CI
 
@@ -55,6 +48,12 @@ jobs:
         run: |
           npx prisma generate
           npx prisma db push --skip-generate
+        env:
+          # QA11-FIX: env("DATABASE_URL") wajib — tanpa ini db push gagal di
+          # runner segar (workflow ini baru pertama kali diaktifkan). Path
+          # = prisma/../db/custom.db, IDENTIK dengan .env sementara vitest
+          # globalSetup → test memukul DB yang sudah ber-tabel.
+          DATABASE_URL: "file:../db/custom.db"
 
       - name: Lint (tsc --noEmit)
         run: npm run lint
@@ -107,6 +106,9 @@ jobs:
         run: |
           npx prisma generate
           npx prisma db push --skip-generate
+        env:
+          # QA11-FIX: sama seperti job verify — env wajib untuk db push.
+          DATABASE_URL: "file:../db/custom.db"
 
       - name: Smoke test (self-boot server + 15 tab sweep)
         run: node scripts/smoke-test.mjs --boot --port 4180

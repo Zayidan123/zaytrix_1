@@ -1,0 +1,48 @@
+# ============================================================================
+# ZAYTRIX — Caddy reverse proxy produksi (Direksi A)
+# ----------------------------------------------------------------------------
+# Caddy dipilih karena TLS otomatis (ACME/Let's Encrypt) tanpa konfigurasi
+# manual, HTTP→HTTPS redirect bawaan, dan WebSocket proxy tanpa directive
+# tambahan.
+#
+# PENTING — dua kebutuhan khusus ZAYTRIX:
+#   • SSE (text/event-stream): 8 endpoint AI streaming (kontrak QA8-C).
+#     `flush_interval -1` mematikan buffering respons — frame token AI harus
+#     sampai ke browser SEGERA, bukan terkumpul di buffer proxy.
+#   • WebSocket: whale radar + live ticker memakai koneksi ws:// — Caddy
+#     menangani Upgrade secara otomatis, tidak perlu directive.
+#
+# Domain diambil dari environment ZAYTRIX_DOMAIN (di-set di file .env docker
+# compose). Default `localhost` = mode uji lokal tanpa TLS (port 80 saja).
+# ----------------------------------------------------------------------------
+{
+	# TLS produksi; di localhost Caddy otomatis memakai sertifikat self-signed
+	# internal — tidak pernah mendapat ACME dari domain publik.
+	email {$ZAYTRIX_ACME_EMAIL:-admin@zaytrix.local}
+}
+
+{$ZAYTRIX_DOMAIN:localhost} {
+	encode zstd gzip
+
+	# Header keamanan lapisan proxy (lapisan aplikasi tetap dipasang helmet
+	# di server — ini defense-in-depth, bukan pengganti).
+	header {
+		# WS/SSE tidak di-cache; API pasar tidak boleh berumur di tepi.
+		Cache-Control "no-store"
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-permissions-policy
+	}
+
+	reverse_proxy app:3000 {
+		# SSE: kirim byte ke klien begitu diterima (tanpa buffering proxy).
+		flush_interval -1
+
+		# Timeout longgar untuk generasi AI panjang (PDF multi-dokumen bisa
+		# 60-90 dtk) — default Caddy 2m biasanya cukup, ini eksplisit.
+		transport http {
+			response_header_timeout 120s
+		}
+	}
+}

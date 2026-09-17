@@ -31,6 +31,9 @@ import { logAudit } from "./audit";
 // Hanya satu arah (aiRouter → db) — TIDAK ada import balik dari aiMemory
 // supaya graf dependensi bebas siklus (aiMemory boleh import aiRouter).
 import { prisma } from "./db";
+// QA11-F (Direksi F): batas kuota kini per-plan — pure function dari plans.ts
+// (plans.ts import db+auth, BUKAN aiRouter → bebas siklus).
+import { getPlanAiLimit, normalizePlan } from "./plans";
 
 // ─── Configuration ───────────────────────────────────────────────────
 const OPENROUTER_ENDPOINT = process.env.OPENROUTER_ENDPOINT || "https://openrouter.ai/api/v1/chat/completions";
@@ -275,12 +278,17 @@ export function getAIUsage(): AIUsageSummary {
 // lintas restart, melengkapi ring in-memory di atas. Penegakan kuota
 // (429 dsb.) di-wiring orkestrator server.ts; fungsi ini hanya menghitung
 // + memberi bentuk respons yang jujur.
+// QA11-F: batas kini PLAN-AWARE — plan dibaca dari User.plan (schema QA10-E).
+// Paket "free" mempertahankan batas AI_DAILY_LIMIT yang sama persis
+// (default 500) → TIDAK ADA REGRESI bagi user yang sudah ada; pro/team
+// hanya MENAMBAH kapasitas (default 2000/10000, env AI_DAILY_LIMIT_PRO/_TEAM).
 export interface AIQuotaInfo {
   used: number; // jumlah event AI hari ini (UTC) milik user
-  limit: number; // AI_DAILY_LIMIT (default 500); 0 saat unlimited
+  limit: number; // batas plan user (free=AI_DAILY_LIMIT default 500); 0 saat unlimited
   remaining: number; // max(0, limit - used); 0 saat unlimited
   resetsAt: string; // ISO — tengah malam UTC berikutnya
   unlimited: boolean; // true = tidak dibatasi (userId kosong / DB error)
+  plan: "free" | "pro" | "team"; // QA11-F: plan yang menentukan limit (transparansi 429)
 }
 
 /** Tengah malam UTC berikutnya sebagai ISO string (waktu reset kuota). */
@@ -296,10 +304,24 @@ export async function getUserAiQuota(userId: string | undefined): Promise<AIQuot
   // Tanpa identitas (panggilan internal / anonim) → unlimited jujur.
   // JSON tidak bisa membawa Infinity — pakai limit:0 + flag unlimited:true.
   if (!userId || typeof userId !== "string") {
-    return { used: 0, limit: 0, remaining: 0, resetsAt, unlimited: true };
+    return { used: 0, limit: 0, remaining: 0, resetsAt, unlimited: true, plan: "free" };
   }
 
-  const limit = Number(process.env.AI_DAILY_LIMIT || 500);
+  // QA11-F: batas mengikuti plan user (fail-open "free" — plan tak boleh
+  // mematikan fitur; kegagalan baca → unlimited jujur, sama seperti count).
+  let plan: "free" | "pro" | "team" = "free";
+  try {
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { plan: true } });
+    plan = normalizePlan(user?.plan);
+  } catch (error: unknown) {
+    log.warn(
+      `[aiRouter] gagal membaca plan user (fail-open unlimited): ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    return { used: 0, limit: 0, remaining: 0, resetsAt, unlimited: true, plan };
+  }
+  const limit = getPlanAiLimit(plan);
 
   try {
     const startOfDayUtc = new Date();
@@ -313,6 +335,7 @@ export async function getUserAiQuota(userId: string | undefined): Promise<AIQuot
       remaining: Math.max(0, limit - used),
       resetsAt,
       unlimited: false,
+      plan,
     };
   } catch (error: unknown) {
     // Fail-open JUJUR: bug counting tidak boleh mematikan chat — tapi
@@ -322,7 +345,7 @@ export async function getUserAiQuota(userId: string | undefined): Promise<AIQuot
         error instanceof Error ? error.message : String(error)
       }`
     );
-    return { used: 0, limit: 0, remaining: 0, resetsAt, unlimited: true };
+    return { used: 0, limit: 0, remaining: 0, resetsAt, unlimited: true, plan };
   }
 }
 

@@ -100,6 +100,7 @@ import { registerNewsFxRoutes } from "./src/server/newsFxRoutes";
 // (self-mount requireAuth), AI memory/quota routes (self-mount requireAuth).
 import { registerDexRoutes } from "./src/server/dexRoutes";
 import { registerPaperTrading } from "./src/server/paperTrading";
+import { registerPlanRoutes } from "./src/server/plans";
 import { registerAiMemoryRoutes } from "./src/server/aiMemory";
 // Boots the Binance Futures liquidation WS worker on import (was server.ts:3349).
 import "./src/server/binanceDerivatives";
@@ -137,6 +138,7 @@ registerNewsFxRoutes(app);             // /api/fx/usd-idr + /api/news
 // paperTrading & aiMemory self-mount requireAuth per-route (pola signalEngine).
 registerDexRoutes(app);                // QA10-C: /api/dex/pairs + /api/dex/search
 registerPaperTrading(app);             // QA10-B: /api/paper/* (order virtual market-only)
+registerPlanRoutes(app);               // QA11-F: /api/account/plan (paket + kuota — Direksi F)
 registerAiMemoryRoutes(app);           // QA10-E: /api/ai/history|models (memori percakapan)
 
 // ===========================================================================
@@ -261,14 +263,15 @@ try {
     const { prompt, systemPrompt, maxTokens, temperature, model } = req.body;
     if (!prompt) return res.status(400).json({ success: false, error: "Prompt wajib diisi." });
 
-    // QA10-E: kuota AI harian per-user. getUserAiQuota fail-open JUJUR (userId
-    // kosong / DB error → unlimited:true) sehingga counting bug tidak pernah
-    // mematikan chat — hanya kuota benar-benar tercapai yang menolak (429).
+    // QA10-E: kuota AI harian per-user (QA11-F: batas kini PLAN-AWARE).
+    // getUserAiQuota fail-open JUJUR (userId kosong / DB error → unlimited:true)
+    // sehingga counting bug tidak pernah mematikan chat — hanya kuota
+    // benar-benar tercapai yang menolak (429).
     const quota = await getUserAiQuota(req.user?.sub);
     if (!quota.unlimited && quota.used >= quota.limit) {
       return res.status(429).json({
         success: false,
-        error: `Kuota AI harian tercapai (${quota.used}/${quota.limit}). Kuota reset otomatis setiap tengah malam UTC.`,
+        error: `Kuota AI harian paket ${quota.plan.toUpperCase()} tercapai (${quota.used}/${quota.limit}). Kuota reset otomatis setiap tengah malam UTC. Paket lebih tinggi (PRO/TEAM) dinaikkan oleh operator — lihat Settings Hub → Paket & Kuota.`,
         quota,
       });
     }

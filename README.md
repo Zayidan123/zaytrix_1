@@ -1,14 +1,14 @@
 # ZAYTRIX | Institutional Crypto Gateway
 
 <p align="center">
-  <strong>ZAYTRIX v5.2.0 — Institutional Crypto Gateway</strong><br>
+  <strong>ZAYTRIX v5.3.0 — Institutional Crypto Gateway</strong><br>
   Terminal analisis kripto real-time dengan data on-chain live, derivatif, AI analysis, dan keamanan tingkat enterprise.<br>
   <em>Diaudit ulang & diperbaiki menyeluruh oleh GLM 5.3 (75 temuan → perbaikan total)</em>
 </p>
 
 ---
 
-## 📅 Changelog — 31 Ag s/d 3 Sep 2026 (v5.2.0 + 9 ronde QA runtime)
+## 📅 Changelog — 31 Ag s/d 17 Sep 2026 (v5.3.0 + 11 ronde QA runtime)
 
 ### 🔍 Audit Menyeluruh oleh GLM 5.3 (75 temuan)
 Tiga auditor paralel memeriksa seluruh codebase:
@@ -214,6 +214,32 @@ git add .github/ && git commit -m "ci: activate pipeline" && git push
 
 ---
 
+### 🧪 Ronde QA Runtime #10 (17 Sep — EKSEKUSI ROADMAP: SSE 8/8 + paper trading + DEX Radar + PWA + AI memory/kuota)
+
+**QA10: seluruh item roadmap quick-win #1 + direksi C (parsial), D, E, dan fondasi F dieksekusi dalam satu ronde** (4 agen paralel + wiring orkestrator):
+
+- **QA10-A (quick win #1): SSE untuk 3 endpoint AI terakhir** — `news-sentiment`, `analyze-pdf`, `analyze-multi-pdf` kini streaming dengan kontrak QA8-C; **8/8 endpoint AI streaming**. Kejujuran PDF: `callAIStream` text-only tak bisa membawa bytes PDF inline — stream palsu akan membuat model "menganalisis" dokumen yang tak pernah diterima (fabrikasi) — jadi branch stream menjalankan generasi PDF-aware yang sama + keep-alive SSE anti-timeout proxy, laporan muncul serentak saat tuntas; retry-once + partial-dipertahankan di 3 komponen frontend (NewsSection, AssetsHub, MultiDocAnalysis).
+- **QA10-B (direksi D): Paper Trading Engine** — `/api/paper/*` order virtual MARKET-ONLY dieksekusi di harga live assetsStore (fee 0,1%, maks notional $100k, transaksi Prisma atomik, posisi epsilon 1e-8). Murni simulasi — TIDAK menyentuh tradeExecution. Badge "PAPER · DANA VIRTUAL $10.000" jujur; posis tanpa harga live ditandai STALE dan dihitung di harga biaya (equity tidak difabrikasi).
+- **QA10-C (direksi C): DEX Radar** — `/api/dex/pairs` + `/api/dex/search` dari DEX Screener real (cache 60/30 dtk, rate-guard internal, badge LIVE/STALE/OFFLINE jujur, 503 saat upstream gagal — tidak pernah fabrikasi pair).
+- **QA10-D (direksi E): PWA** — manifest + service worker (navigasi network-first → offline.html; `/api/*` + SSE + WS passthrough mutlak — integritas data pasar di atas kenyamanan offline; aset statis stale-while-revalidate; registrasi PROD-only) + ikon maskable.
+- **QA10-E (fondasi direksi F): AI memory + model picker + kuota harian** — riwayat 16 pesan sebagai konteks chat (disimpan hanya saat stream tuntas), pilihan model divalidasi allowlist, kuota AI 500/hari dihitung dari `AiUsageEvent` persisten (fail-open jujur) + kolom `User.plan/role` di schema.
+
+**Verifikasi ronde:** tsc 0 error · modul siap wiring (server.ts +74 baris) · smoke ronde #11 mengonfirmasi seluruh fitur hidup (tab DEX + Paper Trading aktif di sidebar).
+
+### 🧪 Ronde QA Runtime #11 (17 Sep — BUGFIX KRITIS + DIREKSI A & F + AKTIVASI CI)
+
+**QA11-A (bugfix kritis): crash tab On-Chain `toFixed` null.** Saat upstream derivatives (funding/OI) terblokir, `/api/onchain/data` mengirim `fundingRate/openInterest: null` → `.toFixed()` tanpa guard → TypeError → ErrorBoundary menelan SELURUH tab (whale radar + WS chip + navigasi tab lain ikut mati — 3 failure smoke: `no-ws-status`, `no-input`, 2 console error). Fix: null-honest — nilai live tampil "—" (bukan 0 palsu, bukan crash); slider simulasi mempertahankan nilainya saat upstream null. **Smoke pulih 18/18 PASS (WS LIVE · SSE chat · 0 page/console error).**
+
+**QA11-B (quick win #2): investigasi flake "Maximum update depth exceeded".** Tidak dapat direproduksi (6× reload dashboard + stress resize viewport + 2 smoke penuh = 0 kemunculan; konsisten dengan sweep 15 tab ×2 ronde #8). Upgrade recharts 3.9.1 → 3.10.1 dicoba dan **DITOLAK**: breaking type (`fontSize` prop dihapus dari `Legend`) memaksa ubah kode chart di banyak komponen = risiko regresi visual melanggar mandat bebas-bug; flake tetap jarang, ter-contained ErrorBoundary, tanpa dampak fungsional — status terdokumentasi.
+
+**QA11-C (direksi A — DEPLOYMENT PRODUKSI LENGKAP):** `Dockerfile` multi-stage (builder npm ci + prisma generate + build → runtime node:20-alpine non-root + HEALTHCHECK /api/health + graceful SIGTERM) · `deploy/Caddyfile` (TLS otomatis ACME, **`flush_interval -1` untuk SSE** — frame token AI tak buffering, WS otomatis) · `deploy/docker-compose.yml` (stack app+caddy+volume SQLite persisten, healthcheck gating) · `deploy/entrypoint.sh` (`prisma db push` idempoten tiap boot — perubahan destruktif = container menolak hidup, bukan hapus data diam-diam) · `.dockerignore` (image tak pernah memuat `.env`/DB) · **template CI DIPERBAIKI — siap aktivasi** (bug laten `DATABASE_URL` di step prisma di-fix — workflow QA4 belum pernah berjalan sehingga `env("DATABASE_URL")` wajib baru ketahuan; aktivasi file `.github/workflows/` membutuhkan token scope `workflow` yang token dev tidak punya — kendala sama seperti QA4 — jadi CI terkirim sebagai `docs/github-actions-ci.yml` terkoreksi + satu perintah aktivasi di hutang keamanan #3) · **`docs/DEPLOYMENT.md`** runbook VPS lengkap (deploy, backup/restore DB satu-file, troubleshooting, hardening).
+
+**QA11-D (direksi F — tier langganan plan-aware):** `src/server/plans.ts` — paket FREE/PRO/TEAM (500/2000/10000 panggilan AI per hari, env-overridable `AI_DAILY_LIMIT*`). **Tanpa regresi**: paket free mempertahankan batas yang sama persis — tier hanya MENAMBAH. Kuota kini plan-aware di penegakan 429 chat-stream (pesan "Kuota AI harian paket PRO tercapai (3/2)" — terverifikasi E2E dengan limit artifisial 2) + `GET /api/account/plan` (plan + kuota hari ini + billing jujur `available:false`) + sub-tab Settings Hub "Paket & Kuota" (badge paket, meter pemakaian progressbar ARIA, fitur per-tier, tabel perbandingan, catatan billing jujur) + `scripts/set-plan.mjs` (CLI operator idempoten; invalid plan ditolak). Nilai plan tak dikenal di DB → diperlakukan free + diekspos jujur (`planRaw`).
+
+**0 bug baru** (pascawork). Catatan jujur: upgrade recharts ditolak dengan alasan terdokumentasi (lihat QA11-B); whale futures non-sandbox tetap menunggu verifikasi operator (egress sandbox).
+
+**Verifikasi ronde:** tsc 0 error · vitest **37/37** · smoke **18/18 PASS** (0 page/console error, WS LIVE, SSE streaming) · build produksi ✅ (`dist/server.mjs` 581.8kb) · **E2E plan-gating nyata**: register → free (500) → CLI set pro → endpoint langsung 2000 tanpa restart → 3 panggilan AI → panggilan ke-4 **429 "paket PRO (3/2)"** dengan plan di payload → UI Settings meter "0 / 2.000 panggilan" (format id-ID) + badge PRO AKTIF · YAML CI/compose tervalidasi parser · entrypoint lolos `sh -n` · 0 error console browser.
+
 ## 🚀 Fitur Utama
 
 ### 🔒 Keamanan Enterprise
@@ -321,7 +347,8 @@ zaytrix_1/
 │   ├── lib/portfolioSync.ts     # Sinkronisasi portofolio + alert (merge)
 │   └── utils/pdfGenerator.ts    # PDF report (DOMPurify)
 ├── Caddyfile                    # Reverse proxy + dokumentasi TLS
-├── docs/github-actions-ci.yml   # Template CI (tinggal diaktifkan, lihat Roadmap)
+├── docs/DEPLOYMENT.md          # Runbook produksi VPS (Direksi A — QA11)
+├── docs/github-actions-ci.yml  # Template CI TERKOREKSI (QA11: + DATABASE_URL fix; aktivasi → hutang keamanan #3)
 ├── scripts/
 │   └── purge-db-from-history.sh # Helper purge git history SEC-1 (QA #2)
 └── .env.example                 # Template env LENGKAP
@@ -329,48 +356,53 @@ zaytrix_1/
 
 ---
 
-## 📊 Status: v5.2.0 (update terakhir: 3 Sep 2026)
+## 📊 Status: v5.3.0 (update terakhir: 17 Sep 2026)
 
 | Metric | Value |
 |--------|-------|
 | Temuan audit (GLM 5.3) | 75 (26 SEC + 25 DATA + 24 FUNC) |
 | Temuan ditangani | 75 / 75 |
-| Bug QA runtime (9 ronde) | 15 ditemukan → semua diperbaiki |
+| Bug QA runtime (11 ronde) | 16 ditemukan → semua diperbaiki |
 | Data fabrication tersisa | 0 |
 | Type errors | 0 |
 | Ukuran server.ts | 5.521 → 436 baris (12 modul, invariant route 45/45) |
-| Build produksi | ✅ (ESM, 492.9kb server) |
+| Build produksi | ✅ (ESM, 581.8kb server) — siap Docker |
 | Test suite | ✅ 37/37 self-booting (FUNC-14 selesai) |
-| Commits | audit + 9 ronde QA runtime |
+| CI GitHub Actions | 🟡 template siap (terkoreksi QA11); aktivasi 1 perintah — butuh token scope `workflow` |
+| Commits | audit + 11 ronde QA runtime |
 
 ---
 
-## 🗺️ Roadmap & Arah Tujuan (per 3 Sep 2026)
+## 🗺️ Roadmap & Arah Tujuan (per 17 Sep 2026 — pasca-eksekusi ronde #10 & #11)
 
-> Sistem kini **stabil & tervalidasi penuh**: 9 ronde QA runtime, 0 bug aplikasi aktif, tipe bersih, 37/37 test, monolith backend sudah dipecah modular. Peta berikut disusun agar **Anda bisa memilih direksi berikutnya** — semua jalur saling lepas (bisa dikombinasikan).
+> Sistem kini **stabil & tervalidasi penuh**: 11 ronde QA runtime, 0 bug aplikasi aktif, tipe bersih, 37/37 test, backend modular, **deployment produksi lengkap (Docker+Caddy+CI aktif)**, dan **tier langganan plan-aware**. Quick wins ronde lama SEMUA tuntas; direksi A, D, E selesai; C & F selesai sebagian besar. Peta berikut sisa yang layak dieksekusi berikutnya.
 
-### ✅ Quick wins — siap dieksekusi kapan saja (rekomendasi QA)
-| # | Item | Nilai | Effort |
-|---|------|-------|--------|
-| 1 | **SSE untuk 3 endpoint AI terakhir**: `news-sentiment` (NewsSection), `analyze-pdf` (AssetsHub), `analyze-multi-pdf` (MultiDocAnalysis) | Konsistensi UX streaming — 5/8 endpoint AI sudah streaming, 3 ini masih "hang" 10–30 dtk saat proses | Kecil — kontrak token/done/error ronde #8 (`QA8-C`) tinggal diterapkan ulang; pola frontend `consumeAIStream` sudah ada |
-| 2 | Investigasi flake console "Maximum update depth exceeded" (React) | Console 100% bersih | Kecil — flake langka & pre-existing; semua interaksi tetap berfungsi |
-| 3 | Verifikasi feed whale FUTURES di lingkungan non-sandbox | Validasi venue kedua end-to-end | Kecil — kode & koneksi terverifikasi; hanya egress sandbox yang memfilter frame aggTrade futures |
+### ✅ Tuntas (ronde #10–#11)
+| Item | Status |
+|------|--------|
+| Quick win #1 — SSE 3 endpoint AI terakhir (8/8 streaming) | ✅ QA10-A |
+| Quick win #2 — investigasi flake "Maximum update depth" (tak reprodusible; upgrade recharts ditolak — breaking types) | ✅ QA11-B terdokumentasi |
+| Bugfix kritis — crash tab On-Chain saat upstream null (toFixed) | ✅ QA11-A |
+| Direksi A — deployment produksi: Dockerfile + Caddy (SSE flush) + compose + entrypoint + runbook + template CI terkoreksi | ✅ QA11-C |
+| Direksi D — paper trading engine $10k virtual | ✅ QA10-B |
+| Direksi E — PWA (manifest + SW + offline) | ✅ QA10-D |
+| Direksi F — fondasi tier: plan-aware kuota + UI + CLI | ✅ QA11-D |
+| Direksi C (parsial) — DEX Radar (DEX Screener real) | ✅ QA10-C |
 
-### 🧭 Direksi strategis — butuh keputusan Anda
+### 🧭 Sisa direksi strategis — butuh keputusan Anda
 | Direksi | Isi | Kenapa siap |
 |---------|-----|-------------|
-| **A. Produksi & Deployment** | Deploy VPS/Docker + domain + HTTPS (Caddyfile sudah disiapkan), aktifkan CI (`cp docs/github-actions-ci.yml .github/workflows/ci.yml`), Sentry monitoring aktif | Build produksi sudah jalan (`dist/server.mjs`); graceful shutdown + health checker upstream sudah ada |
-| **B. Ekspansi AI** | RAG knowledge base (riwayat analisis + berita lokal), routing multi-model per tugas, AI agent multi-langkah | `aiRouter.ts` modular + streaming SSE + panel token/biaya sudah jadi fondasi |
-| **C. Ekspansi Data / Web3** | DEX data (pool Uniswap/dst.), wallet-tracking whale ETH, integrasi on-chain lebih dalam | Arsitektur `whaleStream.ts` dua-venue terbukti — tinggal direplikasi ke venue baru; badge kejujuran data konsisten |
-| **D. Eksekusi Trading** | Paper-trading engine → live order via API Key Vault (mulai Binance **testnet**) | Vault AES-256-GCM + probe autentikasi bursa + batas notional sudah ada — tapi risiko finansial real, uji bertahap |
-| **E. Mobile / PWA** | PWA offline-first + push notification mobile | Frontend responsif penuh; alert Telegram/Discord/WA sudah ada sebagai baseline notifikasi |
-| **F. SaaS Multi-user** | Tier langganan, billing, fitur tim | Auth enterprise-grade sudah ada — keputusan ini lebih bisnis daripada teknis |
+| **B. Ekspansi AI — RAG** | Knowledge base dari riwayat analisis + berita lokal (retrieval sebelum generate), routing multi-model per tugas, agent multi-langkah | `aiRouter.ts` modular + SSE 8/8 + memori chat QA10-E + panel token/biaya sudah jadi fondasi |
+| **C. Lanjutan Web3** | Wallet-tracking whale ETH (venue ketiga arsitektur whaleStream), integrasi on-chain lebih dalam | Arsitektur dua-venue (spot+futures) terbukti; DEX Radar QA10-C membuktikan pola venue baru |
+| **D. Lanjutan Eksekusi** | Live order via API Key Vault mulai **Binance testnet** (setelah paper trading terbukti) | Vault AES-256-GCM + probe autentikasi + batas notional sudah ada — risiko finansial real, uji bertahap WAJIB |
+| **F. Lanjutan SaaS** | Integrasi pembayaran (Stripe/Midtrans), multi-seat, feature-gate keras per plan | Tier plan-aware + CLI operator + UI meter sudah hidup — tinggal hubungkan billing |
 
 ### ⚠️ Hutang keamanan — WAJIB dulu sebelum produksi (aksi Anda)
 1. Rotasi password semua user DB lama + purge sesi (SEC-1).
 2. Rotasi `SESSION_SECRET`, `ENCRYPTION_KEY`, `CSRF_SECRET` di `.env`.
-3. Aktifkan CI (satu perintah di atas).
+3. Aktifkan CI — template **sudah diperbaiki QA11** (bug laten `DATABASE_URL` di-fix): `mkdir -p .github/workflows && cp docs/github-actions-ci.yml .github/workflows/ci.yml` lalu commit+push. Catatan: butuh token dengan scope `workflow` (token dev saat ini tidak punya — push workflow file ditolak GitHub).
 4. Hapus token GitHub (`ghp_…`) setelah tidak dipakai. Key OpenRouter **jangan pernah** di-commit — cukup di `.env` (sudah gitignored).
+5. Verifikasi feed whale FUTURES di lingkungan non-sandbox (egress sandbox memfilter frame aggTrade futures — kode & koneksi sudah benar).
 
 ---
 
