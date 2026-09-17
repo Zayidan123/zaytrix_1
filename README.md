@@ -232,7 +232,7 @@ git add .github/ && git commit -m "ci: activate pipeline" && git push
 
 **QA11-B (quick win #2): investigasi flake "Maximum update depth exceeded".** Tidak dapat direproduksi (6× reload dashboard + stress resize viewport + 2 smoke penuh = 0 kemunculan; konsisten dengan sweep 15 tab ×2 ronde #8). Upgrade recharts 3.9.1 → 3.10.1 dicoba dan **DITOLAK**: breaking type (`fontSize` prop dihapus dari `Legend`) memaksa ubah kode chart di banyak komponen = risiko regresi visual melanggar mandat bebas-bug; flake tetap jarang, ter-contained ErrorBoundary, tanpa dampak fungsional — status terdokumentasi.
 
-**QA11-C (direksi A — DEPLOYMENT PRODUKSI LENGKAP):** `Dockerfile` multi-stage (builder npm ci + prisma generate + build → runtime node:20-alpine non-root + HEALTHCHECK /api/health + graceful SIGTERM) · `deploy/Caddyfile` (TLS otomatis ACME, **`flush_interval -1` untuk SSE** — frame token AI tak buffering, WS otomatis) · `deploy/docker-compose.yml` (stack app+caddy+volume SQLite persisten, healthcheck gating) · `deploy/entrypoint.sh` (`prisma db push` idempoten tiap boot — perubahan destruktif = container menolak hidup, bukan hapus data diam-diam) · `.dockerignore` (image tak pernah memuat `.env`/DB) · **CI GitHub Actions AKTIF** (`.github/workflows/ci.yml`: lint → test → build tiap push main + job smoke manual; bug laten DATABASE_URL di prisma step di-fix — workflow QA4 belum pernah berjalan sehingga `env("DATABASE_URL")` wajib baru ketahuan) · **`docs/DEPLOYMENT.md`** runbook VPS lengkap (deploy, backup/restore DB satu-file, troubleshooting, hardening).
+**QA11-C (direksi A — DEPLOYMENT PRODUKSI LENGKAP):** `Dockerfile` multi-stage (builder npm ci + prisma generate + build → runtime node:20-alpine non-root + HEALTHCHECK /api/health + graceful SIGTERM) · `deploy/Caddyfile` (TLS otomatis ACME, **`flush_interval -1` untuk SSE** — frame token AI tak buffering, WS otomatis) · `deploy/docker-compose.yml` (stack app+caddy+volume SQLite persisten, healthcheck gating) · `deploy/entrypoint.sh` (`prisma db push` idempoten tiap boot — perubahan destruktif = container menolak hidup, bukan hapus data diam-diam) · `.dockerignore` (image tak pernah memuat `.env`/DB) · **template CI DIPERBAIKI — siap aktivasi** (bug laten `DATABASE_URL` di step prisma di-fix — workflow QA4 belum pernah berjalan sehingga `env("DATABASE_URL")` wajib baru ketahuan; aktivasi file `.github/workflows/` membutuhkan token scope `workflow` yang token dev tidak punya — kendala sama seperti QA4 — jadi CI terkirim sebagai `docs/github-actions-ci.yml` terkoreksi + satu perintah aktivasi di hutang keamanan #3) · **`docs/DEPLOYMENT.md`** runbook VPS lengkap (deploy, backup/restore DB satu-file, troubleshooting, hardening).
 
 **QA11-D (direksi F — tier langganan plan-aware):** `src/server/plans.ts` — paket FREE/PRO/TEAM (500/2000/10000 panggilan AI per hari, env-overridable `AI_DAILY_LIMIT*`). **Tanpa regresi**: paket free mempertahankan batas yang sama persis — tier hanya MENAMBAH. Kuota kini plan-aware di penegakan 429 chat-stream (pesan "Kuota AI harian paket PRO tercapai (3/2)" — terverifikasi E2E dengan limit artifisial 2) + `GET /api/account/plan` (plan + kuota hari ini + billing jujur `available:false`) + sub-tab Settings Hub "Paket & Kuota" (badge paket, meter pemakaian progressbar ARIA, fitur per-tier, tabel perbandingan, catatan billing jujur) + `scripts/set-plan.mjs` (CLI operator idempoten; invalid plan ditolak). Nilai plan tak dikenal di DB → diperlakukan free + diekspos jujur (`planRaw`).
 
@@ -348,8 +348,7 @@ zaytrix_1/
 │   └── utils/pdfGenerator.ts    # PDF report (DOMPurify)
 ├── Caddyfile                    # Reverse proxy + dokumentasi TLS
 ├── docs/DEPLOYMENT.md          # Runbook produksi VPS (Direksi A — QA11)
-├── .github/workflows/ci.yml    # CI AKTIF (QA11: lint → test → build tiap push main; + DATABASE_URL fix)
-├── docs/github-actions-ci.yml  # Salinan template CI historis (aktifasi resmi di .github/workflows/)
+├── docs/github-actions-ci.yml  # Template CI TERKOREKSI (QA11: + DATABASE_URL fix; aktivasi → hutang keamanan #3)
 ├── scripts/
 │   └── purge-db-from-history.sh # Helper purge git history SEC-1 (QA #2)
 └── .env.example                 # Template env LENGKAP
@@ -369,7 +368,7 @@ zaytrix_1/
 | Ukuran server.ts | 5.521 → 436 baris (12 modul, invariant route 45/45) |
 | Build produksi | ✅ (ESM, 581.8kb server) — siap Docker |
 | Test suite | ✅ 37/37 self-booting (FUNC-14 selesai) |
-| CI GitHub Actions | ✅ AKTIF (lint → test → build tiap push main) |
+| CI GitHub Actions | 🟡 template siap (terkoreksi QA11); aktivasi 1 perintah — butuh token scope `workflow` |
 | Commits | audit + 11 ronde QA runtime |
 
 ---
@@ -384,7 +383,7 @@ zaytrix_1/
 | Quick win #1 — SSE 3 endpoint AI terakhir (8/8 streaming) | ✅ QA10-A |
 | Quick win #2 — investigasi flake "Maximum update depth" (tak reprodusible; upgrade recharts ditolak — breaking types) | ✅ QA11-B terdokumentasi |
 | Bugfix kritis — crash tab On-Chain saat upstream null (toFixed) | ✅ QA11-A |
-| Direksi A — deployment produksi: Dockerfile + Caddy (SSE flush) + compose + entrypoint + runbook + **CI AKTIF** | ✅ QA11-C |
+| Direksi A — deployment produksi: Dockerfile + Caddy (SSE flush) + compose + entrypoint + runbook + template CI terkoreksi | ✅ QA11-C |
 | Direksi D — paper trading engine $10k virtual | ✅ QA10-B |
 | Direksi E — PWA (manifest + SW + offline) | ✅ QA10-D |
 | Direksi F — fondasi tier: plan-aware kuota + UI + CLI | ✅ QA11-D |
@@ -401,7 +400,7 @@ zaytrix_1/
 ### ⚠️ Hutang keamanan — WAJIB dulu sebelum produksi (aksi Anda)
 1. Rotasi password semua user DB lama + purge sesi (SEC-1).
 2. Rotasi `SESSION_SECRET`, `ENCRYPTION_KEY`, `CSRF_SECRET` di `.env`.
-3. ~~Aktifkan CI~~ ✅ **SELESAI (QA11)** — `.github/workflows/ci.yml` aktif; pantau tab Actions setelah push berikutnya.
+3. Aktifkan CI — template **sudah diperbaiki QA11** (bug laten `DATABASE_URL` di-fix): `mkdir -p .github/workflows && cp docs/github-actions-ci.yml .github/workflows/ci.yml` lalu commit+push. Catatan: butuh token dengan scope `workflow` (token dev saat ini tidak punya — push workflow file ditolak GitHub).
 4. Hapus token GitHub (`ghp_…`) setelah tidak dipakai. Key OpenRouter **jangan pernah** di-commit — cukup di `.env` (sudah gitignored).
 5. Verifikasi feed whale FUTURES di lingkungan non-sandbox (egress sandbox memfilter frame aggTrade futures — kode & koneksi sudah benar).
 
