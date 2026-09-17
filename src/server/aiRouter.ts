@@ -56,6 +56,7 @@ const OPENROUTER_REFERER = process.env.APP_URL || "https://github.com/Zayidan123
 // Detected automatically on boot — if unreachable, falls back to
 // OpenRouter (cloud) or Gemini without affecting functionality.
 const NINEROUTER_ENABLED = process.env.NINEROUTER_ENABLED !== "false"; // set "false" to disable
+const NINEROUTER_API_KEY = process.env.NINEROUTER_API_KEY || "";
 const NINEROUTER_ENDPOINT = process.env.NINEROUTER_ENDPOINT || "http://localhost:20128/v1";
 const NINEROUTER_DETECT_TIMEOUT_MS = 10_000; // 10s for detection ping
 
@@ -726,7 +727,7 @@ async function call9Router(req: AIRequest): Promise<AIResponse> {
       const timeout = setTimeout(() => controller.abort(), OPENROUTER_TIMEOUT_MS);
       const res = await fetch(`${NINEROUTER_ENDPOINT}/chat/completions`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "HTTP-Referer": OPENROUTER_REFERER, "X-Title": OPENROUTER_TITLE },
+        headers: {"Content-Type": "application/json", "Authorization": `Bearer ${NINEROUTER_API_KEY}`, "HTTP-Referer": OPENROUTER_REFERER, "X-Title": OPENROUTER_TITLE},
         body: JSON.stringify({ model, messages, max_tokens: Math.max(256, req.maxTokens ?? 2048), temperature: req.temperature ?? 0.7, stream: false, reasoning: { enabled: false } }),
         signal: controller.signal,
       });
