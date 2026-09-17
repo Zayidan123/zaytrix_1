@@ -1,0 +1,32 @@
+# Konteks build Docker ZAYTRIX — Direksi A (deployment produksi).
+# Keep the image small & the build cache effective.
+
+# VCS & CI
+.git
+.github
+
+# Dependensi & artefak build (dihasilkan ulang DI DALAM image)
+node_modules
+dist
+
+# Database SQLite lokal — JANGAN pernah masuk image (volume produksi terpisah)
+db
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Secrets — .env tidak pernah dibakar ke image (di-munt via env_file compose)
+.env
+.env.*
+!.env.example
+
+# Artefak QA lokal
+qa-artifacts
+coverage
+
+# Editor/OS noise
+.vscode
+.idea
+*.log
+.DS_Store

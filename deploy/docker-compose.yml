@@ -1,0 +1,67 @@
+# ============================================================================
+# ZAYTRIX — Production Stack (Direksi A)
+# ----------------------------------------------------------------------------
+# Stack lengkap satu-perintah:  app (ZAYTRIX + SQLite volume)  +  caddy (TLS
+# otomatis + reverse proxy SSE/WS-aware).
+#
+#   cd deploy && docker compose up -d --build
+#
+# Prasyarat: file .env di root repo (salin dari .env.example, isi secret).
+#   - ZAYTRIX_DOMAIN   → domain publik VPS (mis. app.zaytrix.id) untuk TLS
+#                        otomatis; kosong/default = localhost tanpa TLS.
+#   - APP_URL          → HARUS https://<domain> (CORS allowlist + link email).
+#
+# Database SQLite persisten di named volume `zaytrix-db`. Backup:
+#   docker compose exec app npx prisma db execute --stdin < backup.sql  (restore)
+#   atau salin langsung: docker run --rm -v deploy_zaytrix-db:/db -v $PWD:/out \
+#     alpine sh -c "cp /db/custom.db /out/backup-$(date +%F).db"
+# ============================================================================
+name: zaytrix
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: zaytrix:latest
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      # .env boleh menimpa; default aman untuk kontainer
+      DATABASE_URL: "file:../db/custom.db"
+    volumes:
+      - zaytrix-db:/app/db
+    # Hanya jaringan internal — publik lewat caddy saja
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 25s
+      retries: 3
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      ZAYTRIX_DOMAIN: ${ZAYTRIX_DOMAIN:-localhost}
+      ZAYTRIX_ACME_EMAIL: ${ZAYTRIX_ACME_EMAIL:-admin@zaytrix.local}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data          # sertifikat TLS — persisten antar-deploy
+      - caddy-config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+
+volumes:
+  zaytrix-db:
+  caddy-data:
+  caddy-config:

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { motion } from "motion/react";
 import { 
   User,
@@ -36,7 +36,8 @@ import {
   ChevronLeft,
   Sparkles,
   Droplet,
-  Box
+  Box,
+  Crown
 } from "lucide-react";
 import { useGlobalStore } from "../store";
 import { AppSettings } from "../types";
@@ -58,8 +59,66 @@ export default function Settings() {
   const setTwoFactorEnabled = useGlobalStore(state => state.setTwoFactorEnabled);
 
   // Active Setting Sub-Tab
-  const [activeSubTab, setActiveSubTab] = useState<"profil" | "tampilan" | "keamanan" | "notifikasi" | "privasi" | "integrasi" | "sistem" | "bantuan">("profil");
+  const [activeSubTab, setActiveSubTab] = useState<"profil" | "paket" | "tampilan" | "keamanan" | "notifikasi" | "privasi" | "integrasi" | "sistem" | "bantuan">("profil");
   const [viewMode, setViewMode] = useState<"menu" | "detail">("menu");
+
+  // ── QA11-F (Direksi F): Paket & Kuota — state + fetch lazy saat tab dibuka ─
+  interface PlanData {
+    success: boolean;
+    plan: "free" | "pro" | "team";
+    planRaw: string | null;
+    label: string;
+    aiDailyLimit: number;
+    features: { id: string; label: string; included: boolean }[];
+    note: string;
+    quota: { used: number; remaining: number; resetsAt: string } | null;
+    quotaError: boolean;
+    billing: { available: boolean; note: string };
+  }
+  const [planData, setPlanData] = useState<PlanData | null>(null);
+  const [planLoading, setPlanLoading] = useState(false);
+  const [planError, setPlanError] = useState<string | null>(null);
+
+  const fetchPlan = async () => {
+    setPlanLoading(true);
+    setPlanError(null);
+    try {
+      const res = await fetch("/api/account/plan", { credentials: "include" });
+      const data = await res.json();
+      if (res.ok && data?.success) {
+        setPlanData(data);
+      } else {
+        setPlanError(data?.error || `Gagal memuat paket (HTTP ${res.status}).`);
+      }
+    } catch {
+      setPlanError("Koneksi gagal — informasi paket tidak dapat dimuat.");
+    } finally {
+      setPlanLoading(false);
+    }
+  };
+
+  // Lazy: hanya fetch saat user membuka sub-tab paket (bukan setiap mount Settings).
+  useEffect(() => {
+    if (activeSubTab === "paket" && !planData && !planLoading && !planError) {
+      fetchPlan();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSubTab]);
+
+  // Tabel perbandingan tier — display statis (batas otoritatif milik user
+  // datang dari respons API, bukan dari konstanta frontend ini).
+  const PLAN_TIERS = [
+    { id: "free", label: "FREE", aiDailyLimit: 500, tagline: "Paket bawaan semua akun" },
+    { id: "pro", label: "PRO", aiDailyLimit: 2000, tagline: "Trader aktif harian — 4× kuota" },
+    { id: "team", label: "TEAM", aiDailyLimit: 10000, tagline: "Tim riset — 20× kuota + multi-seat" },
+  ] as const;
+
+  const planBadgeStyle = (p: string) =>
+    p === "pro"
+      ? "bg-amber-950 text-amber-400 border border-amber-800/60"
+      : p === "team"
+      ? "bg-emerald-950 text-emerald-400 border border-emerald-800/60"
+      : "bg-slate-800 text-slate-300 border border-slate-700/60";
 
   // Connection Testing States
   const [testingConnection, setTestingConnection] = useState(false);
@@ -407,6 +466,7 @@ export default function Settings() {
   // List of Tabs in Settings Hub
   const tabs = [
     { id: "profil", name: "Profil Pengguna", icon: User, desc: "Identitas personal & info domisili" },
+    { id: "paket", name: "Paket & Kuota", icon: Crown, desc: "Paket langganan, kuota AI harian & perbandingan tier" },
     { id: "tampilan", name: "Tampilan & Feeds", icon: Sliders, desc: "Tema, bahasa & frekuensi bursa" },
     { id: "keamanan", name: "Pusat Keamanan", icon: Lock, desc: "Ganti sandi, 2FA & sesi aktif" },
     { id: "notifikasi", name: "Kontrol Notifikasi", icon: Bell, desc: "Telegram, Discord, WhatsApp" },
@@ -591,6 +651,188 @@ export default function Settings() {
           {activeSubTab === "profil" && (
             <div className="animate-fade-in" id="settings-hub-profile">
               <Profile />
+            </div>
+          )}
+
+          {/* TAB 1B: QA11-F — PAKET & KUOTA (Direksi F: tier langganan) */}
+          {activeSubTab === "paket" && (
+            <div className="space-y-6 animate-fade-in" id="settings-hub-plan">
+
+              {/* Kartu paket aktif + meter kuota */}
+              <div className="p-5 rounded-xl border border-slate-800 bg-[#0A0F1D]/60 space-y-5">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                  <div className="flex items-center gap-2">
+                    <Crown className="w-4 h-4 text-amber-500" />
+                    <h3 className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider">
+                      Paket Aktif & Kuota AI Harian
+                    </h3>
+                  </div>
+                  <button
+                    onClick={fetchPlan}
+                    disabled={planLoading}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-mono font-bold bg-slate-800/60 border border-slate-700 text-slate-300 hover:border-amber-500/50 hover:text-amber-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    aria-label="Muat ulang informasi paket dan kuota"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${planLoading ? "animate-spin" : ""}`} />
+                    MUAT ULANG
+                  </button>
+                </div>
+
+                {planLoading && !planData ? (
+                  /* Skeleton muat — pola komponen lain */
+                  <div className="space-y-3" role="status" aria-label="Memuat informasi paket">
+                    <div className="h-8 w-40 rounded-lg bg-slate-800/60 animate-pulse" />
+                    <div className="h-3 w-full rounded bg-slate-800/40 animate-pulse" />
+                    <div className="h-3 w-2/3 rounded bg-slate-800/40 animate-pulse" />
+                  </div>
+                ) : planError ? (
+                  <div className="p-4 rounded-lg border border-rose-800/60 bg-rose-950/30" role="alert">
+                    <p className="text-xs text-rose-300">{planError}</p>
+                    <button
+                      onClick={fetchPlan}
+                      className="mt-3 px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold bg-rose-900/50 border border-rose-700 text-rose-200 hover:bg-rose-900/70 transition-colors"
+                    >
+                      COBA LAGI
+                    </button>
+                  </div>
+                ) : planData ? (
+                  <>
+                    {/* Identitas paket */}
+                    <div className="flex flex-wrap items-center gap-3">
+                      <span className={`px-2.5 py-1 rounded text-[10px] font-mono font-bold tracking-widest ${planBadgeStyle(planData.plan)}`}>
+                        {planData.label}
+                      </span>
+                      <span className="text-xs text-slate-400">{planData.note}</span>
+                      {planData.planRaw && planData.planRaw !== planData.plan && (
+                        <span
+                          className="text-[10px] font-mono text-amber-500/80"
+                          title={`Nilai plan mentah di database: "${planData.planRaw}" — tidak dikenali, diperlakukan FREE.`}
+                        >
+                          ⚠ plan DB: "{planData.planRaw}" → FREE
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Meter kuota */}
+                    {planData.quotaError ? (
+                      <div className="p-3 rounded-lg border border-amber-800/50 bg-amber-950/20 text-[11px] text-amber-400" role="status">
+                        Kuota hari ini tidak dapat dihitung server saat ini — angka tidak ditampilkan (bukan nol palsu).
+                      </div>
+                    ) : planData.quota ? (
+                      <div className="space-y-2" aria-label="Meter pemakaian kuota AI harian">
+                        {(() => {
+                          const used = planData.quota!.used;
+                          const limit = planData.aiDailyLimit;
+                          const pct = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
+                          const barColor = pct >= 90 ? "bg-rose-500" : pct >= 60 ? "bg-amber-500" : "bg-emerald-500";
+                          const resetLabel = new Date(planData.quota!.resetsAt).toLocaleTimeString("id-ID", {
+                            hour: "2-digit", minute: "2-digit", timeZone: "UTC",
+                          });
+                          return (
+                            <>
+                              <div className="flex justify-between text-xs">
+                                <span className="text-slate-300 font-semibold">Pemakaian AI hari ini</span>
+                                <span className="font-mono text-slate-400 tabular-nums">
+                                  {used.toLocaleString("id-ID")} / {limit.toLocaleString("id-ID")} panggilan
+                                </span>
+                              </div>
+                              <div
+                                className="h-2.5 rounded-full bg-slate-800/70 overflow-hidden"
+                                role="progressbar"
+                                aria-valuemin={0}
+                                aria-valuemax={limit}
+                                aria-valuenow={used}
+                                aria-valuetext={`${used} dari ${limit} panggilan AI terpakai`}
+                              >
+                                <div className={`h-full rounded-full transition-all duration-500 ${barColor}`} style={{ width: `${pct}%` }} />
+                              </div>
+                              <div className="flex flex-wrap justify-between gap-2 text-[10px] font-mono text-slate-500">
+                                <span>sisa {planData.quota!.remaining.toLocaleString("id-ID")} panggilan</span>
+                                <span>reset {resetLabel} UTC</span>
+                              </div>
+                            </>
+                          );
+                        })()}
+                      </div>
+                    ) : null}
+
+                    {/* Fitur paket aktif */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                      {planData.features.map((f) => (
+                        <div key={f.id} className="flex items-center gap-2 text-[11px]">
+                          {f.included ? (
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                          ) : (
+                            <span className="w-3.5 h-3.5 shrink-0 rounded-full border border-slate-700 flex items-center justify-center text-[8px] text-slate-600">–</span>
+                          )}
+                          <span className={f.included ? "text-slate-300" : "text-slate-500 line-through"}>{f.label}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Kejujuran billing — bukan gerbang palsu */}
+                    {!planData.billing?.available && (
+                      <div className="p-3 rounded-lg border border-slate-800 bg-slate-950/40 text-[11px] text-slate-500 leading-relaxed">
+                        <Info className="w-3.5 h-3.5 inline mr-1.5 -mt-0.5 text-slate-500" />
+                        {planData.billing?.note ||
+                          "Integrasi pembayaran belum tersedia — perubahan paket dilakukan operator."}
+                      </div>
+                    )}
+                  </>
+                ) : null}
+              </div>
+
+              {/* Tabel perbandingan tier */}
+              <div className="p-5 rounded-xl border border-slate-800 bg-[#0A0F1D]/60 space-y-4">
+                <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
+                  <Layers className="w-4 h-4 text-amber-500" />
+                  <h3 className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider">
+                    Perbandingan Paket
+                  </h3>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs" aria-label="Tabel perbandingan paket langganan">
+                    <caption className="sr-only">Perbandingan paket FREE, PRO, dan TEAM ZAYTRIX</caption>
+                    <thead>
+                      <tr className="border-b border-slate-800">
+                        <th scope="col" className="text-left py-2 pr-4 font-mono font-bold text-slate-400 uppercase tracking-wider text-[10px]">Paket</th>
+                        <th scope="col" className="text-right py-2 px-4 font-mono font-bold text-slate-400 uppercase tracking-wider text-[10px]">Kuota AI / hari</th>
+                        <th scope="col" className="text-left py-2 pl-4 font-mono font-bold text-slate-400 uppercase tracking-wider text-[10px]">Posisi</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {PLAN_TIERS.map((t) => {
+                        const active = planData?.plan === t.id;
+                        return (
+                          <tr
+                            key={t.id}
+                            className={`border-b border-slate-800/50 ${active ? "bg-amber-500/5" : ""}`}
+                          >
+                            <td className="py-2.5 pr-4">
+                              <div className="flex items-center gap-2">
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-widest ${planBadgeStyle(t.id)}`}>
+                                  {t.label}
+                                </span>
+                                {active && (
+                                  <span className="text-[9px] font-mono font-bold text-amber-500">AKTIF</span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-4 text-right font-mono text-slate-300 tabular-nums">
+                              {t.aiDailyLimit.toLocaleString("id-ID")}
+                            </td>
+                            <td className="py-2.5 pl-4 text-slate-500">{t.tagline}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="text-[10px] text-slate-600 font-mono leading-relaxed">
+                  Batas kuota bersifat per-hari UTC dan dihitung dari event AI tersimpan (persisten lintas restart).
+                  Nilai batas dapat disesuaikan operator via environment (AI_DAILY_LIMIT, AI_DAILY_LIMIT_PRO, AI_DAILY_LIMIT_TEAM).
+                </p>
+              </div>
             </div>
           )}
 
