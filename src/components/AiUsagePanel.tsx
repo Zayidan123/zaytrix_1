@@ -60,6 +60,7 @@ interface UsageSummary {
 }
 
 const PROVIDER_CHIP: Record<string, { label: string; chip: string }> = {
+  "9router": { label: "🔥 9router", chip: "bg-amber-500/10 text-amber-300 border-amber-500/25" },
   openrouter: { label: "⚡ openrouter", chip: "bg-emerald-500/10 text-emerald-300 border-emerald-500/25" },
   gemini: { label: "✦ gemini", chip: "bg-sky-500/10 text-sky-300 border-sky-500/25" },
 };

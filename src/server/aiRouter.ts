@@ -46,6 +46,29 @@ const OPENROUTER_TIMEOUT_MS = parseInt(process.env.OPENROUTER_TIMEOUT_MS || "300
 // Attribution headers recommended by OpenRouter (shows "via ZAYTRIX" on
 // openrouter.ai/activity). Falls back to the repo URL when APP_URL is unset.
 const OPENROUTER_REFERER = process.env.APP_URL || "https://github.com/Zayidan123/zaytrix_1";
+
+// ─── 9router Configuration (LOCAL, FREE models) ──────────────
+// 9router is a local AI proxy running on this device (Termux).
+// It provides free model access via an OpenRouter-compatible API.
+// Detected automatically on boot — if unreachable, falls back to
+// OpenRouter (cloud) or Gemini without affecting functionality.
+const NINEROUTER_ENABLED = process.env.NINEROUTER_ENABLED !== "false"; // set "false" to disable
+const NINEROUTER_ENDPOINT = process.env.NINEROUTER_ENDPOINT || "http://localhost:20128/v1";
+const NINEROUTER_DETECT_TIMEOUT_MS = 10_000; // 10s for detection ping
+
+// Free models we explicitly whitelist from 9router (all confirmed working 2026-09).
+const NINEROUTER_FREE_MODELS: string[] = (process.env.NINEROUTER_FREE_MODELS || "")
+  .split(",")
+  .map((m) => m.trim())
+  .filter(Boolean);
+// Default free models — auto-detected from /v1/models if list is empty.
+const NINEROUTER_DEFAULT_FREE_MODELS = [
+  "kc/openrouter/free",
+  "openrouter/openrouter/free",
+  "kc/nex-agi/nex-n2.5-mini:free",
+  "openrouter/nex-agi/nex-n2.5-mini:free",
+  "openrouter/nvidia/nemotron-3.5-lightning:free",
+];
 const OPENROUTER_TITLE = "ZAYTRIX";
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
@@ -66,7 +89,7 @@ export interface AIRequest {
   model?: string;
 }
 
-export type AIProviderName = "openrouter" | "gemini" | "cache" | "none";
+export type AIProviderName = "9router" | "openrouter" | "gemini" | "cache" | "none";
 
 export interface AIResponse {
   success: boolean;
@@ -92,7 +115,49 @@ interface ProviderHealth {
 const providerHealth: Record<string, ProviderHealth> = {
   "openrouter": { available: true, lastError: null, lastSuccess: 0, failureCount: 0, totalCalls: 0, totalTokens: 0 },
   "gemini": { available: !!GEMINI_API_KEY, lastError: null, lastSuccess: 0, failureCount: 0, totalCalls: 0, totalTokens: 0 },
+  "9router": { available: false, lastError: null, lastSuccess: 0, failureCount: 0, totalCalls: 0, totalTokens: 0 },
 };
+
+// ─── 9router Auto-Detection (fire-and-forget on boot) ────────
+let nineRouterDetected = false;
+let detected9RouterModels: string[] = [];
+
+async function detect9Router(): Promise<void> {
+  if (!NINEROUTER_ENABLED) {
+    log.info("[aiRouter] 9router disabled via NINEROUTER_ENABLED=false");
+    return;
+  }
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), NINEROUTER_DETECT_TIMEOUT_MS);
+    const res = await fetch(`${NINEROUTER_ENDPOINT}/models`, {
+      signal: controller.signal,
+      headers: { "Content-Type": "application/json" },
+    });
+    clearTimeout(timeout);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = (await res.json()) as { data?: Array<{ id: string; owned_by?: string; capabilities?: Record<string, unknown> }> };
+    const models = (data?.data ?? []).map((m) => m.id).filter(Boolean);
+    if (models.length > 0) {
+      detected9RouterModels = models;
+      nineRouterDetected = true;
+      providerHealth["9router"].available = true;
+      providerHealth["9router"].lastSuccess = Date.now();
+      const freeCount = models.filter((id) => id.includes("free") || id.includes(":free")).length;
+      log.info(`[aiRouter] 9router terdeteksi — ${models.length} model (${freeCount} free) — ${models.slice(0, 5).join(", ")}${models.length > 5 ? " ..." : ""}`);
+    } else {
+      log.warn("[aiRouter] 9router merespons tapi tidak ada model");
+    }
+  } catch (error: unknown) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    log.warn(`[aiRouter] 9router tidak terdeteksi (localhost:20128) — using OpenRouter/Gemini saja: ${errMsg}`);
+    providerHealth["9router"].lastError = errMsg;
+  }
+}
+
+// Fire-and-forget detection on module load
+detect9Router().catch((e) => log.warn("[aiRouter] 9router detection error:", e));
+
 
 // ─── Per-Call Usage Tracking (QA7-F2) ─────────────────────────────
 // Ring buffer of the last N AI calls (in-memory, privacy-safe: NO prompt
@@ -313,15 +378,49 @@ const MODEL_LABELS: Record<string, { label: string; description: string }> = {
   },
 };
 
+/**
+ * Model yang BOLEH dipilih user — mencakup:
+ *   1. 9router free models (jika terdeteksi)
+ *   2. OpenRouter model (primary + fallback)
+ *   3. (Gemini model ditambahkan jika dikonfigurasi)
+ * Daftar ini digunakan frontend untuk dropdown model picker.
+ */
 export function getAvailableModels(): AIModelOption[] {
-  return [OPENROUTER_MODEL, ...OPENROUTER_FALLBACK_MODELS]
-    .filter((id, i, arr) => arr.indexOf(id) === i) // dedup id ganda dari env
+  const models: AIModelOption[] = [];
+
+  // 1. 9router free models (jika terdeteksi) — prioritas utama (gratis, lokal)
+  if (nineRouterDetected) {
+    const nineModels = detected9RouterModels
+      .filter((id) => id.includes("free") || id.includes(":free")) // hanya model FREE
+      .map((id) => ({
+        id,
+        label: id.includes("nvidia") ? id.split("/").pop() ?? id : `9Router · ${id.includes("kc") ? "Kilometer" : id.includes("openrouter") && !id.includes("nvidia") ? "Free" : "Model"}`,
+        description: "Model GRATIS dari 9router lokal (cepat, tanpa biaya)",
+      }));
+    models.push(...nineModels);
+  }
+
+  // 2. OpenRouter models (primary + fallback chain)
+  models.push(...[OPENROUTER_MODEL, ...OPENROUTER_FALLBACK_MODELS]
+    .filter((id, i, arr) => arr.indexOf(id) === i)
     .map((id) => ({
       id,
       label: MODEL_LABELS[id]?.label ?? id,
       description: MODEL_LABELS[id]?.description ?? "Model OpenRouter dari konfigurasi server",
-    }));
+    })));
+
+  // 3. Gemini model (jika dikonfigurasi)
+  if (GEMINI_API_KEY) {
+    models.push({
+      id: GEMINI_MODEL,
+      label: "Gemini " + GEMINI_MODEL,
+      description: "Google Gemini (fallback)",
+    });
+  }
+
+  return models;
 }
+
 
 /**
  * QA10-E: tentukan chain model untuk satu request.
@@ -334,14 +433,19 @@ export function getAvailableModels(): AIModelOption[] {
  */
 function resolveModelChain(req: AIRequest): string[] {
   const defaultChain = [OPENROUTER_MODEL, ...OPENROUTER_FALLBACK_MODELS];
-  if (!req.model) return defaultChain;
+  // 9router free models prepended to default chain (user preference takes priority)
+  const nineRouterFree = nineRouterDetected
+    ? detected9RouterModels.filter((id) => id.includes("free") || id.includes(":free"))
+    : [];
+  const fullDefaultChain = [...nineRouterFree, ...defaultChain];
+  if (!req.model) return fullDefaultChain;
   if (!getAvailableModels().some((m) => m.id === req.model)) {
     log.warn(
-      `[aiRouter] model "${req.model}" tidak ada di daftar model yang diizinkan — memakai model default (${OPENROUTER_MODEL})`
+      `[aiRouter] model "${req.model}" tidak ada di daftar model yang diizinkan — memakai model default`
     );
-    return defaultChain;
+    return fullDefaultChain;
   }
-  return [req.model, ...defaultChain.filter((m) => m !== req.model)];
+  return [req.model, ...fullDefaultChain.filter((m) => m !== req.model)];
 }
 
 /**
@@ -578,51 +682,102 @@ async function callGemini(req: AIRequest): Promise<AIResponse> {
   }
 }
 
-// ─── Main AI Router (with fallback chain) ─────────────────────────────
+// ─── 9router Call (LOCAL, FREE) ────────────────────────
+async function call9Router(req: AIRequest): Promise<AIResponse> {
+  const startTime = Date.now();
+  const models = (NINEROUTER_FREE_MODELS.length > 0 ? NINEROUTER_FREE_MODELS : detected9RouterModels)
+    .filter((id) => id.includes("free") || id.includes(":free"));
+
+  if (models.length === 0) {
+    return { success: false, text: "", provider: "9router", latencyMs: 0, error: "Tidak ada model free 9router tersedia", fallbackUsed: true };
+  }
+
+  const messages: OpenRouterMessage[] = [];
+  if (req.systemPrompt) messages.push({ role: "system", content: req.systemPrompt });
+  messages.push({ role: "user", content: req.prompt });
+
+  let lastError = "unknown";
+  for (const model of models) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), OPENROUTER_TIMEOUT_MS);
+      const res = await fetch(`${NINEROUTER_ENDPOINT}/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "HTTP-Referer": OPENROUTER_REFERER, "X-Title": OPENROUTER_TITLE },
+        body: JSON.stringify({ model, messages, max_tokens: Math.max(256, req.maxTokens ?? 2048), temperature: req.temperature ?? 0.7, stream: false, reasoning: { enabled: false } }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      if (!res.ok) {
+        const errText = await res.text().catch(() => "Unknown error");
+        throw new Error(`9router HTTP ${res.status} (${model}): ${errText.substring(0, 200)}`);
+      }
+      const data = (await res.json()) as { choices?: Array<{ message?: { content?: string | null } }>; usage?: { total_tokens?: number } };
+      const text = data?.choices?.[0]?.message?.content || "";
+      if (!text.trim()) throw new Error(`9router (${model}) mengembalikan konten kosong`);
+
+      providerHealth["9router"].available = true;
+      providerHealth["9router"].lastError = null;
+      providerHealth["9router"].lastSuccess = Date.now();
+      providerHealth["9router"].failureCount = 0;
+      providerHealth["9router"].totalCalls++;
+      providerHealth["9router"].totalTokens += data?.usage?.total_tokens || 0;
+
+      recordUsage({ ts: Date.now(), endpoint: req.endpoint || "chat", provider: "9router", model, tokens: data?.usage?.total_tokens || 0, latencyMs: Date.now() - startTime, success: true, streamed: false, userId: req.userId });
+      return { success: true, text, provider: "9router", model, tokensUsed: data?.usage?.total_tokens || 0, latencyMs: Date.now() - startTime, fallbackUsed: false };
+    } catch (error: unknown) {
+      lastError = error instanceof Error ? error.message : String(error);
+      log.warn(`[aiRouter] 9router model "${model}" gagal: ${lastError.substring(0, 120)} — mencoba model berikutnya...`);
+    }
+  }
+
+  providerHealth["9router"].available = false;
+  providerHealth["9router"].lastError = lastError;
+  providerHealth["9router"].failureCount++;
+  recordUsage({ ts: Date.now(), endpoint: req.endpoint || "chat", provider: "9router", model: models[0], tokens: 0, latencyMs: Date.now() - startTime, success: false, streamed: false, error: lastError.substring(0, 150), userId: req.userId });
+  return { success: false, text: "", provider: "9router", model: models[0], latencyMs: Date.now() - startTime, error: lastError, fallbackUsed: true };
+}
+
+// ─── Main AI Router (with fallback chain) ─────────────────────
 export async function callAI(req: AIRequest): Promise<AIResponse> {
-  // Try OpenRouter first (primary — cloud, no local server required)
+  // Priority 1: 9router local free models (if detected)
+  if (nineRouterDetected) {
+    const nineResult = await call9Router(req);
+    if (nineResult.success) {
+      if (req.userId) {
+        logAudit(req.userId, "AI_CALL_NINEROUTER", null, true, { model: nineResult.model, tokens: nineResult.tokensUsed, latencyMs: nineResult.latencyMs }).catch(() => {});
+      }
+      return nineResult;
+    }
+    log.warn(`[aiRouter] 9router gagal, fallback ke OpenRouter...`);
+  }
+
+  // Priority 2: OpenRouter (cloud)
   let openRouterError: string | null = null;
   if (providerHealth["openrouter"].available && OPENROUTER_API_KEY) {
     const result = await callOpenRouter(req);
     if (result.success) {
       if (req.userId) {
-        logAudit(req.userId, "AI_CALL_OPENROUTER", null, true, {
-          model: result.model,
-          tokens: result.tokensUsed,
-          latencyMs: result.latencyMs,
-        }).catch(() => {});
+        logAudit(req.userId, "AI_CALL_OPENROUTER", null, true, { model: result.model, tokens: result.tokensUsed, latencyMs: result.latencyMs }).catch(() => {});
       }
       return result;
     }
     openRouterError = result.error || "unknown";
-    // OpenRouter failed — fall through to Gemini
     log.warn(`[aiRouter] OpenRouter gagal (${openRouterError}), fallback ke Gemini...`);
   }
 
-  // Fallback to Gemini
+  // Priority 3: Gemini (fallback)
   const geminiResult = await callGemini(req);
   if (geminiResult.success) {
     if (req.userId) {
-      logAudit(req.userId, "AI_CALL_GEMINI", null, true, {
-        model: geminiResult.model,
-        tokens: geminiResult.tokensUsed,
-        latencyMs: geminiResult.latencyMs,
-        fallback: true,
-      }).catch(() => {});
+      logAudit(req.userId, "AI_CALL_GEMINI", null, true, { model: geminiResult.model, tokens: geminiResult.tokensUsed, latencyMs: geminiResult.latencyMs, fallback: true }).catch(() => {});
     }
     return geminiResult;
   }
 
-  // Both failed
-  log.error(`[aiRouter] Semua provider AI gagal. OpenRouter: ${openRouterError}, Gemini: ${geminiResult.error}`);
-  return {
-    success: false,
-    text: "",
-    provider: "none",
-    latencyMs: 0,
-    error: "Semua provider AI tidak tersedia. OpenRouter dan Gemini gagal.",
-    fallbackUsed: true,
-  };
+  // All failed
+  log.error(`[aiRouter] Semua provider AI gagal. 9router: ${nineRouterDetected ? "tercoba" : "tidak terdeteksi"}, OpenRouter: ${openRouterError}, Gemini: ${geminiResult.error}`);
+  return { success: false, text: "", provider: "none", latencyMs: 0, error: "Semua provider AI tidak tersedia.", fallbackUsed: true };
 }
 
 // ─── Streaming (SSE) — QA7-F1 ────────────────────────────────────────
@@ -648,6 +803,103 @@ export async function callAIStream(
 ): Promise<void> {
   const startTime = Date.now();
 
+  // Priority 1: 9router streaming (if detected)
+  if (nineRouterDetected) {
+    const models = (NINEROUTER_FREE_MODELS.length > 0 ? NINEROUTER_FREE_MODELS : detected9RouterModels)
+      .filter((id) => id.includes("free") || id.includes(":free"));
+    if (models.length > 0) {
+      const messages: OpenRouterMessage[] = [];
+      if (req.systemPrompt) messages.push({ role: "system", content: req.systemPrompt });
+      messages.push({ role: "user", content: req.prompt });
+
+      let lastStreamError = "unknown";
+      for (const model of models) {
+        let gotAnyToken = false;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), OPENROUTER_STREAM_TIMEOUT_MS);
+        const onClientClose = () => controller.abort();
+        req.abortSignal?.addEventListener("abort", onClientClose, { once: true });
+
+        try {
+          const res = await fetch(`${NINEROUTER_ENDPOINT}/chat/completions`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "HTTP-Referer": OPENROUTER_REFERER,
+              "X-Title": OPENROUTER_TITLE,
+            },
+            body: JSON.stringify({
+              model,
+              messages,
+              max_tokens: Math.max(256, req.maxTokens ?? 2048),
+              temperature: req.temperature ?? 0.7,
+              stream: true,
+              reasoning: { enabled: false },
+            }),
+            signal: controller.signal,
+          });
+          clearTimeout(timeout);
+          if (!res.ok || !res.body) {
+            const errText = await res.text().catch(() => "Unknown");
+            throw new Error(`9router HTTP ${res.status}: ${errText.substring(0, 100)}`);
+          }
+          gotAnyToken = true;
+          // Process 9router stream — same SSE pattern as OpenRouter
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          let totalTokens = 0;
+          let chunksRead = 0;
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() ?? "";
+            for (const line of lines) {
+              if (!line.trim() || !line.startsWith("data: ")) continue;
+              try {
+                const ev = JSON.parse(line.slice(6));
+                if (ev.event === "token" && ev.data?.content) {
+                  onEvent({ type: "token", text: ev.data.content, model, provider: "9router" });
+                  chunksRead++;
+                } else if (ev.event === "done") {
+                  totalTokens = ev.data?.usage?.total_tokens ?? totalTokens;
+                }
+              } catch { /* skip malformed lines */ }
+            }
+          }
+          reader.releaseLock();
+
+          providerHealth["9router"].totalCalls++;
+          providerHealth["9router"].totalTokens += totalTokens;
+          providerHealth["9router"].lastSuccess = Date.now();
+
+          onEvent({ type: "start", model, provider: "9router" });
+          onEvent({
+            type: "done",
+            model,
+            provider: "9router",
+            tokensUsed: totalTokens,
+            latencyMs: Date.now() - startTime,
+          });
+          return; // success, done
+        } catch (error: unknown) {
+          const errMsg = error instanceof Error ? error.message : String(error);
+          lastStreamError = errMsg;
+          log.warn(`[aiRouter] 9router stream "${model}" gagal: ${errMsg.substring(0, 100)}`);
+          if (controller.signal.aborted) break;
+        } finally {
+          clearTimeout(timeout);
+          req.abortSignal?.removeEventListener("abort", onClientClose);
+        }
+      }
+      // All 9router stream models failed — fall through to OpenRouter stream
+      log.warn(`[aiRouter] 9router stream gagal, fallback ke OpenRouter stream...`);
+    }
+  }
+
+  // Priority 2: OpenRouter streaming (existing)
   if (OPENROUTER_API_KEY && providerHealth["openrouter"].available) {
     // QA10-E: chain = model pilihan user (jika valid) + fallback default.
     const models = resolveModelChain(req);
@@ -851,6 +1103,14 @@ export async function callAIStream(
 // ─── Health Check Endpoint Data ──────────────────────────────────────
 export function getAIProviderHealth() {
   return {
+    "9router": {
+      ...providerHealth["9router"],
+      endpoint: NINEROUTER_ENDPOINT,
+      detected: nineRouterDetected,
+      modelCount: detected9RouterModels.length,
+      freeModels: detected9RouterModels.filter((id) => id.includes("free") || id.includes(":free")),
+      configured: NINEROUTER_ENABLED,
+    },
     "openrouter": {
       ...providerHealth["openrouter"],
       endpoint: OPENROUTER_ENDPOINT,
@@ -863,7 +1123,7 @@ export function getAIProviderHealth() {
       model: GEMINI_MODEL,
       configured: !!GEMINI_API_KEY,
     },
-    primary: "openrouter",
+    primary: nineRouterDetected ? "9router" : "openrouter",
     fallback: "gemini",
   };
 }
@@ -893,6 +1153,36 @@ export async function testOpenRouterConnection(): Promise<{ success: boolean; la
     }
   }
   return { success: false, latencyMs: Date.now() - startTime, error: lastError };
+}
+
+// ─── 9router Connection Test ──────────────────────────────────
+export async function test9RouterConnection(): Promise<{ success: boolean; latencyMs: number; models?: string[]; error?: string }> {
+  const startTime = Date.now();
+  if (!NINEROUTER_ENABLED) {
+    return { success: false, latencyMs: 0, error: "9router dinonaktifkan (NINEROUTER_ENABLED=false)" };
+  }
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), NINEROUTER_DETECT_TIMEOUT_MS);
+    const res = await fetch(`${NINEROUTER_ENDPOINT}/models`, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = (await res.json()) as { data?: Array<{ id: string }> };
+    const models = (data?.data ?? []).map((m) => m.id);
+    if (models.length === 0) {
+      return { success: false, latencyMs: Date.now() - startTime, error: "Tidak ada model di 9router" };
+    }
+    const freeModels = models.filter((id) => id.includes("free") || id.includes(":free"));
+    providerHealth["9router"].available = true;
+    providerHealth["9router"].lastSuccess = Date.now();
+    nineRouterDetected = true;
+    detected9RouterModels = models;
+    return { success: true, latencyMs: Date.now() - startTime, models: freeModels.length > 0 ? freeModels : models };
+  } catch (error: unknown) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    providerHealth["9router"].lastError = errMsg;
+    return { success: false, latencyMs: Date.now() - startTime, error: errMsg };
+  }
 }
 
 // ─── Gemini-compatible adapter (for server.ts direct call sites) ─────

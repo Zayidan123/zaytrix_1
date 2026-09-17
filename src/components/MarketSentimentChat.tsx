@@ -797,15 +797,17 @@ ATURAN JAWABAN:
                     <span
                       className={
                         "text-[8px] font-mono px-1.5 py-0.5 rounded border flex items-center gap-0.5 " +
-                        (msg.provider === "openrouter"
-                          ? "text-emerald-300 bg-emerald-500/10 border-emerald-500/25"
-                          : msg.provider === "gemini"
-                            ? "text-sky-300 bg-sky-500/10 border-sky-500/25"
-                            : "text-slate-400 bg-slate-500/10 border-slate-600/30")
+                        (msg.provider === "9router"
+                          ? "text-amber-300 bg-amber-500/10 border-amber-500/25"
+                          : msg.provider === "openrouter"
+                            ? "text-emerald-300 bg-emerald-500/10 border-emerald-500/25"
+                            : msg.provider === "gemini"
+                              ? "text-sky-300 bg-sky-500/10 border-sky-500/25"
+                              : "text-slate-400 bg-slate-500/10 border-slate-600/30")
                       }
                       title={`Penyedia AI: ${msg.provider}${msg.model ? ` · model ${msg.model}` : ""}`}
                     >
-                      {msg.provider === "openrouter" ? "⚡" : msg.provider === "gemini" ? "✦" : "•"} {msg.provider}
+                      {msg.provider === "9router" ? "🔥" : msg.provider === "openrouter" ? "⚡" : msg.provider === "gemini" ? "✦" : "•"} {msg.provider}
                       {msg.model ? ` · ${msg.model.split("/").pop()}` : ""}
                     </span>
                   )}

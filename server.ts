@@ -210,7 +210,7 @@ try {
 
 // ─── AI Router (OpenRouter primary + Gemini fallback) ────────────────────
 try {
-  const { callAI, callAIStream, getAIUsage, getAIProviderHealth, testOpenRouterConnection, getUserAiQuota } = await import("./src/server/aiRouter");
+  const { callAI, callAIStream, getAIUsage, getAIProviderHealth, testOpenRouterConnection, test9RouterConnection, getUserAiQuota } = await import("./src/server/aiRouter");
   const { getRecentChatHistory, saveChatMessage, CHAT_CONTEXT_LIMIT } = await import("./src/server/aiMemory");
 
   // GET /api/ai/health — AI provider health status (public, for monitoring)
@@ -218,10 +218,17 @@ try {
     res.json({ success: true, health: getAIProviderHealth() });
   });
 
-  // POST /api/ai/test — test OpenRouter connectivity (requireAuth)
+  // POST /api/ai/test — test AI connectivity (requireAuth)
   app.post("/api/ai/test", requireAuth, async (req: any, res) => {
-    const result = await testOpenRouterConnection();
-    res.json({ success: result.success, latencyMs: result.latencyMs, model: result.model, error: result.error });
+    // Try 9router first, then OpenRouter.
+    const nineResult = await test9RouterConnection();
+    const orResult = await testOpenRouterConnection();
+    res.json({
+      success: nineResult.success || orResult.success,
+      nineRouter: nineResult,
+      openRouter: orResult,
+      error: nineResult.success ? undefined : orResult.error,
+    });
   });
 
   // POST /api/ai/chat — generic AI chat with automatic fallback
