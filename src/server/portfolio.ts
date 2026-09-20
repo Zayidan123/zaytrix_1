@@ -56,6 +56,33 @@ const alertSchema = z.object({
   id: z.string().max(100).optional(),
 });
 
+const ledgerSyncSchema = z.object({
+  transactions: z
+    .array(ledgerTxSchema)
+    .max(1000, { message: "Maksimal 1000 transaksi per sinkronisasi ledger." }),
+});
+
+const conversionsSyncSchema = z.object({
+  conversions: z
+    .array(conversionSchema)
+    .max(1000, { message: "Maksimal 1000 konversi per sinkronisasi." }),
+});
+
+const backtestResultSchema = z.object({
+  symbol: z.string().min(1).max(20),
+  strategy: z.string().min(1).max(50),
+  startDate: z.string().max(10).optional(),
+  endDate: z.string().max(10).optional(),
+  initialCapital: z.number().finite().nonnegative(),
+  finalCapital: z.number().finite().nonnegative(),
+  totalReturn: z.number().finite(),
+  sharpeRatio: z.number().finite().nullable().optional(),
+  maxDrawdown: z.number().finite().nullable().optional(),
+  winRate: z.number().finite().min(0).max(1).nullable().optional(),
+  totalTrades: z.number().int().min(0).optional(),
+  equityCurve: z.array(z.record(z.string(), z.number())).optional(),
+});
+
 // SEC-23: the bulk-sync endpoint previously spread the ENTIRE client array
 // straight into a $transaction with `String(h.symbol || "")` +
 // `parseFloat(...) || 0` coercion — accepting ANY shape, NaN, negatives,
@@ -225,23 +252,25 @@ portfolioRouter.delete("/ledger/:id", async (req: Request, res: Response) => {
 
 portfolioRouter.post("/ledger/sync", async (req: Request, res: Response) => {
   try {
-    const { transactions } = req.body;
-    if (!Array.isArray(transactions)) {
-      return res.status(400).json({ success: false, error: "Format data tidak valid." });
+    const parsed = ledgerSyncSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ success: false, error: "Input tidak valid: " + zodError(parsed.error) });
     }
+    const transactions = parsed.data.transactions;
     await prisma.$transaction([
       prisma.ledgerTransaction.deleteMany({ where: { userId: req.user!.sub } }),
-      ...transactions.map((t: any) => prisma.ledgerTransaction.create({
+      ...transactions.map((t) => prisma.ledgerTransaction.create({
         data: {
           userId: req.user!.sub,
-          timestamp: String(t.timestamp || new Date().toISOString()),
-          type: String(t.type || "BUY"),
-          symbol: String(t.symbol || ""),
-          quantity: parseFloat(t.quantity) || 0,
-          price: parseFloat(t.price) || 0,
-          totalAmount: parseFloat(t.totalAmount) || 0,
-          feePaidUsd: parseFloat(t.feePaidUsd) || 0,
+          timestamp: t.timestamp || new Date().toISOString(),
+          type: t.type,
+          symbol: t.symbol,
+          quantity: t.quantity,
+          price: t.price,
+          totalAmount: t.totalAmount ?? t.quantity * t.price,
+          feePaidUsd: t.feePaidUsd ?? 0,
           notes: t.notes || null,
+          id: t.id || undefined,
         },
       })),
     ]);
@@ -1141,25 +1170,26 @@ portfolioRouter.get("/backtests", async (req: Request, res: Response) => {
 
 portfolioRouter.post("/backtests", async (req: Request, res: Response) => {
   try {
-    const r = req.body;
-    if (!r.symbol || !r.strategy) {
-      return res.status(400).json({ success: false, error: "Field tidak lengkap." });
+    const parsed = backtestResultSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ success: false, error: "Input tidak valid: " + zodError(parsed.error) });
     }
+    const r = parsed.data;
     const result = await prisma.backtestResult.create({
       data: {
         userId: req.user!.sub,
-        symbol: String(r.symbol),
-        strategy: String(r.strategy),
-        startDate: String(r.startDate || ""),
-        endDate: String(r.endDate || ""),
-        initialCapital: parseFloat(r.initialCapital) || 0,
-        finalCapital: parseFloat(r.finalCapital) || 0,
-        totalReturn: parseFloat(r.totalReturn) || 0,
-        sharpeRatio: r.sharpeRatio != null ? parseFloat(r.sharpeRatio) : null,
-        maxDrawdown: r.maxDrawdown != null ? parseFloat(r.maxDrawdown) : null,
-        winRate: r.winRate != null ? parseFloat(r.winRate) : null,
-        totalTrades: parseInt(r.totalTrades) || 0,
-        equityCurve: JSON.stringify(r.equityCurve || []),
+        symbol: r.symbol,
+        strategy: r.strategy,
+        startDate: r.startDate || "",
+        endDate: r.endDate || "",
+        initialCapital: r.initialCapital,
+        finalCapital: r.finalCapital,
+        totalReturn: r.totalReturn,
+        sharpeRatio: r.sharpeRatio ?? null,
+        maxDrawdown: r.maxDrawdown ?? null,
+        winRate: r.winRate ?? null,
+        totalTrades: r.totalTrades ?? 0,
+        equityCurve: JSON.stringify(r.equityCurve || {}),
       },
     });
     res.json({ success: true, result });
@@ -1220,21 +1250,22 @@ portfolioRouter.post("/conversions", async (req: Request, res: Response) => {
 
 portfolioRouter.post("/conversions/sync", async (req: Request, res: Response) => {
   try {
-    const { conversions } = req.body;
-    if (!Array.isArray(conversions)) {
-      return res.status(400).json({ success: false, error: "Format tidak valid." });
+    const parsed = conversionsSyncSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ success: false, error: "Input tidak valid: " + zodError(parsed.error) });
     }
+    const conversions = parsed.data.conversions;
     await prisma.$transaction([
       prisma.conversionTransaction.deleteMany({ where: { userId: req.user!.sub } }),
-      ...conversions.map((c: any) => prisma.conversionTransaction.create({
+      ...conversions.map((c) => prisma.conversionTransaction.create({
         data: {
           userId: req.user!.sub,
-          fromSymbol: String(c.fromSymbol || ""),
-          fromAmount: parseFloat(c.fromAmount) || 0,
-          toSymbol: String(c.toSymbol || ""),
-          toAmount: parseFloat(c.toAmount) || 0,
-          rate: parseFloat(c.rate) || 0,
-          timestamp: String(c.timestamp || new Date().toISOString()),
+          fromSymbol: c.fromSymbol,
+          fromAmount: c.fromAmount,
+          toSymbol: c.toSymbol,
+          toAmount: c.toAmount,
+          rate: c.rate,
+          timestamp: c.timestamp || new Date().toISOString(),
         },
       })),
     ]);

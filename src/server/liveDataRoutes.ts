@@ -21,36 +21,9 @@ import express from "express";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import * as cheerio from "cheerio";
 import * as zlib from "zlib";
+import { fetchWithTimeout } from "./httpUtils";
 import { execFile } from "child_process";
 import { promisify } from "util";
-
-// ---------------------------------------------------------------------------
-// fetchWithTimeout — wraps Node 18+ global `fetch` with an AbortController
-// timeout.  Includes a desktop User-Agent so Cloudflare-protected endpoints
-// don't immediately 403 us.  Never throws for status codes — the caller
-// inspects `res.ok`.
-// ---------------------------------------------------------------------------
-export async function fetchWithTimeout(
-  url: string,
-  opts: RequestInit = {},
-  ms = 10000
-): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
-  const headers: Record<string, string> = {
-    "User-Agent":
-      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    Accept:
-      "text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7",
-    "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
-    ...(opts.headers as Record<string, string> | undefined),
-  };
-  try {
-    return await fetch(url, { ...opts, headers, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 // ---------------------------------------------------------------------------
 // execFileP — promisified child_process.execFile.  Used by fetchHtmlViaCurl.

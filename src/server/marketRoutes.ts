@@ -201,7 +201,9 @@ app.get("/api/coins/tickers", async (req, res) => {
   }
 
   try {
-    const response = await fetch("https://api.binance.com/api/v3/ticker/24hr");
+    const response = await fetchWithTimeout("https://api.binance.com/api/v3/ticker/24hr", {
+      headers: { Accept: "application/json" },
+    });
     if (!response.ok) {
       throw new Error(`Binance response status: ${response.status}`);
     }
@@ -381,7 +383,10 @@ app.get("/api/coins/rankings", async (req, res) => {
   let currentTickers = tickersCache || {};
   if (!tickersCache || (now - tickersCacheTime > 15000)) {
     try {
-      const binanceRes = await fetch("https://api.binance.com/api/v3/ticker/24hr");
+      const binanceRes = await fetchWithTimeout(
+        "https://api.binance.com/api/v3/ticker/24hr",
+        { headers: { Accept: "application/json" } }
+      );
       if (binanceRes.ok) {
         const bData = await binanceRes.json() as any[];
         const filtered: Record<string, { price: number; change: number; volume: number }> = {};

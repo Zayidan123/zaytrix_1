@@ -3,17 +3,16 @@ import { useGlobalStore } from "../store";
 import { LedgerTransaction } from "../types";
 import TaxLotOptimizer from "./TaxLotOptimizer";
 import TaxReportWidget from "./TaxReportWidget";
-import { 
-  FileSpreadsheet, 
-  Search, 
-  Filter, 
-  HelpCircle, 
-  Download, 
-  Calculator, 
-  ArrowDownLeft, 
-  ArrowUpRight, 
-  RefreshCw, 
-  DollarSign, 
+import {
+  FileSpreadsheet,
+  Search,
+  Filter,
+  HelpCircle,
+  Download,
+  Calculator,
+  ArrowDownLeft,
+  ArrowUpRight,
+  DollarSign,
   Sparkles,
   Award
 } from "lucide-react";
@@ -31,71 +30,6 @@ export default function Ledger() {
   const [activeQuestion, setActiveQuestion] = useState<string | null>(null);
   const [aiResponse, setAiResponse] = useState<string>("");
   const [isLoadingAi, setIsLoadingAi] = useState(false);
-
-  // DEMO DATA button — seeds 4 illustrative example transactions into the
-  // user's empty ledger so they can preview the FIFO / tax-recap UI before
-  // entering real trades. The prices and timestamps below are STATIC SAMPLE
-  // VALUES (not real market data) and only appear when the user explicitly
-  // clicks the "Pre-seed Contoh Transaksi (DEMO)" button. They never
-  // auto-populate. Real transactions come from the user's own entry via
-  // addLedgerTransaction (or the /api/portfolio/* server-side persistence).
-  const handleSeedMockTransactions = () => {
-    const mockTxs: LedgerTransaction[] = [
-      {
-        id: "tx_demo_1",
-        timestamp: "2026-01-15T09:30:00.000Z",
-        type: "BUY",
-        symbol: "BTC",
-        quantity: 0.15,
-        price: 48000,
-        totalAmount: 7200,
-        feePaidUsd: 3.6,
-        notes: "[DEMO] Pembelian awal Bitcoin awal tahun"
-      },
-      {
-        id: "tx_demo_2",
-        timestamp: "2026-02-10T14:45:00.000Z",
-        type: "BUY",
-        symbol: "ETH",
-        quantity: 2.5,
-        price: 2400,
-        totalAmount: 6000,
-        feePaidUsd: 3.0,
-        notes: "[DEMO] Akumulasi Ethereum"
-      },
-      {
-        id: "tx_demo_3",
-        timestamp: "2026-03-22T11:15:00.000Z",
-        type: "SELL",
-        symbol: "BTC",
-        quantity: 0.05,
-        price: 64000,
-        totalAmount: 3200,
-        realizedPnL: 800, // Sold 0.05 BTC bought at 48000 (cost basis: 2400, realized: 3200 - 2400 = 800)
-        feePaidUsd: 1.6,
-        notes: "[DEMO] Ambil untung Bitcoin pasca reli kuartal I"
-      },
-      {
-        id: "tx_demo_4",
-        timestamp: "2026-04-05T16:20:00.000Z",
-        type: "SWAP",
-        symbol: "ETH",
-        quantity: 1.0,
-        price: 3200,
-        totalAmount: 3200,
-        realizedPnL: 800, // Swap 1.0 ETH bought at 2400 for stablecoin at 3200 (realized PnL: 800)
-        feePaidUsd: 1.6,
-        notes: "[DEMO] Konversi ETH ke jaringan likuiditas stabil"
-      }
-    ];
-
-    mockTxs.forEach((tx) => {
-      // Avoid duplicates
-      if (!ledgerHistory.some(existing => existing.id === tx.id)) {
-        addLedgerTransaction(tx);
-      }
-    });
-  };
 
   // Process and filter transaction logs
   const filteredLedger = useMemo(() => {
@@ -250,17 +184,8 @@ export default function Ledger() {
 
         <div className="flex gap-2">
           {ledgerHistory.length === 0 && (
-            <button
-              onClick={handleSeedMockTransactions}
-              className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 text-xs px-4 py-2.5 rounded-lg border border-amber-500/25 font-bold transition-all cursor-pointer flex items-center gap-2"
-            >
-              <RefreshCw className="w-4 h-4 animate-spin" /> Pre-seed Contoh Transaksi (DEMO)
-              <span className="ml-1 text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1 py-0.5 rounded font-mono font-bold uppercase tracking-wider">Data Contoh</span>
-            </button>
-          )}
-          {ledgerHistory.length === 0 && (
             <span className="text-[9px] text-slate-500 font-mono leading-tight max-w-[160px] block">
-              * Tombol DEMO hanya mengisi 4 transaksi contoh dengan harga statis buatan (bukan data pasar riil). Hapus kapan saja melalui reset manual.
+              Ledger kosong — catat transaksi nyata Anda melalui input di bawah untuk pencatatan FIFO dan pelaporan pajak yang akurat.
             </span>
           )}
 

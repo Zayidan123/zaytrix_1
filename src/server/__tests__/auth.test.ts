@@ -150,6 +150,24 @@ describe("Public Market Data API", () => {
     expect(Array.isArray(data.history)).toBe(true);
   });
 
+  it("GET /api/coins/tickers should return real data", async () => {
+    const { status, data } = await api("/api/coins/tickers");
+    expect(status).toBe(200);
+    expect(data.success).toBe(true);
+    expect(data.tickers && typeof data.tickers === "object").toBe(true);
+    expect(Object.keys(data.tickers).length).toBeGreaterThan(0);
+  });
+
+  it("GET /api/onchain/orderbook should return real data", async () => {
+    const { status, data } = await api("/api/onchain/orderbook?symbol=BTCUSDT");
+    expect(status).toBe(200);
+    expect(data.success).toBe(true);
+    expect(Array.isArray(data.bids)).toBe(true);
+    expect(Array.isArray(data.asks)).toBe(true);
+    expect(data.bids.length).toBeGreaterThan(0);
+    expect(data.asks.length).toBeGreaterThan(0);
+  });
+
   it("GET /api/live/hashrate should return real data or an honest upstream failure", async () => {
     const { status, data } = await api("/api/live/hashrate?days=3");
     expect(status).toBe(200);
