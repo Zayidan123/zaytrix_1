@@ -232,7 +232,7 @@ Tulis dengan gaya bahasa Indonesia profesional tingkat tinggi, berwibawa, dingin
 }
 
 // REST endpoints for accessing and triggering the periodic AI analysis
-app.get("/api/gemini/automated-analysis", (req, res) => {
+app.get("/api/gemini/automated-analysis", requireAuth, (req, res) => {
   try {
     const filePath = path.join(process.cwd(), "automated-analysis.json");
     if (fs.existsSync(filePath)) {
@@ -241,12 +241,12 @@ app.get("/api/gemini/automated-analysis", (req, res) => {
     } else {
       return res.status(404).json({ success: false, error: "Automated analysis not generated yet." });
     }
-  } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+  } catch {
+    return res.status(500).json({ success: false, error: "Gagal memuat analisis." });
   }
 });
 
-app.post("/api/gemini/automated-analysis/trigger", async (req, res) => {
+app.post("/api/gemini/automated-analysis/trigger", requireAuth, async (req, res) => {
   try {
     await runAutomatedGeminiAnalysis();
     const filePath = path.join(process.cwd(), "automated-analysis.json");
@@ -255,8 +255,8 @@ app.post("/api/gemini/automated-analysis/trigger", async (req, res) => {
       return res.json({ success: true, triggered: true, ...JSON.parse(data) });
     }
     return res.json({ success: true, triggered: true, message: "Analysis started in background." });
-  } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+  } catch {
+    return res.status(500).json({ success: false, error: "Gagal memicu analisis." });
   }
 });
 

@@ -1516,8 +1516,8 @@ export default function OnChainData() {
                         </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                      <XAxis dataKey="date" stroke="#64748b" fontSize={11} />
-                      <YAxis stroke="#64748b" fontSize={11} />
+                      <XAxis dataKey="date" stroke="#64748b" tick={{ fontSize: 11 }} />
+                      <YAxis stroke="#64748b" tick={{ fontSize: 11 }} />
                       <Tooltip 
                         contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155" }}
                         labelClassName="text-slate-400 font-mono text-xs"
@@ -1562,8 +1562,8 @@ export default function OnChainData() {
                   <ResponsiveContainer width="100%" height="100%">
                     <RechartsLineChart data={data.fundingRates}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                      <XAxis dataKey="date" stroke="#64748b" fontSize={11} />
-                      <YAxis stroke="#64748b" fontSize={11} tickFormatter={(v) => `${(v * 100).toFixed(2)}%`} />
+                      <XAxis dataKey="date" stroke="#64748b" tick={{ fontSize: 11 }} />
+                      <YAxis stroke="#64748b" tick={{ fontSize: 11 }} tickFormatter={(v) => `${(v * 100).toFixed(2)}%`} />
                       <Tooltip 
                         contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155" }}
                         labelClassName="text-slate-400 font-mono text-xs"
@@ -1641,8 +1641,8 @@ export default function OnChainData() {
                   <ResponsiveContainer width="100%" height="100%">
                     <RechartsBarChart data={data.cmeBtcOI}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                      <XAxis dataKey="date" stroke="#64748b" fontSize={9} />
-                      <YAxis stroke="#64748b" fontSize={9} />
+                      <XAxis dataKey="date" stroke="#64748b" tick={{ fontSize: 9 }} />
+                      <YAxis stroke="#64748b" tick={{ fontSize: 9 }} />
                       <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155", fontSize: 10 }} />
                       <Bar name="Standard ($M)" dataKey="StandardFutures" fill="#0ea5e9" stackId="a" />
                       <Bar name="Options ($M)" dataKey="Options" fill="#a855f7" stackId="a" />
@@ -1845,8 +1845,8 @@ export default function OnChainData() {
                   <ResponsiveContainer width="100%" height="100%">
                     <RechartsBarChart data={data.totalLiquidations}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                      <XAxis dataKey="date" stroke="#64748b" fontSize={11} />
-                      <YAxis stroke="#64748b" fontSize={11} />
+                      <XAxis dataKey="date" stroke="#64748b" tick={{ fontSize: 11 }} />
+                      <YAxis stroke="#64748b" tick={{ fontSize: 11 }} />
                       <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155" }} />
                       <Legend verticalAlign="top" height={36} />
                       <Bar name="Likuidasi Longs ($M)" dataKey="Longs" fill="#10b981" radius={[2, 2, 0, 0]} />
@@ -1876,9 +1876,9 @@ export default function OnChainData() {
                   <ResponsiveContainer width="100%" height="100%">
                     <ComposedChart data={data.priceVsLiq}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                      <XAxis dataKey="date" stroke="#64748b" fontSize={11} />
-                      <YAxis yAxisId="left" stroke="#10b981" fontSize={11} domain={['auto', 'auto']} label={{ value: 'Harga BTC ($)', angle: -90, position: 'insideLeft', fill: '#10b981' }} />
-                      <YAxis yAxisId="right" orientation="right" stroke="#f59e0b" fontSize={11} label={{ value: 'Likuidasi ($M)', angle: 90, position: 'insideRight', fill: '#f59e0b' }} />
+                      <XAxis dataKey="date" stroke="#64748b" tick={{ fontSize: 11 }} />
+                      <YAxis yAxisId="left" stroke="#10b981" tick={{ fontSize: 11 }} domain={['auto', 'auto']} label={{ value: 'Harga BTC ($)', angle: -90, position: 'insideLeft', fill: '#10b981' }} />
+                      <YAxis yAxisId="right" orientation="right" stroke="#f59e0b" tick={{ fontSize: 11 }} label={{ value: 'Likuidasi ($M)', angle: 90, position: 'insideRight', fill: '#f59e0b' }} />
                       <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155" }} />
                       <Line yAxisId="left" type="monotone" dataKey="Price" stroke="#10b981" strokeWidth={2.5} dot={false} />
                       <Bar yAxisId="right" dataKey="Liquidations" fill="#f59e0b" fillOpacity={0.7} barSize={12} />
@@ -2044,8 +2044,8 @@ export default function OnChainData() {
                   <ResponsiveContainer width="100%" height="100%">
                     <RechartsBarChart data={data.volumeSpotFutures}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                      <XAxis dataKey="name" stroke="#64748b" fontSize={11} />
-                      <YAxis stroke="#64748b" fontSize={11} label={{ value: 'Miliar USD ($B)', angle: -90, position: 'insideLeft', fill: '#64748b' }} />
+                      <XAxis dataKey="name" stroke="#64748b" tick={{ fontSize: 11 }} />
+                      <YAxis stroke="#64748b" tick={{ fontSize: 11 }} label={{ value: 'Miliar USD ($B)', angle: -90, position: 'insideLeft', fill: '#64748b' }} />
                       <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155" }} />
                       <Legend verticalAlign="top" height={36} />
                       <Bar name="Volume Spot ($B)" dataKey="Spot" fill="#0ea5e9" stackId="v" />
@@ -2174,8 +2174,8 @@ export default function OnChainData() {
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                    <XAxis dataKey="date" stroke="#64748b" fontSize={11} />
-                    <YAxis stroke="#64748b" fontSize={11} />
+                    <XAxis dataKey="date" stroke="#64748b" tick={{ fontSize: 11 }} />
+                    <YAxis stroke="#64748b" tick={{ fontSize: 11 }} />
                     <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155" }} />
                     <Legend verticalAlign="top" height={36} />
                     <Area name="Kumulatif Biaya Terbayarkan ($B)" type="monotone" dataKey="CumulativeFeesPaid" stroke="#10b981" fillOpacity={1} fill="url(#colorCumulativeFees)" strokeWidth={2} />
@@ -2333,8 +2333,8 @@ export default function OnChainData() {
                 <ResponsiveContainer width="100%" height="100%">
                   <RechartsBarChart data={data.orderbookLiquidityDelta} layout="vertical">
                     <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                    <XAxis type="number" stroke="#64748b" fontSize={11} />
-                    <YAxis dataKey="level" type="category" stroke="#64748b" fontSize={10} />
+                    <XAxis type="number" stroke="#64748b" tick={{ fontSize: 11 }} />
+                    <YAxis dataKey="level" type="category" stroke="#64748b" tick={{ fontSize: 10 }} />
                     <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155" }} />
                     <Legend verticalAlign="top" height={36} />
                     <Bar name="Bids (Buy Order) $M" dataKey="BuyQty" fill="#10b981" />
@@ -2361,8 +2361,8 @@ export default function OnChainData() {
                 <ResponsiveContainer width="100%" height="100%">
                   <RechartsLineChart data={data.aggregatedLiquidityDelta}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                    <XAxis dataKey="date" stroke="#64748b" fontSize={11} />
-                    <YAxis stroke="#64748b" fontSize={11} />
+                    <XAxis dataKey="date" stroke="#64748b" tick={{ fontSize: 11 }} />
+                    <YAxis stroke="#64748b" tick={{ fontSize: 11 }} />
                     <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155" }} />
                     <Legend verticalAlign="top" height={36} />
                     <Line type="monotone" dataKey="Total Bids (±1%)" stroke="#10b981" strokeWidth={1.5} dot={false} />
@@ -2404,8 +2404,8 @@ export default function OnChainData() {
                   <ResponsiveContainer width="100%" height="100%">
                     <RechartsBarChart data={data.btcSpotFlows}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                      <XAxis dataKey="date" stroke="#64748b" fontSize={11} />
-                      <YAxis stroke="#64748b" fontSize={11} />
+                      <XAxis dataKey="date" stroke="#64748b" tick={{ fontSize: 11 }} />
+                      <YAxis stroke="#64748b" tick={{ fontSize: 11 }} />
                       <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155" }} />
                       <Legend verticalAlign="top" height={36} />
                       <Bar name="Inflow (BTC)" dataKey="Inflow" fill="#ec4899" radius={[2, 2, 0, 0]} />
@@ -2435,8 +2435,8 @@ export default function OnChainData() {
                   <ResponsiveContainer width="100%" height="100%">
                     <RechartsBarChart data={data.spotNetflowStats}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                      <XAxis dataKey="name" stroke="#64748b" fontSize={11} />
-                      <YAxis stroke="#64748b" fontSize={11} />
+                      <XAxis dataKey="name" stroke="#64748b" tick={{ fontSize: 11 }} />
+                      <YAxis stroke="#64748b" tick={{ fontSize: 11 }} />
                       <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155" }} />
                       <Legend verticalAlign="top" height={36} />
                       <Bar name="Netflow Bersih ($M)" dataKey="Netflow" radius={[2, 2, 0, 0]}>
@@ -2476,8 +2476,8 @@ export default function OnChainData() {
                   <ResponsiveContainer width="100%" height="100%">
                     <RechartsLineChart data={data.walletFlows}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                      <XAxis dataKey="date" stroke="#64748b" fontSize={11} />
-                      <YAxis stroke="#64748b" fontSize={11} />
+                      <XAxis dataKey="date" stroke="#64748b" tick={{ fontSize: 11 }} />
+                      <YAxis stroke="#64748b" tick={{ fontSize: 11 }} />
                       <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155" }} />
                       <Legend verticalAlign="top" height={36} />
                       <Line name="Netflow Wallet BTC (Koin)" type="monotone" dataKey="BTC_Flow" stroke="#f59e0b" strokeWidth={1.5} dot={false} />
@@ -2507,9 +2507,9 @@ export default function OnChainData() {
                   <ResponsiveContainer width="100%" height="100%">
                     <ComposedChart data={data.exchangeBalances}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                      <XAxis dataKey="date" stroke="#64748b" fontSize={11} />
-                      <YAxis yAxisId="left" stroke="#ef4444" fontSize={11} tickFormatter={(v) => `${v}M`} label={{ value: 'BTC Cadangan (Juta koin)', angle: -90, position: 'insideLeft', fill: '#ef4444' }} />
-                      <YAxis yAxisId="right" orientation="right" stroke="#10b981" fontSize={11} tickFormatter={(v) => `${v}B`} label={{ value: 'USDT Cadangan (Miliar $)', angle: 90, position: 'insideRight', fill: '#10b981' }} />
+                      <XAxis dataKey="date" stroke="#64748b" tick={{ fontSize: 11 }} />
+                      <YAxis yAxisId="left" stroke="#ef4444" tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}M`} label={{ value: 'BTC Cadangan (Juta koin)', angle: -90, position: 'insideLeft', fill: '#ef4444' }} />
+                      <YAxis yAxisId="right" orientation="right" stroke="#10b981" tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}B`} label={{ value: 'USDT Cadangan (Miliar $)', angle: 90, position: 'insideRight', fill: '#10b981' }} />
                       <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155" }} />
                       <Line yAxisId="left" name="Cadangan BTC Bursa" type="monotone" dataKey="BTC_Exchange_Reserve" stroke="#ef4444" strokeWidth={2} dot={false} />
                       <Line yAxisId="right" name="Cadangan USDT Bursa" type="monotone" dataKey="USDT_Exchange_Reserve" stroke="#10b981" strokeWidth={2} dot={false} />
@@ -2548,8 +2548,8 @@ export default function OnChainData() {
                         </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                      <XAxis dataKey="date" stroke="#64748b" fontSize={11} />
-                      <YAxis stroke="#64748b" fontSize={11} />
+                      <XAxis dataKey="date" stroke="#64748b" tick={{ fontSize: 11 }} />
+                      <YAxis stroke="#64748b" tick={{ fontSize: 11 }} />
                       <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155" }} />
                       <Legend verticalAlign="top" height={36} />
                       <Area name="Alamat Aktif Harian" type="monotone" dataKey="Active_Addresses" stroke="#0ea5e9" fillOpacity={1} fill="url(#colorActive)" strokeWidth={1.5} />
@@ -2579,8 +2579,8 @@ export default function OnChainData() {
                   <ResponsiveContainer width="100%" height="100%">
                     <ComposedChart data={data.minerData}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                      <XAxis dataKey="date" stroke="#64748b" fontSize={11} />
-                      <YAxis stroke="#64748b" fontSize={11} />
+                      <XAxis dataKey="date" stroke="#64748b" tick={{ fontSize: 11 }} />
+                      <YAxis stroke="#64748b" tick={{ fontSize: 11 }} />
                       <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155" }} />
                       <Legend verticalAlign="top" height={36} />
                       <Bar name="Aliran Keluar Dompet Miner ($M)" dataKey="Miner_Outflows" fill="#f43f5e" barSize={10} />
@@ -2678,8 +2678,8 @@ export default function OnChainData() {
                   <ResponsiveContainer width="100%" height="100%">
                     <RechartsLineChart data={data.stockToFlow}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                      <XAxis dataKey="date" stroke="#64748b" fontSize={11} />
-                      <YAxis stroke="#64748b" fontSize={11} domain={['auto', 'auto']} />
+                      <XAxis dataKey="date" stroke="#64748b" tick={{ fontSize: 11 }} />
+                      <YAxis stroke="#64748b" tick={{ fontSize: 11 }} domain={['auto', 'auto']} />
                       <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155" }} />
                       <Legend verticalAlign="top" height={36} />
                       <ReferenceLine x={data.stockToFlow[15]?.date} stroke="#eab308" label={{ value: 'HALVING BTC', fill: '#eab308', fontSize: 10, position: 'insideBottom' }} />
@@ -2714,8 +2714,8 @@ export default function OnChainData() {
                   <ResponsiveContainer width="100%" height="100%">
                     <RechartsLineChart data={data.mvrvZScore}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                      <XAxis dataKey="date" stroke="#64748b" fontSize={11} />
-                      <YAxis stroke="#64748b" fontSize={11} />
+                      <XAxis dataKey="date" stroke="#64748b" tick={{ fontSize: 11 }} />
+                      <YAxis stroke="#64748b" tick={{ fontSize: 11 }} />
                       <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155" }} />
                       <Legend verticalAlign="top" height={36} />
                       <ReferenceLine y={0.1} stroke="#10b981" label={{ value: 'Dasar Siklus (Green)', fill: '#10b981', fontSize: 10, position: 'insideTopLeft' }} />
@@ -2752,8 +2752,8 @@ export default function OnChainData() {
                         </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                      <XAxis dataKey="date" stroke="#64748b" fontSize={11} />
-                      <YAxis stroke="#64748b" fontSize={11} />
+                      <XAxis dataKey="date" stroke="#64748b" tick={{ fontSize: 11 }} />
+                      <YAxis stroke="#64748b" tick={{ fontSize: 11 }} />
                       <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155" }} />
                       <Legend verticalAlign="top" height={36} />
                       <ReferenceLine y={1.0} stroke="#ef4444" strokeDasharray="3 3" />
@@ -2870,8 +2870,8 @@ export default function OnChainData() {
                   <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={data.btcDominance}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                      <XAxis dataKey="date" stroke="#64748b" fontSize={11} />
-                      <YAxis stroke="#64748b" fontSize={11} tickFormatter={(v) => `${v}%`} />
+                      <XAxis dataKey="date" stroke="#64748b" tick={{ fontSize: 11 }} />
+                      <YAxis stroke="#64748b" tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
                       <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155" }} />
                       <Legend verticalAlign="top" height={36} />
                       <Area name="Bitcoin (%)" type="monotone" dataKey="Bitcoin" stackId="1" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.2} />
@@ -2903,10 +2903,10 @@ export default function OnChainData() {
                     <ResponsiveContainer width="100%" height="100%">
                       <RechartsLineChart data={data.bubbleAndNvt}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                        <XAxis dataKey="date" stroke="#64748b" fontSize={9} />
-                        <YAxis stroke="#64748b" fontSize={9} />
+                        <XAxis dataKey="date" stroke="#64748b" tick={{ fontSize: 9 }} />
+                        <YAxis stroke="#64748b" tick={{ fontSize: 9 }} />
                         <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155" }} />
-                        <Legend verticalAlign="top" height={24} fontSize={9} />
+                        <Legend verticalAlign="top" height={24} wrapperStyle={{ fontSize: 9 }} />
                         <Line name="Bubble Index" type="monotone" dataKey="BubbleIndex" stroke="#f43f5e" strokeWidth={1.5} dot={false} />
                         <Line name="NVT Ratio" type="monotone" dataKey="NVTRatio" stroke="#3b82f6" strokeWidth={1.5} dot={false} />
                       </RechartsLineChart>
@@ -2943,9 +2943,9 @@ export default function OnChainData() {
                   <ResponsiveContainer width="100%" height="100%">
                     <ComposedChart data={data.macroSupplyRate}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                      <XAxis dataKey="date" stroke="#64748b" fontSize={11} />
-                      <YAxis yAxisId="left" stroke="#10b981" fontSize={11} label={{ value: 'Harga BTC ($)', angle: -90, position: 'insideLeft', fill: '#10b981' }} />
-                      <YAxis yAxisId="right" orientation="right" stroke="#eab308" fontSize={11} label={{ value: 'Pertumbuhan M2 (%) / Fed Rate (%)', angle: 90, position: 'insideRight', fill: '#eab308' }} />
+                      <XAxis dataKey="date" stroke="#64748b" tick={{ fontSize: 11 }} />
+                      <YAxis yAxisId="left" stroke="#10b981" tick={{ fontSize: 11 }} label={{ value: 'Harga BTC ($)', angle: -90, position: 'insideLeft', fill: '#10b981' }} />
+                      <YAxis yAxisId="right" orientation="right" stroke="#eab308" tick={{ fontSize: 11 }} label={{ value: 'Pertumbuhan M2 (%) / Fed Rate (%)', angle: 90, position: 'insideRight', fill: '#eab308' }} />
                       <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155" }} />
                       <Legend verticalAlign="top" height={36} />
                       <Line yAxisId="left" name="Harga Spot BTC" type="monotone" dataKey="BTCPrice" stroke="#10b981" strokeWidth={2.5} dot={false} />
@@ -3030,8 +3030,8 @@ export default function OnChainData() {
                         </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                      <XAxis dataKey="date" stroke="#64748b" fontSize={9} />
-                      <YAxis stroke="#64748b" fontSize={9} />
+                      <XAxis dataKey="date" stroke="#64748b" tick={{ fontSize: 9 }} />
+                      <YAxis stroke="#64748b" tick={{ fontSize: 9 }} />
                       <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155" }} />
                       <ReferenceLine y={0.5} stroke="#ef4444" strokeDasharray="3 3" label={{ value: 'Euphoria', fill: '#ef4444', fontSize: 8 }} />
                       <ReferenceLine y={0.25} stroke="#3b82f6" strokeDasharray="3 3" label={{ value: 'Optimism', fill: '#3b82f6', fontSize: 8 }} />
@@ -3061,10 +3061,10 @@ export default function OnChainData() {
                   <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={data.holdersSupply}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                      <XAxis dataKey="date" stroke="#64748b" fontSize={9} />
-                      <YAxis stroke="#64748b" fontSize={9} />
+                      <XAxis dataKey="date" stroke="#64748b" tick={{ fontSize: 9 }} />
+                      <YAxis stroke="#64748b" tick={{ fontSize: 9 }} />
                       <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155" }} />
-                      <Legend verticalAlign="top" height={24} fontSize={9} />
+                      <Legend verticalAlign="top" height={24} wrapperStyle={{ fontSize: 9 }} />
                       <Area name="Long-Term Holder (LTH)" type="monotone" dataKey="Long-Term Holders" stroke="#10b981" fill="#10b981" fillOpacity={0.15} />
                       <Area name="Short-Term Holder (STH)" type="monotone" dataKey="Short-Term Holders" stroke="#ef4444" fill="#ef4444" fillOpacity={0.1} />
                     </AreaChart>
@@ -3098,8 +3098,8 @@ export default function OnChainData() {
                         </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                      <XAxis dataKey="date" stroke="#64748b" fontSize={9} />
-                      <YAxis stroke="#64748b" fontSize={9} tickFormatter={(v) => `${v}%`} />
+                      <XAxis dataKey="date" stroke="#64748b" tick={{ fontSize: 9 }} />
+                      <YAxis stroke="#64748b" tick={{ fontSize: 9 }} tickFormatter={(v) => `${v}%`} />
                       <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155" }} />
                       <Area name="Drawdown (%)" type="monotone" dataKey="Drawdown dari ATH (%)" stroke="#f43f5e" strokeWidth={1.5} fillOpacity={1} fill="url(#colorDrawdown)" />
                     </AreaChart>

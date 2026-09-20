@@ -567,14 +567,14 @@ export default function Projections({ assets }: ProjectionsProps) {
               <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                 <LineChart data={projectionData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                  <XAxis dataKey="year" stroke="#475569" fontSize={11} />
+                  <XAxis dataKey="year" stroke="#475569" tick={{ fontSize: 11 }} />
                   <YAxis 
                     stroke="#475569" 
-                    fontSize={10} 
+                    tick={{ fontSize: 10 }}
                     tickFormatter={(v) => finalSummary.isCrypto ? `$${v.toLocaleString()}` : `Rp ${(v / 1e3).toFixed(0)}rb`} 
                   />
                   <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155" }} />
-                  <Legend fontSize={10} wrapperStyle={{ color: '#ffffff' }} />
+                  <Legend wrapperStyle={{ fontSize: 10, color: '#ffffff' }} />
                   <Line type="monotone" dataKey="Pessimistic Case" stroke="#ef4444" strokeWidth={1.5} dot={{ r: 3 }} />
                   <Line type="monotone" dataKey="Real Base Case (Adj)" stroke="#f59e0b" strokeWidth={2.0} strokeDasharray="3 3" dot={{ r: 3.5 }} />
                   <Line type="monotone" dataKey="Base Case" stroke="#2563eb" strokeWidth={2.5} dot={{ r: 4 }} />

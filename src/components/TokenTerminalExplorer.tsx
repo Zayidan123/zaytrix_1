@@ -1837,8 +1837,8 @@ export default function TokenTerminalExplorer() {
                         </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                      <XAxis dataKey="week" stroke="#475569" fontSize={9} tickLine={false} />
-                      <YAxis stroke="#475569" fontSize={9} tickLine={false} tickFormatter={(v) => formatMetricValue(v, activeMetric.type, true)} />
+                      <XAxis dataKey="week" stroke="#475569" tick={{ fontSize: 9 }} tickLine={false} />
+                      <YAxis stroke="#475569" tick={{ fontSize: 9 }} tickLine={false} tickFormatter={(v) => formatMetricValue(v, activeMetric.type, true)} />
                       <Tooltip 
                         contentStyle={{ backgroundColor: "#0b0f19", borderColor: "#1e293b", borderRadius: 8 }}
                         labelClassName="text-slate-500 font-mono text-[10px]"
@@ -1849,8 +1849,8 @@ export default function TokenTerminalExplorer() {
                   ) : chartType === "line" ? (
                     <LineChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                      <XAxis dataKey="week" stroke="#475569" fontSize={9} tickLine={false} />
-                      <YAxis stroke="#475569" fontSize={9} tickLine={false} tickFormatter={(v) => formatMetricValue(v, activeMetric.type, true)} />
+                      <XAxis dataKey="week" stroke="#475569" tick={{ fontSize: 9 }} tickLine={false} />
+                      <YAxis stroke="#475569" tick={{ fontSize: 9 }} tickLine={false} tickFormatter={(v) => formatMetricValue(v, activeMetric.type, true)} />
                       <Tooltip 
                         contentStyle={{ backgroundColor: "#0b0f19", borderColor: "#1e293b", borderRadius: 8 }}
                         labelClassName="text-slate-500 font-mono text-[10px]"
@@ -1861,8 +1861,8 @@ export default function TokenTerminalExplorer() {
                   ) : (
                     <RechartsBarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                      <XAxis dataKey="week" stroke="#475569" fontSize={9} tickLine={false} />
-                      <YAxis stroke="#475569" fontSize={9} tickLine={false} tickFormatter={(v) => formatMetricValue(v, activeMetric.type, true)} />
+                      <XAxis dataKey="week" stroke="#475569" tick={{ fontSize: 9 }} tickLine={false} />
+                      <YAxis stroke="#475569" tick={{ fontSize: 9 }} tickLine={false} tickFormatter={(v) => formatMetricValue(v, activeMetric.type, true)} />
                       <Tooltip 
                         contentStyle={{ backgroundColor: "#0b0f19", borderColor: "#1e293b", borderRadius: 8 }}
                         labelClassName="text-slate-500 font-mono text-[10px]"

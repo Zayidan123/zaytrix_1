@@ -1223,14 +1223,14 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
                 <XAxis 
                   dataKey="date" 
                   stroke="#475569" 
-                  fontSize={11} 
+                  tick={{ fontSize: 11 }} 
                   tickLine={false} 
                   axisLine={false}
                   dy={10}
                 />
                 <YAxis 
                   stroke="#475569" 
-                  fontSize={10} 
+                  tick={{ fontSize: 10 }} 
                   tickLine={false} 
                   axisLine={false}
                   tickFormatter={(v) => `Rp ${(v / 1e6).toFixed(1)}jt`} 
@@ -1805,13 +1805,13 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
                 <XAxis 
                   dataKey="label" 
                   stroke="#475569" 
-                  fontSize={9} 
+                  tick={{ fontSize: 9 }} 
                   tickLine={false} 
                   axisLine={false}
                 />
                 <YAxis 
                   stroke="#475569" 
-                  fontSize={9} 
+                  tick={{ fontSize: 9 }} 
                   tickLine={false} 
                   axisLine={false}
                   tickFormatter={(val) => `${val}M`}
@@ -1880,13 +1880,13 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
                 <XAxis 
                   dataKey="label" 
                   stroke="#475569" 
-                  fontSize={9} 
+                  tick={{ fontSize: 9 }} 
                   tickLine={false} 
                   axisLine={false}
                 />
                 <YAxis 
                   stroke="#475569" 
-                  fontSize={9} 
+                  tick={{ fontSize: 9 }} 
                   tickLine={false} 
                   axisLine={false}
                   domain={['dataMin - 10', 'dataMax + 10']}

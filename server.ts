@@ -457,6 +457,24 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
+    // SEC-BACKEND: block bundled server source + sourcemap from public access.
+    // Uses middleware (not route matching) because Express route paths
+    // do NOT match URL-encoded variants like /server%2Emjs.
+    // Middleware runs BEFORE express.static so blocked requests get
+    // 404 before static/file serving is attempted.
+    app.use((req, res, next) => {
+      try {
+        // Decode URL to catch encoded bypasses like /server%2emjs or /server.mjs%2emap
+        // Express req.path is NOT decoded, so we decode req.url manually.
+        const decodedPath = decodeURIComponent(req.url || "").split("?")[0];
+        if (decodedPath === "/server.mjs" || decodedPath === "/server.mjs.map") {
+          return res.status(404).json({ success: false, error: "Endpoint tidak ditemukan." });
+        }
+      } catch {
+        // Malformed encoding — let Express handle the error path safely
+      }
+      next();
+    });
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));

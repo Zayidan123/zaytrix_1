@@ -418,7 +418,7 @@ async function getCsrfTokenModule(): Promise<CsrfTokenModule> {
   }
 }
 
-export const csrfMiddleware: RequestHandler = async (req: Request, res: Response, next: NextFunction) => {
+export const csrfMiddleware: RequestHandler = async (req, res, next) => {
   // (a) Seed the double-submit cookie on ANY response that lacks it. The SPA
   //     reads document.cookie and echoes the value in the X-CSRF-Token header.
   //     httpOnly MUST stay false — that's the whole point of double-submit.
@@ -457,6 +457,14 @@ export const csrfMiddleware: RequestHandler = async (req: Request, res: Response
   }
   // Exempt pre-auth endpoints + GET redirect flows.
   if (isCsrfExempt(url)) {
+    return next();
+  }
+  // Skip CSRF enforcement when there is no session cookie: the request
+  // will fail closed at requireAuth with 401 instead of leaking CSRF
+  // details to unauthenticated callers. CSRF protection is a session
+  // concern — without a valid session there is nothing to ride.
+  const sessionCookie = (req.cookies as Record<string, string> | undefined)?.zaytrix_session;
+  if (!sessionCookie) {
     return next();
   }
   // QA3-1 (stale-cookie deadlock): previously, a *present-but-invalid*

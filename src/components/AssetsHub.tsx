@@ -741,8 +741,8 @@ export default function AssetsHub({ assets }: AssetsHubProps) {
                     <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                       <BarChart data={comparisonChartData}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                        <XAxis dataKey="name" stroke="#64748b" fontSize={9} />
-                        <YAxis stroke="#64748b" fontSize={9} />
+                        <XAxis dataKey="name" stroke="#64748b" tick={{ fontSize: 9 }} />
+                        <YAxis stroke="#64748b" tick={{ fontSize: 9 }} />
                         <ChartTooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155" }} />
                         <ChartLegend wrapperStyle={{ fontSize: '9px' }} />
                         <Bar dataKey={assetA.symbol} fill="#2563eb" radius={[4, 4, 0, 0]} />

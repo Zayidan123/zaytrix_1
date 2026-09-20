@@ -600,14 +600,14 @@ export default function Backtester({ assets }: BacktesterProps) {
                   <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                     <LineChart data={backtestResult.equityCurve}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                      <XAxis dataKey="date" stroke="#475569" fontSize={10} />
+                      <XAxis dataKey="date" stroke="#475569" tick={{ fontSize: 10 }} />
                       <YAxis 
                         stroke="#475569" 
-                        fontSize={9} 
+                        tick={{ fontSize: 9 }}
                         tickFormatter={(v) => isCrypto ? `$${v.toLocaleString()}` : `Rp ${(v / 1e6).toFixed(1)}Jt`} 
                       />
                       <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155" }} />
-                      <Legend fontSize={10} />
+                      <Legend wrapperStyle={{ fontSize: 10 }} />
                       <Line type="monotone" name="Nilai Kapital" dataKey="balance" stroke="#2563eb" strokeWidth={2.5} dot={false} />
                     </LineChart>
                   </ResponsiveContainer>

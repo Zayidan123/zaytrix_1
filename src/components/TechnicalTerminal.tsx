@@ -679,13 +679,13 @@ export default function TechnicalTerminal({
                   <XAxis 
                     dataKey="date" 
                     stroke="#475569" 
-                    fontSize={9} 
+                    tick={{ fontSize: 9 }} 
                     tickLine={false} 
                   />
                   <YAxis 
                     domain={['auto', 'auto']} 
                     stroke="#475569" 
-                    fontSize={9} 
+                    tick={{ fontSize: 9 }} 
                     tickLine={false} 
                     orientation="right"
                     tickFormatter={(v) => isCrypto ? `$${v.toLocaleString()}` : `${v.toLocaleString()}`}
