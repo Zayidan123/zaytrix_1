@@ -1,4 +1,5 @@
 import { createLogger } from "./logger";
+import { isSecureCookieRequired } from "./authConfig";
 const log = createLogger("security");
 
 // ZAYTRIX backend security middleware (SEC-BACKEND + SEC2-AUTH).
@@ -363,6 +364,7 @@ const CSRF_EXEMPT_PATHS = new Set<string>([
   "/api/auth/google", // GET redirect flow
   "/api/auth/google/callback", // GET redirect flow
   "/api/auth/google/2fa", // pre-session 2FA completion (reads short-lived cookie)
+  "/api/auth/logout", // logout — user has session, CSRF not needed
 ]);
 const CSRF_EXEMPT_PREFIXES = [
   "/api/auth/webauthn/", // passkey register/login ceremonies (pre-session login)
@@ -430,7 +432,7 @@ export const csrfMiddleware: RequestHandler = async (req, res, next) => {
       res.cookie(CSRF_COOKIE_NAME, token, {
         httpOnly: false,
         sameSite: "lax",
-        secure: process.env.NODE_ENV === "production",
+        secure: isSecureCookieRequired(),
         path: "/",
         maxAge: CSRF_COOKIE_MAX_AGE_MS,
       });
@@ -451,7 +453,7 @@ export const csrfMiddleware: RequestHandler = async (req, res, next) => {
     return next();
   }
   // Only /api/* paths.
-  const url = req.path || req.url || "";
+  const url = req.originalUrl || req.baseUrl + req.path || req.url || "";
   if (!url.startsWith("/api/")) {
     return next();
   }
@@ -483,15 +485,16 @@ export const csrfMiddleware: RequestHandler = async (req, res, next) => {
       res.cookie(CSRF_COOKIE_NAME, mod.makeCsrfToken(), {
         httpOnly: false,
         sameSite: "lax",
-        secure: process.env.NODE_ENV === "production",
+        secure: isSecureCookieRequired(),
         path: "/",
         maxAge: CSRF_COOKIE_MAX_AGE_MS,
       });
     } catch {
       // Issuer unavailable (missing secrets) — fail closed, no reseed.
     }
-    res.status(403).json({ success: false, code, error: "CSRF token tidak valid" });
+    res.status(401).json({ success: false, code, error: "CSRF token tidak valid" });
   };
+
   const cookieVal = (req.cookies as Record<string, string> | undefined)?.[CSRF_COOKIE_NAME];
   const headerRaw = req.headers[CSRF_HEADER_NAME];
   const headerVal = typeof headerRaw === "string" ? headerRaw : Array.isArray(headerRaw) ? headerRaw[0] : "";

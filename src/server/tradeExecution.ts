@@ -13,6 +13,7 @@ import { prisma } from "./db";
 import { requireAuth } from "./auth";
 import { logAudit } from "./audit";
 import { decrypt } from "./apiKeys";
+import { fetchWithTimeout } from "./httpUtils";
 
 export const tradeExecutionRouter = Router();
 tradeExecutionRouter.use(requireAuth);
@@ -96,8 +97,10 @@ interface BookMid {
 
 async function getBinanceBookTickerMid(binancePair: string): Promise<BookMid | null> {
   try {
-    const res = await fetch(
-      `https://api.binance.com/api/v3/ticker/bookTicker?symbol=${encodeURIComponent(binancePair)}`
+    const res = await fetchWithTimeout(
+      `https://api.binance.com/api/v3/ticker/bookTicker?symbol=${encodeURIComponent(binancePair)}`,
+      {},
+      4000
     );
     if (!res.ok) return null;
     const data = (await res.json()) as any;
@@ -152,10 +155,10 @@ async function placeBinanceOrder(
     const signature = crypto.createHmac("sha256", apiSecret).update(params.toString()).digest("hex");
     const url = `https://api.binance.com/api/v3/order?${params.toString()}&signature=${signature}`;
 
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       method: "POST",
       headers: { "X-MBX-APIKEY": apiKey, "Content-Type": "application/json" },
-    });
+    }, 10000);
     const data = await res.json() as any;
 
     if (!res.ok) {
@@ -547,9 +550,11 @@ tradeExecutionRouter.post("/connect", async (req: Request, res: Response) => {
           if (ex === "binance" && !k.apiKey.includes("MOCK")) {
             const payloadString = `recvWindow=5000&timestamp=${timestamp}`;
             const sig = crypto.createHmac("sha256", k.apiSecret).update(payloadString).digest("hex");
-            const authRes = await fetch(`https://api.binance.com/api/v3/account?${payloadString}&signature=${sig}`, {
-              headers: { "X-MBX-APIKEY": k.apiKey },
-            });
+            const authRes = await fetchWithTimeout(
+              `https://api.binance.com/api/v3/account?${payloadString}&signature=${sig}`,
+              { headers: { "X-MBX-APIKEY": k.apiKey } },
+              5000
+            );
             const authData = await authRes.json() as any;
             if (authRes.ok && authData?.balances) {
               // Sum USDT balance

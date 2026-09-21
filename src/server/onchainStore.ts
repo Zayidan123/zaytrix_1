@@ -188,6 +188,7 @@ app.get("/api/onchain/metrics", async (req, res) => {
   }
 
   const result: any = { success: true, lastUpdated: new Date().toISOString() };
+  let binanceSectionsFetched = 0;
 
   // --- 1. Binance Futures Funding Rate History (30 entries) for BTC, ETH, SOL ---
   try {
@@ -196,6 +197,7 @@ app.get("/api/onchain/metrics", async (req, res) => {
       fetchWithTimeout("https://fapi.binance.com/fapi/v1/fundingRate?symbol=ETHUSDT&limit=30", {}, 5000).then(r => r.json()).catch(() => []),
       fetchWithTimeout("https://fapi.binance.com/fapi/v1/fundingRate?symbol=SOLUSDT&limit=30", {}, 5000).then(r => r.json()).catch(() => []),
     ]);
+    binanceSectionsFetched++;
 
     const fundingRateMap = new Map<string, any[]>();
     for (const item of btcFr) { const d = new Date(item.fundingTime).toLocaleDateString("id-ID", {month:"short",day:"numeric"}); const arr = fundingRateMap.get(d)||[]; arr.push({exchange:"Binance",rate:parseFloat(item.fundingRate)}); fundingRateMap.set(d,arr); }
@@ -236,6 +238,7 @@ app.get("/api/onchain/metrics", async (req, res) => {
         };
       }
     });
+    binanceSectionsFetched++;
   } catch(e: any) { log.error("[Metrics] OI fetch failed:", e.message); }
 
   // --- 3. CoinGecko Global Data (dominance, market cap, volume) ---
@@ -306,8 +309,30 @@ app.get("/api/onchain/metrics", async (req, res) => {
         volume: formatCompactVolume(parseFloat(t.quoteVolume)),
         volumeUsd: parseFloat(t.quoteVolume),
       }));
+      binanceSectionsFetched++;
     }
   } catch(e: any) { log.error("[Metrics] Binance gainers/losers failed:", e.message); }
+
+  // DATA-8: If ALL Binance sections failed, the endpoint is degraded —
+  // serve success:false so the frontend shows an honest error instead
+  // of implying full data coverage. CoinGecko/fear-greed data may
+  // still be present for partial display.
+  if (binanceSectionsFetched === 0) {
+    return res.json({
+      success: false,
+      isStale: true,
+      lastUpdated: new Date().toISOString(),
+      error: "Binance Futures API tidak dapat dijangkau. Data derivatif (funding rate, open interest, gainers/losers) tidak tersedia. CoinGecko data mungkin masih tersedia.",
+      fundingRates: null,
+      openInterest: null,
+      gainers: null,
+      losers: null,
+      market: result.market || null,
+      btcPriceHistory: result.btcPriceHistory || null,
+      btcVolumeHistory: result.btcVolumeHistory || null,
+      fearGreed: result.fearGreed || null,
+    });
+  }
 
   metricsCache = result;
   metricsCacheTime = now;

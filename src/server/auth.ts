@@ -1,4 +1,5 @@
 import { createLogger } from "./logger";
+import { firebaseAuthRouter } from "./firebaseAuth";
 const log = createLogger("auth");
 
 // ZAYTRIX authentication (SEC-BACKEND + SEC2-AUTH).
@@ -119,18 +120,31 @@ export function getSessionSecret(): string {
 // ---------------------------------------------------------------------------
 // Cookie helpers
 // ---------------------------------------------------------------------------
+export function isSecureCookieRequired(): boolean {
+  const appUrl = process.env.APP_URL || "";
+  // Only require the Secure cookie flag when the app is actually served over HTTPS.
+  // During local/HTTP deployment (including production builds behind a non-TLS
+  // reverse proxy), forcing Secure would silently drop the session cookie in the browser.
+  return process.env.NODE_ENV === "production" && appUrl.startsWith("https://");
+}
+
 export function setSessionCookie(res: Response, token: string): void {
   res.cookie(COOKIE_NAME, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: isSecureCookieRequired(),
     path: "/",
     maxAge: TOKEN_TTL_MS,
   });
 }
 
 function clearSessionCookie(res: Response): void {
-  res.clearCookie(COOKIE_NAME, { path: "/" });
+  res.clearCookie(COOKIE_NAME, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: isSecureCookieRequired(),
+    path: "/",
+  });
 }
 
 // Exported so webauthn.ts / oauth.ts issue tokens with IDENTICAL claims (SEC-13).
@@ -337,12 +351,13 @@ async function validateSession(token: string, userId: string): Promise<boolean> 
 // ---------------------------------------------------------------------------
 // Middleware: optionalAuth — sets req.user if present, else null. Never 401s.
 // ---------------------------------------------------------------------------
-export const optionalAuth: RequestHandler = (req: Request, _res: Response, next: NextFunction) => {
+export const optionalAuth: RequestHandler = async (req: Request, _res: Response, next: NextFunction) => {
   const token = req.cookies?.[COOKIE_NAME];
   if (token) {
     const payload = verifyToken(token);
     if (payload && !payload.twoFactorPending) {
-      req.user = payload;
+      const valid = await validateSession(token, payload.sub).catch(() => false);
+      req.user = valid ? payload : null;
     } else {
       req.user = null;
     }
@@ -442,6 +457,9 @@ function publicUser(u: {
 // Routes
 // ---------------------------------------------------------------------------
 export const authRouter = Router();
+
+// Firebase Auth integration (SEC3-AUTH)
+authRouter.use("/firebase", firebaseAuthRouter);
 
 // POST /api/auth/register
 authRouter.post("/register", async (req: Request, res: Response, next: NextFunction) => {
@@ -929,14 +947,12 @@ authRouter.post("/2fa/backup-login", async (req: Request, res: Response, next: N
 });
 
 // POST /api/auth/logout
-authRouter.post("/logout", (req: Request, res: Response) => {
+authRouter.post("/logout", optionalAuth, async (req: Request, res: Response) => {
   const userId = req.user?.sub || null;
-  // SEC2-AUTH: revoke the server-side Session row (best-effort). We don't have
-  // req.user here because logout doesn't run requireAuth — but we can still
-  // hash the cookie + delete by tokenHash.
+  // SEC2-AUTH: revoke the server-side Session row before responding.
   const token = req.cookies?.[COOKIE_NAME];
   if (token) {
-    revokeSessionByToken(token).catch(() => {});
+    await revokeSessionByToken(token);
   }
   logAudit(userId, "LOGOUT", req, true).catch(() => {});
   clearSessionCookie(res);
@@ -1453,7 +1469,7 @@ authRouter.get("/csrf-token", (req: Request, res: Response) => {
   res.cookie("zaytrix_csrf", token, {
     httpOnly: false,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: isSecureCookieRequired(),
     path: "/",
     maxAge: 24 * 60 * 60 * 1000, // 24h
   });

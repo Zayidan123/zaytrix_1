@@ -106,8 +106,8 @@ export default function AssetsHub({ assets }: AssetsHubProps) {
       },
       {
         name: "Dev/Yield/Staking (%)",
-        [assetA.symbol]: assetA.dividendYield !== undefined ? assetA.dividendYield : (assetA.category === 'crypto' ? 4.0 : 0.0),
-        [assetB.symbol]: assetB.dividendYield !== undefined ? assetB.dividendYield : (assetB.category === 'crypto' ? 4.0 : 0.0),
+        [assetA.symbol]: assetA.dividendYield !== undefined ? assetA.dividendYield : null,
+        [assetB.symbol]: assetB.dividendYield !== undefined ? assetB.dividendYield : null,
       }
     ];
   }, [assetA, assetB]);

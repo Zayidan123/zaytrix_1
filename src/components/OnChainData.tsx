@@ -119,8 +119,8 @@ export default function OnChainData() {
   // / 164.50 / 600 / 2 …). Now 0 = "not fetched yet"; the header renders "—"
   // until the first /api/onchain/data or /api/onchain/metrics response arrives.
   const [livePriceBtc, setLivePriceBtc] = useState<number>(0);
-  const [livePriceEth, setLivePriceEth] = useState<number>(0);
-  const [fearGreedVal, setFearGreedVal] = useState<number>(0);
+  const [livePriceEth, setLivePriceEth] = useState<number | null>(null);
+  const [fearGreedVal, setFearGreedVal] = useState<number | null>(null);
   const [fearGreedLoaded, setFearGreedLoaded] = useState<boolean>(false);
   const [liveLiquidations, setLiveLiquidations] = useState<LiquidationLiveEvent[]>([]);
   const [selectedLiquidation, setSelectedLiquidation] = useState<LiquidationLiveEvent | null>(null);
@@ -524,11 +524,19 @@ export default function OnChainData() {
   // using the latest live spot prices. BTC/ETH/SOL OI values are USD notional in $M (matches the mock
   // shape so the threshold slider & axis labels continue to work).
   const liveOiMerged = useMemo(() => {
-    if (!liveOiRaw) return [];
-    const btcPrice = livePriceBtc || 60000;
-    const ethPrice = livePriceEth || 1600;
-    const solPrice = livePriceSol || 80;
-    return liveOiRaw.btc.map((b: any, i: number) => {
+    if (!liveOiRaw) return { data: [], usesFallbackPrice: false, fallbackReason: "Data OI belum tersedia." };
+    const btcPrice = livePriceBtc > 0 ? livePriceBtc : null;
+    const ethPrice = livePriceEth !== null && livePriceEth > 0 ? livePriceEth : null;
+    const solPrice = livePriceSol > 0 ? livePriceSol : null;
+    const usesFallbackPrice = btcPrice === null || ethPrice === null || solPrice === null;
+    const fallbackReason = usesFallbackPrice
+      ? "Perhitungan OI menggunakan estimasi harga — data harga live belum tersedia."
+      : null;
+    if (usesFallbackPrice) {
+      // Jangan sajikan OI USD sebagai live ketika harga referensi belum tersedia.
+      return { data: [], usesFallbackPrice: true, fallbackReason };
+    }
+    const data = liveOiRaw.btc.map((b: any, i: number) => {
       const eth = liveOiRaw.eth[i] || { openInterest: 0 };
       const sol = liveOiRaw.sol[i] || { openInterest: 0 };
       const btcM = Math.round((b.openInterest * btcPrice) / 1e6);
@@ -542,6 +550,7 @@ export default function OnChainData() {
         Total: btcM + ethM + solM
       };
     });
+    return { data, usesFallbackPrice };
   }, [liveOiRaw, livePriceBtc, livePriceEth, livePriceSol]);
 
   // Merged chart data (DATA-7): each dataset renders ONLY when its real live
@@ -555,7 +564,7 @@ export default function OnChainData() {
     // Live 30-day funding rates (Binance/ETH/SOL) from /api/onchain/metrics
     if (liveMetrics?.fundingRates) merged.fundingRates = liveMetrics.fundingRates;
     // Live 30-day OI history (BTC/ETH/SOL) merged + USD-notionalized
-    if (liveOiMerged.length > 0) merged.oiData = liveOiMerged;
+    if (liveOiMerged.data.length > 0) merged.oiData = liveOiMerged.data;
     // Live 30-day dominance history (BTC/ETH/Altcoins)
     if (liveDominanceHistory.length > 0) merged.btcDominance = liveDominanceHistory;
     // Live gainers/losers (top 5 each) from /api/onchain/metrics
@@ -760,7 +769,7 @@ export default function OnChainData() {
       });
     }
     return merged;
-  }, [liveMetrics, liveOiMerged, liveDominanceHistory, liveCorrelations, liveOrderbook,
+  }, [liveMetrics, liveOiMerged.data, liveDominanceHistory, liveCorrelations, liveOrderbook,
       livePriceBtc, livePriceEth, livePriceSol, livePriceBnb, livePriceXrp,
       liveS2f, liveMvrv, liveDrawdown, liveNvt, liveMinerData, liveActiveAddresses,
       liveExchangeNetflow, liveEtfFlows, liveCmeOi]);
@@ -1218,7 +1227,8 @@ export default function OnChainData() {
   ];
 
   // Helper formatting values
-  const formatUsd = (val: number, isCompact = false) => {
+  const formatUsd = (val: number | null | undefined, isCompact = false) => {
+    if (val === null || val === undefined || !Number.isFinite(val)) return "N/A";
     if (isCompact) {
       if (val >= 1e9) return `$${(val / 1e9).toFixed(2)}B`;
       if (val >= 1e6) return `$${(val / 1e6).toFixed(2)}M`;
@@ -1363,7 +1373,7 @@ export default function OnChainData() {
             <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-cyan-500/50 to-transparent" />
             <span className="text-slate-500 font-medium mr-1.5 block lg:inline text-[10px] uppercase tracking-wider">ETH Spot (Live)</span>
             <span className="font-mono font-bold text-white text-base text-cyan-400">
-              {formatUsd(livePriceEth)}
+              {livePriceEth !== null ? formatUsd(livePriceEth) : "N/A"}
             </span>
           </motion.div>
 
@@ -1371,11 +1381,15 @@ export default function OnChainData() {
             <div>
               <span className="text-slate-500 font-medium block text-[10px] uppercase tracking-wider">Fear & Greed Index</span>
               <span className="font-mono font-extrabold text-white text-base">
-                {fearGreedVal}
+                {fearGreedLoaded && fearGreedVal !== null ? fearGreedVal : "—"}
               </span>
             </div>
-            <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${getFearGreedLabel(fearGreedVal).color}`}>
-              {getFearGreedLabel(fearGreedVal).text}
+            <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+              fearGreedLoaded && fearGreedVal !== null
+                ? getFearGreedLabel(fearGreedVal).color
+                : "text-slate-500 border-slate-700 bg-slate-800/50"
+            }`}>
+              {fearGreedLoaded && fearGreedVal !== null ? getFearGreedLabel(fearGreedVal).text : "N/A"}
             </span>
           </div>
         </div>
@@ -1470,6 +1484,9 @@ export default function OnChainData() {
                     <h3 className="text-base font-bold text-white flex items-center gap-2">
                       <Activity className={`w-4 h-4 ${btcOiExceeded ? "text-rose-500 animate-pulse" : "text-emerald-400"}`} />
                       Open Interest (OI) Teragregasi (30 Hari Terakhir)
+                      {liveOiMerged.usesFallbackPrice && (
+                        <span className="text-[8px] font-mono font-bold bg-amber-500/15 text-amber-400 border border-amber-500/25 px-1 py-0.5 rounded">ESTIMASI</span>
+                      )}
                     </h3>
                     <p className="text-xs text-slate-400 mt-1">
                       Jumlah total kontrak derivatif aktif (Futures & Options) yang belum diselesaikan across Binance, Bybit, dan OKX.

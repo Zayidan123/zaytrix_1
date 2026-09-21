@@ -107,7 +107,11 @@ export async function fetchBinanceSymbolDerivatives(symbol: string) {
   let longShortRatio: number | null = null;
 
   try {
-    const res = await fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${symbol}`);
+    const res = await fetchWithTimeout(
+      `https://fapi.binance.com/fapi/v1/openInterest?symbol=${encodeURIComponent(symbol)}`,
+      {},
+      4000
+    );
     if (res.ok) {
       const data = await res.json() as any;
       const oi = parseFloat(data?.openInterest);
@@ -118,7 +122,11 @@ export async function fetchBinanceSymbolDerivatives(symbol: string) {
   }
 
   try {
-    const res = await fetch(`https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${symbol}`);
+    const res = await fetchWithTimeout(
+      `https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${encodeURIComponent(symbol)}`,
+      {},
+      4000
+    );
     if (res.ok) {
       const data = await res.json() as any;
       const fr = parseFloat(data?.lastFundingRate);
@@ -129,7 +137,11 @@ export async function fetchBinanceSymbolDerivatives(symbol: string) {
   }
 
   try {
-    const res = await fetch(`https://fapi.binance.com/futures/data/topLongShortAccountRatio?symbol=${symbol}&period=5m`);
+    const res = await fetchWithTimeout(
+      `https://fapi.binance.com/futures/data/topLongShortAccountRatio?symbol=${encodeURIComponent(symbol)}&period=5m`,
+      {},
+      4000
+    );
     if (res.ok) {
       const data = await res.json() as any;
       if (Array.isArray(data) && data.length > 0) {

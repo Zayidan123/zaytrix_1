@@ -22,6 +22,7 @@ import {
   mapThinkingLevel,
 } from "./geminiHelpers";
 import { createLogger } from "./logger";
+import { fetchWithTimeout } from "./httpUtils";
 
 const log = createLogger("automatedAnalysis");
 
@@ -75,7 +76,11 @@ async function runAutomatedGeminiAnalysis() {
     let longShortRatio: number | null = null;
 
     try {
-      const oiRes = await fetch("https://fapi.binance.com/fapi/v1/openInterest?symbol=BTCUSDT");
+      const oiRes = await fetchWithTimeout(
+        `https://fapi.binance.com/fapi/v1/openInterest?symbol=BTCUSDT`,
+        {},
+        4000
+      );
       if (oiRes.ok) {
         const oiData = await oiRes.json() as any;
         const oi = parseFloat(oiData?.openInterest);
@@ -86,7 +91,11 @@ async function runAutomatedGeminiAnalysis() {
     }
 
     try {
-      const premRes = await fetch("https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT");
+      const premRes = await fetchWithTimeout(
+        `https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT`,
+        {},
+        4000
+      );
       if (premRes.ok) {
         const premData = await premRes.json() as any;
         const fr = parseFloat(premData?.lastFundingRate);
@@ -97,7 +106,11 @@ async function runAutomatedGeminiAnalysis() {
     }
 
     try {
-      const lsRes = await fetch("https://fapi.binance.com/futures/data/topLongShortAccountRatio?symbol=BTCUSDT&period=5m");
+      const lsRes = await fetchWithTimeout(
+        `https://fapi.binance.com/futures/data/topLongShortAccountRatio?symbol=BTCUSDT&period=5m`,
+        {},
+        4000
+      );
       if (lsRes.ok) {
         const lsData = await lsRes.json() as any;
         if (Array.isArray(lsData) && lsData.length > 0) {

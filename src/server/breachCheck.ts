@@ -30,6 +30,7 @@ export async function checkPasswordBreach(password: string): Promise<BreachCheck
 
     const res = await fetch(`https://api.pwnedpasswords.com/range/${prefix}`, {
       headers: { "User-Agent": "ZAYTRIX-Security-Check" },
+      signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) {
       // HIBP returned a non-200 (rate limit, 5xx, etc.) — we did not actually

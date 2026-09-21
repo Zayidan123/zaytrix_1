@@ -10,6 +10,7 @@ import { z } from "zod";
 import { prisma } from "./db";
 import { requireAuth } from "./auth";
 import { logAudit } from "./audit";
+import { fetchWithTimeout } from "./httpUtils";
 
 export const portfolioRouter = Router();
 portfolioRouter.use(requireAuth);
@@ -625,7 +626,7 @@ async function fetchKlines(symbol: string, days: number): Promise<KlineRow[]> {
     const interval = "1d";
     const limit = Math.min(days, 365);
     const url = `https://api.binance.com/api/v3/klines?symbol=${binanceSymbol}&interval=${interval}&limit=${limit}`;
-    const res = await fetch(url);
+    const res = await fetchWithTimeout(url, {}, 5000);
     if (!res.ok) return [];
     const raw = (await res.json()) as any[];
     if (!Array.isArray(raw)) return [];
@@ -1026,8 +1027,10 @@ portfolioRouter.get("/dca", async (req: Request, res: Response) => {
     // Fetch daily klines from Binance (limit = days between start and now, capped at 1000)
     const days = Math.min(Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 10, 1000);
     const binanceSymbol = symbol.endsWith("USDT") ? symbol : symbol + "USDT";
-    const klinesRes = await fetch(
-      `https://api.binance.com/api/v3/klines?symbol=${binanceSymbol}&interval=1d&limit=${days}&startTime=${start.getTime()}`
+    const klinesRes = await fetchWithTimeout(
+      `https://api.binance.com/api/v3/klines?symbol=${binanceSymbol}&interval=1d&limit=${days}&startTime=${start.getTime()}`,
+      {},
+      8000
     );
     if (!klinesRes.ok) {
       return res.status(502).json({ success: false, error: `Gagal mengambil data klines untuk ${symbol}.` });
@@ -1360,7 +1363,11 @@ async function fetchAssetVolatility(symbol: string, category: string): Promise<{
     const binanceSymbol = symbol.toUpperCase().endsWith("USDT")
       ? symbol.toUpperCase()
       : symbol.toUpperCase() + "USDT";
-    const res = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${binanceSymbol}`);
+    const res = await fetchWithTimeout(
+      `https://api.binance.com/api/v3/ticker/24hr?symbol=${binanceSymbol}`,
+      {},
+      4000
+    );
     if (!res.ok) return { price: 0, change24hPct: 0, dailyVol: 0.04 };
     const data = (await res.json()) as any;
     const price = parseFloat(data.lastPrice);
@@ -1967,7 +1974,11 @@ async function fetchAlertPrice(symbol: string): Promise<number | null> {
     const binanceSymbol = symbol.toUpperCase().endsWith("USDT")
       ? symbol.toUpperCase()
       : symbol.toUpperCase() + "USDT";
-    const res = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${binanceSymbol}`);
+    const res = await fetchWithTimeout(
+      `https://api.binance.com/api/v3/ticker/price?symbol=${binanceSymbol}`,
+      {},
+      4000
+    );
     if (!res.ok) return cached?.price ?? null;
     const data = (await res.json()) as any;
     const price = parseFloat(data.price);

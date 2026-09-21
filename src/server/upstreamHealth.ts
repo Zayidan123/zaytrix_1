@@ -1,4 +1,5 @@
 import { createLogger } from "./logger";
+import { fetchWithTimeout } from "./httpUtils";
 const log = createLogger("upstreamHealth");
 
 // =============================================================================
@@ -50,9 +51,9 @@ const health: Record<string, UpstreamHealthEntry> = {};
 async function checkUpstream(upstream: UpstreamConfig): Promise<void> {
   const start = Date.now();
   try {
-    const res = await fetch(upstream.url, {
+    const res = await fetchWithTimeout(upstream.url, {
       signal: AbortSignal.timeout(upstream.timeout),
-    });
+    }, 5000);
     health[upstream.name] = {
       healthy: res.ok,
       lastCheck: Date.now(),

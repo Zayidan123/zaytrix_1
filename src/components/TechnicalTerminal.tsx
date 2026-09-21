@@ -163,11 +163,11 @@ export default function TechnicalTerminal({
     const rPeriod = parseInt(rsiPeriod) || 14;
     
     if (history.length === 0) {
-      return { 
-        sma: selectedAsset?.price || 0, 
-        rsi: 50, 
-        upperBand: (selectedAsset?.price || 0) * 1.05, 
-        lowerBand: (selectedAsset?.price || 0) * 0.95 
+      return {
+        sma: null,
+        rsi: null,
+        upperBand: null,
+        lowerBand: null,
       };
     }
     
@@ -177,7 +177,16 @@ export default function TechnicalTerminal({
     const smaSubset = history.slice(Math.max(0, lastIdx - sPeriod + 1));
     const sma = smaSubset.reduce((sum, item) => sum + item.close, 0) / smaSubset.length;
     
-    // 2. RSI calculation
+    // 2. RSI calculation — require enough history; never return synthetic 50
+    if (history.length <= rPeriod) {
+      return {
+        sma: null,
+        rsi: null,
+        upperBand: null,
+        lowerBand: null,
+      };
+    }
+    
     let rsi = 50;
     if (history.length > rPeriod) {
       let gains = 0;
@@ -216,7 +225,11 @@ export default function TechnicalTerminal({
   const technicalSentiment = React.useMemo(() => {
     const { sma, rsi, lowerBand, upperBand } = computedMetrics;
     const currentPrice = selectedAsset?.price || 0;
-    
+
+    if (sma === null || rsi === null || lowerBand === null || upperBand === null) {
+      return { sentiment: "NEUTRAL" as const, score: 50, explanation: "Data historis belum tersedia — indikator teknis belum dapat dihitung (estimasi)." };
+    }
+
     let score = 50;
     
     // RSI sentiment impact
@@ -914,20 +927,23 @@ export default function TechnicalTerminal({
               <div className="border-t border-slate-900 pt-2 grid grid-cols-2 gap-2 text-[10px] font-mono">
                 <div>
                   <span className="text-slate-500 block">RSI ({rsiPeriod}D):</span>
-                  <span className={`font-bold ${computedMetrics.rsi < 30 ? "text-emerald-400" : computedMetrics.rsi > 70 ? "text-rose-500 font-semibold" : "text-slate-300"}`}>
-                    {computedMetrics.rsi}
+                  <span className={`font-bold ${computedMetrics.rsi === null ? "text-slate-500" : computedMetrics.rsi < 30 ? "text-emerald-400" : computedMetrics.rsi > 70 ? "text-rose-500 font-semibold" : "text-slate-300"}`}>
+                    {computedMetrics.rsi === null ? "N/A (estimasi)" : computedMetrics.rsi}
                   </span>
                 </div>
                 <div>
                   <span className="text-slate-500 block">SMA ({smaPeriod}D):</span>
                   <span className="text-slate-300 font-bold">
-                    {formatVal(computedMetrics.sma, isCrypto)}
+                    {computedMetrics.sma === null ? "N/A (estimasi)" : formatVal(computedMetrics.sma, isCrypto)}
                   </span>
                 </div>
                 <div className="col-span-2">
                   <span className="text-slate-500 block">Bollinger ({bollingerStd}x):</span>
                   <span className="text-slate-400 block text-[9.5px]">
-                    H: {formatVal(computedMetrics.upperBand, isCrypto)}<br />L: {formatVal(computedMetrics.lowerBand, isCrypto)}
+                    {computedMetrics.upperBand === null
+                      ? "N/A (estimasi)"
+                      : <>H: {formatVal(computedMetrics.upperBand, isCrypto)}<br />L: {formatVal(computedMetrics.lowerBand, isCrypto)}</>
+                    }
                   </span>
                 </div>
               </div>

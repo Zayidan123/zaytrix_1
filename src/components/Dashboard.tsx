@@ -1410,6 +1410,7 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
                   }`}>
                     {(liveBtcChange ?? autoAnalysis?.metrics?.change24h ?? 0) >= 0 ? "+" : ""}
                     {(liveBtcChange ?? autoAnalysis?.metrics?.change24h ?? 1.42).toFixed(2)}%
+                    {!liveBtcChange && !autoAnalysis?.metrics?.change24h && <span className="text-slate-500 ml-1">[EST]</span>}
                   </span>
                 </div>
                 <div className="mt-1">

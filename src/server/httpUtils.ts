@@ -89,16 +89,96 @@ const STATUS_TEXTS: Record<number, string> = {
 };
 
 // ---------------------------------------------------------------------------
+// Circuit breaker — protects Binance fetches from cascading timeouts when the
+// upstream is unreachable.  After 3 consecutive failures the circuit OPENS
+// and requests fail FAST (no network wait) for 30s.  After the reset window a
+// single HALF_OPEN probe is allowed; on success the circuit closes again.
+// ---------------------------------------------------------------------------
+interface CircuitState {
+  failures: number;
+  state: "CLOSED" | "OPEN" | "HALF_OPEN";
+  openedAt: number;
+}
+
+const circuits = new Map<string, CircuitState>();
+const CIRCUIT_FAILURE_THRESHOLD = 3;
+const CIRCUIT_RESET_TIMEOUT_MS = 30_000;
+
+function circuitKey(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
+}
+
+function shouldTripCircuit(key: string): boolean {
+  const state = circuits.get(key);
+  if (!state || state.state === "CLOSED") return false;
+  if (state.state === "HALF_OPEN") return false; // allow the single probe
+  return Date.now() - state.openedAt < CIRCUIT_RESET_TIMEOUT_MS;
+}
+
+function markCircuitFailure(key: string): void {
+  const state = circuits.get(key) || { failures: 0, state: "CLOSED", openedAt: 0 };
+  state.failures += 1;
+  if (state.failures >= CIRCUIT_FAILURE_THRESHOLD) {
+    state.state = "OPEN";
+    state.openedAt = Date.now();
+    console.warn(`[httpUtils] Circuit OPEN for ${key} after ${state.failures} consecutive failures`);
+  }
+  circuits.set(key, state);
+}
+
+function markCircuitSuccess(key: string): void {
+  const state = circuits.get(key);
+  if (state) {
+    state.failures = 0;
+    state.state = "CLOSED";
+    state.openedAt = 0;
+    circuits.set(key, state);
+  }
+}
+
+function allowHalfOpenProbe(key: string): boolean {
+  const state = circuits.get(key);
+  if (!state || state.state !== "OPEN") return true;
+  if (Date.now() - state.openedAt >= CIRCUIT_RESET_TIMEOUT_MS) {
+    state.state = "HALF_OPEN";
+    circuits.set(key, state);
+    return true;
+  }
+  return false;
+}
+
+function throwCircuitOpen(key: string): never {
+  throw new Error(`Circuit breaker OPEN for ${key}; upstream unreachable, failing fast`);
+}
+
+// ---------------------------------------------------------------------------
 // fetchWithTimeout — wraps Node 18+ global `fetch` with an AbortController
 // timeout.  If Node fetch is aborted/timed out (common in this environment),
 // the same request is retried through system `curl`.  Never throws for status
-// codes — the caller inspects `res.ok`.
+// codes — the caller inspects `res.ok`.  Circuit breaker is applied per host.
 // ---------------------------------------------------------------------------
 export async function fetchWithTimeout(url: string, options: any = {}, timeoutMs = 3500) {
+  const key = circuitKey(url);
+  if (shouldTripCircuit(key)) {
+    throwCircuitOpen(key);
+  }
+  if (!allowHalfOpenProbe(key)) {
+    throwCircuitOpen(key);
+  }
+
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, { ...options, signal: controller.signal });
+    if (!res.ok) {
+      markCircuitFailure(key);
+    } else {
+      markCircuitSuccess(key);
+    }
     return res;
   } catch (err: any) {
     const name = err?.name || "";
@@ -109,10 +189,22 @@ export async function fetchWithTimeout(url: string, options: any = {}, timeoutMs
       name === "TypeError" ||
       /abort|timed? out|network|fetch failed/i.test(message);
     if (!isAbort) {
+      markCircuitFailure(key);
       throw err;
     }
     console.info(`[httpUtils] Node fetch aborted for ${url}; retrying via curl (${name}: ${err?.message})`);
-    return fetchViaCurl(url, options, timeoutMs);
+    try {
+      const curlRes = await fetchViaCurl(url, options, timeoutMs);
+      if (!curlRes.ok) {
+        markCircuitFailure(key);
+      } else {
+        markCircuitSuccess(key);
+      }
+      return curlRes;
+    } catch (curlErr: any) {
+      markCircuitFailure(key);
+      throw curlErr;
+    }
   } finally {
     clearTimeout(id);
   }

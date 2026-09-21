@@ -7,7 +7,6 @@ import "dotenv/config";
 import express from "express";
 import http from "http";
 import path from "path";
-import { createServer as createViteServer } from "vite";
 
 // SEC-BACKEND: security + auth + audit + API key storage.
 import { applySecurityMiddleware, sanitizeError, authLimiter, apiNotFound } from "./src/server/security";
@@ -450,6 +449,7 @@ async function startServer() {
   // a single port, and removes an unnecessary open port from the process.
   const httpServer = http.createServer(app);
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true, hmr: { server: httpServer } },
       appType: "spa",

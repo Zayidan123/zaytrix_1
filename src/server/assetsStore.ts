@@ -30,6 +30,8 @@ const initialAssets: any[] = [
     change24h: 3.2,
     marketCap: 1170000000000000,
     volume24h: 350000000000,
+    isWarmup: true,
+    source: "WARMUP/SIMULATED" as const,
   },
   {
     id: "s_bbri",
@@ -40,6 +42,8 @@ const initialAssets: any[] = [
     change24h: -1.2,
     marketCap: 742000000000000,
     volume24h: 410000000000,
+    isWarmup: true,
+    source: "WARMUP/SIMULATED" as const,
   },
   {
     id: "s_tlkm",
@@ -50,6 +54,8 @@ const initialAssets: any[] = [
     change24h: 0.5,
     marketCap: 356000000000000,
     volume24h: 180000000000,
+    isWarmup: true,
+    source: "WARMUP/SIMULATED" as const,
   },
   {
     id: "s_goto",
@@ -60,6 +66,8 @@ const initialAssets: any[] = [
     change24h: -3.4,
     marketCap: 68000000000000,
     volume24h: 120000000000,
+    isWarmup: true,
+    source: "WARMUP/SIMULATED" as const,
   },
   {
     id: "s_asii",
@@ -70,6 +78,8 @@ const initialAssets: any[] = [
     change24h: 1.8,
     marketCap: 194000000000000,
     volume24h: 89000000000,
+    isWarmup: true,
+    source: "WARMUP/SIMULATED" as const,
   },
   {
     id: "s_unvr",
@@ -80,6 +90,8 @@ const initialAssets: any[] = [
     change24h: -0.2,
     marketCap: 106000000000000,
     volume24h: 42000000000,
+    isWarmup: true,
+    source: "WARMUP/SIMULATED" as const,
   },
   {
     id: "s_adro",
@@ -90,6 +102,8 @@ const initialAssets: any[] = [
     change24h: 2.5,
     marketCap: 87000000000000,
     volume24h: 65000000000,
+    isWarmup: true,
+    source: "WARMUP/SIMULATED" as const,
   },
   // Cryptocurrencies (Global)
   {
@@ -101,6 +115,8 @@ const initialAssets: any[] = [
     change24h: 0.0,
     marketCap: 1345000000000,
     volume24h: 28500000000,
+    isWarmup: true,
+    source: "WARMUP/SIMULATED" as const,
   },
   {
     id: "c_eth",
@@ -111,6 +127,8 @@ const initialAssets: any[] = [
     change24h: 0.0,
     marketCap: 425000000000,
     volume24h: 15100000000,
+    isWarmup: true,
+    source: "WARMUP/SIMULATED" as const,
   },
   {
     id: "c_sol",
@@ -121,6 +139,8 @@ const initialAssets: any[] = [
     change24h: 0.0,
     marketCap: 74500000000,
     volume24h: 3800000000,
+    isWarmup: true,
+    source: "WARMUP/SIMULATED" as const,
   },
   {
     id: "c_bnb",
@@ -131,6 +151,8 @@ const initialAssets: any[] = [
     change24h: 0.0,
     marketCap: 86500000000,
     volume24h: 1200000000,
+    isWarmup: true,
+    source: "WARMUP/SIMULATED" as const,
   },
   {
     id: "c_doge",
@@ -141,6 +163,8 @@ const initialAssets: any[] = [
     change24h: 0.0,
     marketCap: 20500000000,
     volume24h: 980000000,
+    isWarmup: true,
+    source: "WARMUP/SIMULATED" as const,
   },
   {
     id: "c_ada",
@@ -151,6 +175,8 @@ const initialAssets: any[] = [
     change24h: 0.0,
     marketCap: 1650000000,
     volume24h: 340000000,
+    isWarmup: true,
+    source: "WARMUP/SIMULATED" as const,
   },
   {
     id: "c_xrp",
@@ -161,6 +187,8 @@ const initialAssets: any[] = [
     change24h: 0.0,
     marketCap: 28500000000,
     volume24h: 890000000,
+    isWarmup: true,
+    source: "WARMUP/SIMULATED" as const,
   },
   {
     id: "c_sui",
@@ -171,6 +199,8 @@ const initialAssets: any[] = [
     change24h: 0.0,
     marketCap: 2900000000,
     volume24h: 210000000,
+    isWarmup: true,
+    source: "WARMUP/SIMULATED" as const,
   },
   {
     id: "c_pepe",
@@ -181,6 +211,8 @@ const initialAssets: any[] = [
     change24h: 0.0,
     marketCap: 6100000000,
     volume24h: 1350000000,
+    isWarmup: true,
+    source: "WARMUP/SIMULATED" as const,
   },
   {
     id: "c_link",
@@ -191,6 +223,8 @@ const initialAssets: any[] = [
     change24h: 0.0,
     marketCap: 9200000000,
     volume24h: 250000000,
+    isWarmup: true,
+    source: "WARMUP/SIMULATED" as const,
   },
   {
     id: "c_avax",
@@ -201,6 +235,8 @@ const initialAssets: any[] = [
     change24h: 0.0,
     marketCap: 12800000000,
     volume24h: 420000000,
+    isWarmup: true,
+    source: "WARMUP/SIMULATED" as const,
   },
   {
     id: "c_shib",
@@ -211,6 +247,8 @@ const initialAssets: any[] = [
     change24h: 0.0,
     marketCap: 12600000000,
     volume24h: 650000000,
+    isWarmup: true,
+    source: "WARMUP/SIMULATED" as const,
   }
 ];
 
@@ -268,6 +306,9 @@ export async function refreshLiveAssets() {
               asset.volume24h = parseFloat(t.quoteVolume);
             }
             asset.isStale = false;
+            // DATA-5: live refresh succeeded — clear warmup labels.
+            asset.isWarmup = false;
+            asset.source = "live";
             updatedSymbols.add(sym);
           }
         }
@@ -345,6 +386,9 @@ export async function refreshLiveAssets() {
             if (asset) {
               asset.price = price;
               asset.isStale = false;
+              // DATA-5: live refresh succeeded — clear warmup labels.
+              asset.isWarmup = false;
+              asset.source = "live";
               updatedSymbols.add(asset.symbol.toUpperCase());
               if (prevClose != null && prevClose > 0) {
                 asset.change24h = parseFloat((((price - prevClose) / prevClose) * 100).toFixed(2));

@@ -68,7 +68,7 @@ function setSessionCookie(res: Response, token: string): void {
   res.cookie(COOKIE_NAME, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: isSecureCookieRequired(),
     path: "/",
     maxAge: TOKEN_TTL_MS,
   });
@@ -162,11 +162,21 @@ function frontendBaseUrl(): string {
 // ---------------------------------------------------------------------------
 const STATE_COOKIE = "zaytrix_oauth_state";
 
+function isSecureCookieRequired(): boolean {
+  // Only set the Secure flag when the app is actually served over HTTPS.
+  // For local/HTTP deployment (even production builds behind a non-TLS proxy),
+  // forcing Secure would silently drop the session cookie in the browser.
+  return (
+    process.env.NODE_ENV === "production" &&
+    (process.env.APP_URL || "").startsWith("https://")
+  );
+}
+
 function setStateCookie(res: Response, state: string): void {
   res.cookie(STATE_COOKIE, state, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: isSecureCookieRequired(),
     path: "/",
     maxAge: 10 * 60 * 1000, // 10 minutes — plenty for the OAuth round-trip
   });
@@ -189,7 +199,7 @@ function setOAuth2faCookie(res: Response, tempToken: string): void {
   res.cookie(OAUTH_2FA_COOKIE, tempToken, {
     httpOnly: true, // JS must NOT read the temp token
     sameSite: "lax", // survives the redirect back from Google
-    secure: process.env.NODE_ENV === "production",
+    secure: isSecureCookieRequired(),
     path: "/",
     maxAge: OAUTH_2FA_COOKIE_TTL_MS,
   });

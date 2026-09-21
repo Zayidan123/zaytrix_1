@@ -44,6 +44,7 @@
 
 import WebSocket from "ws";
 import { createLogger } from "./logger";
+import { fetchWithTimeout } from "./httpUtils";
 
 const log = createLogger("whaleStream");
 
@@ -174,10 +175,8 @@ async function backfillFromRest() {
   const results = await Promise.allSettled(
     WHALE_SYMBOLS.map(async (sym) => {
       const url = `https://api.binance.com/api/v3/aggTrades?symbol=${sym}USDT&limit=1000`;
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 10_000);
       try {
-        const r = await fetch(url, { signal: ctrl.signal });
+        const r = await fetchWithTimeout(url, {}, 10_000);
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const trades = (await r.json()) as any[];
         if (!Array.isArray(trades)) throw new Error("no array");
@@ -192,7 +191,7 @@ async function backfillFromRest() {
         }
         return added;
       } finally {
-        clearTimeout(timer);
+        /* timer cleanup moved into fetchWithTimeout */
       }
     })
   );

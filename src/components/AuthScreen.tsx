@@ -614,6 +614,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
 
             {/* Form rendering */}
             {authMode === "login" && !altFlow && (
+              <>
               <motion.form
                 initial={{ opacity: 0, x: -10 }}
                 animate={{ opacity: 1, x: 0 }}
@@ -672,7 +673,21 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
               {loading ? "Memvalidasi Kredensial..." : "MASUK KE TERMINAL UTAMA"}
             </button>
           </motion.form>
-        )}
+
+          {/* SEC2-AUTH: Google OAuth login — backend route manages
+              the config state honestly (redirects with
+              ?oauth_error=oauth_tidak_dikonfigurasi when unconfigured). */}
+          <button
+            type="button"
+            onClick={() => {
+              window.location.assign("/api/auth/google");
+            }}
+            className="w-full bg-slate-800/80 border border-slate-700 hover:bg-slate-700/80 disabled:opacity-50 py-2.5 rounded-lg text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition-all"
+          >
+            <Chrome className="w-4 h-4" /> Masuk dengan Google Akun
+          </button>
+          </>
+          )}
 
         {/* SEC2-AUTH: 2FA challenge flow — shown when loginUser() returns requiresTwoFactor. */}
         {altFlow === "2fa" && (

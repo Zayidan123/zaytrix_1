@@ -154,9 +154,9 @@ export default function MarketSentimentWidget() {
     return () => clearInterval(interval);
   }, []);
 
-  const fgValue = metrics?.fearGreed?.current?.value ?? 50;
-  const fgClass = metrics?.fearGreed?.current?.classification ?? "Neutral";
-  const band = useMemo(() => getBand(fgValue), [fgValue]);
+  const fgValue = metrics?.fearGreed?.current?.value ?? null;
+  const fgClass = metrics?.fearGreed?.current?.classification ?? null;
+  const band = useMemo(() => (fgValue !== null ? getBand(fgValue) : null), [fgValue]);
 
   const totalMc = global?.totalMc;
   const totalVol = global?.totalVol;
@@ -183,7 +183,7 @@ export default function MarketSentimentWidget() {
               Market Sentiment Radar
             </h4>
             <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-slate-950 text-emerald-400 border border-emerald-900/60">
-              LIVE
+              {!loading && metrics?.fearGreed?.current ? "LIVE" : "—"}
             </span>
           </div>
           <p className="text-[11px] text-slate-400">
@@ -203,7 +203,13 @@ export default function MarketSentimentWidget() {
       {/* Gauge + value */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
         <div className="flex flex-col items-center">
-          <SentimentGauge value={fgValue} color={band.color} />
+          {fgValue !== null ? (
+            <SentimentGauge value={fgValue} color={band.color} />
+          ) : (
+            <div className="w-full max-w-[280px] mx-auto text-3xl font-black text-slate-500 flex items-center justify-center" style={{ height: 120 }}>
+              —
+            </div>
+          )}
           <AnimatePresence mode="wait">
             <motion.div
               key={band.label}
@@ -215,19 +221,19 @@ export default function MarketSentimentWidget() {
             >
               <div className="flex items-baseline gap-1 justify-center">
                 <span className="text-3xl font-black" style={{ color: band.color }}>
-                  {fgValue}
+                  {fgValue !== null ? fgValue : "—"}
                 </span>
                 <span className="text-xs text-slate-500 font-mono">/100</span>
               </div>
               <span
-                className="inline-block mt-1 px-2 py-0.5 rounded text-[10px] font-bold tracking-wider"
-                style={{
+                className={`inline-block mt-1 px-2 py-0.5 rounded text-[10px] font-bold tracking-wider ${!metrics?.fearGreed?.current ? "bg-slate-800/50 text-slate-500 border border-slate-700/50" : ""}`}
+                style={metrics?.fearGreed?.current ? {
                   color: band.color,
                   backgroundColor: `${band.color}20`,
                   border: `1px solid ${band.color}40`,
-                }}
+                } : undefined}
               >
-                {band.label}
+                {metrics?.fearGreed?.current ? band.label : "Menunggu data"}
               </span>
               <p className="text-[10px] text-slate-400 mt-1 font-mono">{fgClass}</p>
             </motion.div>

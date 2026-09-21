@@ -19,6 +19,7 @@ import crypto from "crypto";
 import { prisma } from "./db";
 import { logAudit } from "./audit";
 import { requireAuth } from "./auth";
+import { fetchWithTimeout } from "./httpUtils";
 
 // ---------------------------------------------------------------------------
 // AES-256-GCM key derivation (cached after first call)
@@ -103,7 +104,7 @@ async function probeExchangeAuth(
       const payload = `recvWindow=5000&timestamp=${timestamp}`;
       const sig = crypto.createHmac("sha256", apiSecret).update(payload).digest("hex");
       const url = `https://api.binance.com/api/v3/account?${payload}&signature=${sig}`;
-      const r = await fetch(url, { headers: { "X-MBX-APIKEY": apiKey } });
+      const r = await fetchWithTimeout(url, { headers: { "X-MBX-APIKEY": apiKey } }, 5000);
       const data = (await r.json()) as any;
       if (r.status === 401 || data?.code === -2015 || (data?.msg || "").includes("Invalid")) {
         return { ok: false, error: `Binance: ${data?.msg || "Unauthorized"}` };
