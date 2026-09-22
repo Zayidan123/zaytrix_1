@@ -17,6 +17,12 @@ const execFileP = promisify(execFile);
 const DEFAULT_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
+export function sanitizeHeaderValue(value: string): string {
+  // Strip carriage return and newline characters to prevent HTTP header injection
+  // when the value is passed as a -H argument to curl.
+  return value.replace(/[\r\n]+/g, "");
+}
+
 function buildCurlArgs(url: string, options: any, timeoutMs: number): string[] {
   const timeoutSec = Math.max(1, Math.ceil(timeoutMs / 1000));
   const rawHeaders: Record<string, string> =
@@ -27,6 +33,11 @@ function buildCurlArgs(url: string, options: any, timeoutMs: number): string[] {
     "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
     ...rawHeaders,
   };
+
+  // Sanitize all header values to prevent CRLF injection
+  for (const key of Object.keys(headers)) {
+    headers[key] = sanitizeHeaderValue(headers[key]);
+  }
 
   const args: string[] = [
     "-sS",

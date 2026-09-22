@@ -448,7 +448,7 @@ app.get("/api/onchain/orderbook", async (req, res) => {
     orderbookCache.set(symbol, { data: payload, ts: now });
     return res.json(payload);
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message || String(err) });
+    return res.status(500).json({ success: false, error: "Gagal memproses permintaan. Silakan coba lagi nanti." });
   }
 });
 
@@ -536,7 +536,7 @@ app.get("/api/onchain/altcoin-season", async (req, res) => {
     altcoinSeasonCacheTime = now;
     return res.json(payload);
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message || String(err) });
+    return res.status(500).json({ success: false, error: "Gagal memproses permintaan. Silakan coba lagi nanti." });
   }
 });
 
@@ -574,7 +574,7 @@ app.get("/api/onchain/oi-history", async (req, res) => {
     oiHistoryCache.set(cacheKey, { data: payload, ts: now });
     return res.json(payload);
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message || String(err) });
+    return res.status(500).json({ success: false, error: "Gagal memproses permintaan. Silakan coba lagi nanti." });
   }
 });
 
@@ -679,7 +679,7 @@ app.get("/api/onchain/dominance-history", async (req, res) => {
     dominanceHistoryCache.set(cacheKey, { data: payload, ts: now });
     return res.json(payload);
   } catch (err: any) {
-    return res.json({ success: false, error: err.message || String(err) });
+    return res.json({ success: false, error: "Gagal memproses permintaan. Silakan coba lagi nanti." });
   }
 });
 
@@ -785,7 +785,7 @@ app.get("/api/onchain/correlations", async (req, res) => {
     correlationsCache = { data: payload, ts: now };
     return res.json(payload);
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message || String(err) });
+    return res.status(500).json({ success: false, error: "Gagal memproses permintaan. Silakan coba lagi nanti." });
   }
 });
 } // end registerOnchainRoutes

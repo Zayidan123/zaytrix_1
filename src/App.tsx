@@ -54,6 +54,7 @@ import PaperTrading from "./components/PaperTrading";
 import Settings from "./components/Settings";
 import Ledger from "./components/Ledger";
 import NewsSection from "./components/NewsSection";
+import PublicDataDashboard from "./components/PublicDataDashboard";
 import CoinsRankings from "./components/CoinsRankings";
 import { motion, AnimatePresence } from "motion/react";
 // OPT-7: Firebase removed — server-side JWT+Prisma (/api/auth/me) is the sole
@@ -1359,6 +1360,10 @@ export default function App() {
 
               {activeTab === "news" && (
                 <NewsSection />
+              )}
+
+              {activeTab === "data-sources" && (
+                <PublicDataDashboard />
               )}
 
               {activeTab === "coins" && (

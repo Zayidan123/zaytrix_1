@@ -66,7 +66,7 @@ app.get("/api/fx/usd-idr", async (req, res) => {
   } catch (err: any) {
     return res.json({
       success: false,
-      error: err.message || String(err),
+      error: "Gagal memproses permintaan. Silakan coba lagi nanti.",
       rate: null
     });
   }
@@ -238,7 +238,7 @@ app.get("/api/news", async (req, res) => {
     return res.json({
       success: false,
       articles: [],
-      error: err.message || String(err)
+      error: "Gagal memproses permintaan. Silakan coba lagi nanti."
     });
   }
 });

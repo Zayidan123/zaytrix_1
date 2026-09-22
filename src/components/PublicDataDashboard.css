@@ -1,0 +1,21 @@
+/* PublicDataDashboard — extra styles beyond Tailwind utility classes */
+
+/* Fear & Greed gauge label pulse when in extreme zones */
+@keyframes gauge-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.65; }
+}
+
+.fgd-gauge-extreme {
+  animation: gauge-pulse 1.6s ease-in-out infinite;
+}
+
+/* Smooth tooltip scaling for public data cards */
+.public-data-card {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.public-data-card:hover {
+  border-color: rgba(56, 189, 248, 0.25);
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.08), 0 4px 24px rgba(0, 0, 0, 0.3);
+}

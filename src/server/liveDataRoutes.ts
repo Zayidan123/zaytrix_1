@@ -318,7 +318,7 @@ liveDataRouter.get("/api/live/long-short-ratio", async (req, res) => {
       isEstimated: true,
       error:
         "Gagal mengambil data Long/Short dari Binance Futures. Sumber: fapi.binance.com.",
-      detail: err?.message || String(err),
+      ...(process.env.NODE_ENV === "production" ? {} : { detail: err?.message || String(err) }),
       source: "binance_futures",
       lastUpdated: new Date().toISOString(),
     });
@@ -383,7 +383,7 @@ liveDataRouter.get("/api/live/hashrate", async (req, res) => {
       isEstimated: true,
       error:
         "Gagal mengambil data hashrate dari mempool.space. Coba lagi nanti.",
-      detail: err?.message || String(err),
+      ...(process.env.NODE_ENV === "production" ? {} : { detail: err?.message || String(err) }),
       source: "mempool.space",
       lastUpdated: new Date().toISOString(),
     });
@@ -465,7 +465,7 @@ liveDataRouter.get("/api/live/active-addresses", async (req, res) => {
       history: [],
       error:
         "Gagal mengambil data alamat aktif. Sumber gratis (Coinmetrics / blockchain.info) tidak tersedia.",
-      detail: err?.message || String(err),
+      ...(process.env.NODE_ENV === "production" ? {} : { detail: err?.message || String(err) }),
       source: "none",
       lastUpdated: new Date().toISOString(),
     });
@@ -827,7 +827,7 @@ liveDataRouter.get("/api/live/etf-flows", async (req, res) => {
       history: [],
       error:
         "Gagal parsing tabel ETF dari Farside Investors (HTML diperoleh, tetapi struktur tabel berubah / tidak dikenali).",
-      detail: err?.message || String(err),
+      ...(process.env.NODE_ENV === "production" ? {} : { detail: err?.message || String(err) }),
       source: "farside.co.uk",
       lastUpdated: new Date().toISOString(),
     });
@@ -1175,7 +1175,7 @@ liveDataRouter.get("/api/live/s2f", async (req, res) => {
       isEstimated: true,
       history: [],
       error: "Gagal menghitung Stock-to-Flow.",
-      detail: err?.message || String(err),
+      ...(process.env.NODE_ENV === "production" ? {} : { detail: err?.message || String(err) }),
       source: "computed",
       lastUpdated: new Date().toISOString(),
     });
@@ -1417,7 +1417,7 @@ liveDataRouter.get("/api/live/drawdown", async (req, res) => {
       history: [],
       error:
         "Gagal mengambil data harga BTC untuk perhitungan drawdown (blockchain.info).",
-      detail: err?.message || String(err),
+      ...(process.env.NODE_ENV === "production" ? {} : { detail: err?.message || String(err) }),
       source: "blockchain.info",
       lastUpdated: new Date().toISOString(),
     });
@@ -1488,7 +1488,7 @@ liveDataRouter.get("/api/live/nvt", async (req, res) => {
       history: [],
       error:
         "Gagal menghitung NVT — blockchain.info market-cap / estimated-transaction-volume tidak tersedia.",
-      detail: err?.message || String(err),
+      ...(process.env.NODE_ENV === "production" ? {} : { detail: err?.message || String(err) }),
       source: "blockchain.info",
       lastUpdated: new Date().toISOString(),
     });
@@ -1593,7 +1593,7 @@ liveDataRouter.get("/api/live/miner-data", async (req, res) => {
       topPools: [],
       error:
         "Gagal mengambil data miner (blockchain.info / mempool.space).",
-      detail: err?.message || String(err),
+      ...(process.env.NODE_ENV === "production" ? {} : { detail: err?.message || String(err) }),
       source: "blockchain.info+mempool.space",
       lastUpdated: new Date().toISOString(),
     });
@@ -1735,7 +1735,7 @@ liveDataRouter.get("/api/live/dominance-history", async (req, res) => {
       history: [],
       error:
         "Gagal mengambil data dominance (CoinGecko / blockchain.info).",
-      detail: err?.message || String(err),
+      ...(process.env.NODE_ENV === "production" ? {} : { detail: err?.message || String(err) }),
       source: "coingecko",
       lastUpdated: new Date().toISOString(),
     });

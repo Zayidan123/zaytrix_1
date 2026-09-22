@@ -418,7 +418,7 @@ export function registerPaperTrading(app: Express): void {
     } catch (err: any) {
       // Error pengguna (kas kurang / posisi kurang) → 400 dengan pesan Indonesia.
       if (err instanceof PaperUserError) {
-        return res.status(400).json({ success: false, error: err.message });
+        return res.status(400).json({ success: false, error: "Data perdagangan tidak valid. Silakan periksa kembali input Anda." });
       }
       log.error("[order] gagal mengeksekusi order paper:", err?.message || err);
       return res.status(500).json({ success: false, error: "Gagal mengeksekusi order virtual." });

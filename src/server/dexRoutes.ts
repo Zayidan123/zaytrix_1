@@ -297,7 +297,7 @@ app.get("/api/dex/pairs", async (req, res) => {
       return res.status(503).json(offline503("Silakan coba lagi beberapa saat."));
     }
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err?.message || String(err) });
+    return res.status(500).json({ success: false, error: "Gagal memproses permintaan. Silakan coba lagi nanti." });
   }
 });
 
@@ -358,7 +358,7 @@ app.get("/api/dex/search", async (req, res) => {
       return res.status(503).json(offline503("Silakan coba lagi beberapa saat."));
     }
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err?.message || String(err) });
+    return res.status(500).json({ success: false, error: "Gagal memproses permintaan. Silakan coba lagi nanti." });
   }
 });
 

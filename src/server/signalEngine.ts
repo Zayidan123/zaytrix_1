@@ -347,7 +347,7 @@ app.post("/api/trading-signals/generate-manual", requireAuth, (req, res) => {
       notes: notes || ""
     });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message || String(err) });
+    return res.status(500).json({ success: false, error: "Gagal memproses sinyal. Silakan coba lagi nanti." });
   }
 });
 } // end registerSignalRoutes

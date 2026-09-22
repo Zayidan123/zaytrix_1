@@ -238,7 +238,7 @@ app.get("/api/coins/tickers", async (req, res) => {
     if (tickersCache) {
       return res.json({ success: true, tickers: tickersCache, warning: "Served from expired cache due to external error" });
     }
-    return res.status(500).json({ success: false, error: err.message });
+    return res.status(500).json({ success: false, error: "Gagal memproses permintaan. Silakan coba lagi nanti." });
   }
 });
 

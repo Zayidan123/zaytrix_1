@@ -30,6 +30,22 @@ import { createLogger } from "./logger";
 
 const log = createLogger("geminiRoutes");
 
+// Validate and cap AI generation parameters to prevent token-cost DoS.
+function validateAiParams(body: any): { temp: number; tokens: number; ok: boolean; err?: string } {
+  const temp = body.aiTemperature !== undefined ? Number(body.aiTemperature) : undefined;
+  const tokens = body.aiMaxTokens !== undefined ? Number(body.aiMaxTokens) : undefined;
+  if (temp !== undefined && (Number.isNaN(temp) || temp < 0 || temp > 2)) {
+    return { temp: 0.7, tokens: 800, ok: false, err: "temperature harus antara 0 dan 2." };
+  }
+  if (tokens !== undefined && (Number.isNaN(tokens) || tokens < 1)) {
+    return { temp: 0.7, tokens: 800, ok: false, err: "maxTokens tidak valid." };
+  }
+  if (tokens !== undefined && tokens > 32000) {
+    return { temp: temp ?? 0.7, tokens: 32000, ok: true };
+  }
+  return { temp: temp ?? 0.7, tokens: tokens ?? 800, ok: true };
+}
+
 
 
 function getOfflineNewsSentiment(_articleId: string, _articleTitle: string): any {
@@ -460,8 +476,12 @@ app.post("/api/gemini/analyze", async (req, res) => {
 
     // QA8-C: generation config shared by BOTH transports (stream + non-stream)
     // so the two paths can never drift apart.
-    const temp = aiTemperature !== undefined ? Number(aiTemperature) : 0.72;
-    const tokens = aiMaxTokens !== undefined ? Number(aiMaxTokens) : 800;
+    const validated = validateAiParams(req.body);
+    if (!validated.ok) {
+      return res.status(400).json({ success: false, error: validated.err });
+    }
+    const temp = validated.temp;
+    const tokens = validated.tokens;
     const analyzeSystemInstruction = "Anda adalah asisten AI Analis Keuangan & Manajemen Portofolio yang andal, bergelar CFA (Chartered Financial Analyst). Tugas Anda adalah menyajikan ulasan mendalam, tajam, komprehensif, berbasis data statistik, tanpa jargon pemasaran kosong, serta memberikan interpretasi strategis riil.";
 
     // QA8-C: SSE streaming branch — same request body + "stream": true.
@@ -498,7 +518,7 @@ app.post("/api/gemini/analyze", async (req, res) => {
           send({ type: "done", analysis: fullText, isFallback: false });
         } catch (err: any) {
           const fallbackReport = generateDynamicFallbackReport(type, modelData, assetComparison);
-          send({ type: "done", analysis: fallbackReport, isFallback: true, errorReason: err?.message || String(err) });
+          send({ type: "done", analysis: fallbackReport, isFallback: true, errorReason: "Gagal menyelesaikan analisis. Silakan coba lagi nanti." });
         }
       });
       return;
@@ -531,7 +551,7 @@ app.post("/api/gemini/analyze", async (req, res) => {
   } catch (err: any) {
     log.info("Gemini Error info (using local fallback report):", err.message || err);
     const fallbackReport = generateDynamicFallbackReport(type, modelData, assetComparison);
-    res.json({ analysis: fallbackReport, isFallback: true, errorReason: err.message || String(err) });
+    res.json({ analysis: fallbackReport, isFallback: true, errorReason: "Gagal menyelesaikan analisis. Silakan coba lagi nanti." });
   }
 });
 
@@ -632,7 +652,7 @@ app.post("/api/gemini/news-sentiment", async (req, res) => {
           send({ type: "done", ...parsed, isFallback: false });
         } catch (err: any) {
           const offline = getOfflineNewsSentiment(id, title);
-          send({ type: "done", ...offline, isFallback: true, errorReason: err?.message || String(err) });
+          send({ type: "done", ...offline, isFallback: true, errorReason: "Gagal menyelesaikan analisis. Silakan coba lagi nanti." });
         }
       });
       return;
@@ -662,7 +682,7 @@ app.post("/api/gemini/news-sentiment", async (req, res) => {
   } catch (err: any) {
     log.info("[News Sentiment Error] Using local offline fallback:", err.message || err);
     const offline = getOfflineNewsSentiment(id, title);
-    res.json({ ...offline, isFallback: true, errorReason: err.message || String(err) });
+    res.json({ ...offline, isFallback: true, errorReason: "Gagal menyelesaikan analisis. Silakan coba lagi nanti." });
   }
 });
 
@@ -863,7 +883,7 @@ Tuliskan opini Anda secara lugas, dingin, berwibawa, saksama, obyektif, dalam ba
           send({ type: "done", analysis: fullText, isFallback: false });
         } catch (err: any) {
           const fallbackReport = generateDynamicOnChainFallback(symbol, req.body);
-          send({ type: "done", analysis: fallbackReport, isFallback: true, errorReason: err?.message || String(err) });
+          send({ type: "done", analysis: fallbackReport, isFallback: true, errorReason: "Gagal menyelesaikan analisis. Silakan coba lagi nanti." });
         }
       });
       return;
@@ -892,7 +912,7 @@ Tuliskan opini Anda secara lugas, dingin, berwibawa, saksama, obyektif, dalam ba
   } catch (err: any) {
     log.info("Gemini Onchain Error info (using local fallback report):", err.message || err);
     const fallbackReport = generateDynamicOnChainFallback(symbol, req.body);
-    res.json({ analysis: fallbackReport, isFallback: true, errorReason: err.message || String(err) });
+    res.json({ analysis: fallbackReport, isFallback: true, errorReason: "Gagal menyelesaikan analisis. Silakan coba lagi nanti." });
   }
 });
 
@@ -962,8 +982,12 @@ Sajikan secara dingin, logis, obyektif, bernilai tinggi.
       text: promptText
     };
 
-    const temp = aiTemperature !== undefined ? Number(aiTemperature) : 0.35;
-    const tokens = aiMaxTokens !== undefined ? Number(aiMaxTokens) : 1000;
+    const validated = validateAiParams(req.body);
+    if (!validated.ok) {
+      return res.status(400).json({ success: false, error: validated.err });
+    }
+    const temp = validated.temp;
+    const tokens = validated.tokens;
     const thinkingVal = mapThinkingLevel(aiThinkingMode);
 
     // QA10-A: SSE streaming branch — same body (pdfData/fileName/category/…)
@@ -1012,7 +1036,7 @@ Sajikan secara dingin, logis, obyektif, bernilai tinggi.
           // Mirrors the non-stream catch fallback (raw fileName/category —
           // argument-for-argument identical).
           const fallback = generateResilientPdfReportFallback(fileName || "Berkas.pdf", category);
-          send({ type: "done", analysis: fallback, isFallback: true, errorReason: err?.message || String(err) });
+          send({ type: "done", analysis: fallback, isFallback: true, errorReason: "Gagal menyelesaikan analisis. Silakan coba lagi nanti." });
         }
       });
       return;
@@ -1042,7 +1066,7 @@ Sajikan secara dingin, logis, obyektif, bernilai tinggi.
   } catch (err: any) {
     log.info("Gemini PDF Error info (using local PDF report template):", err.message || err);
     const fallback = generateResilientPdfReportFallback(fileName || "Berkas.pdf", category);
-    res.json({ analysis: fallback, isFallback: true, errorReason: err.message || String(err) });
+    res.json({ analysis: fallback, isFallback: true, errorReason: "Gagal menyelesaikan analisis. Silakan coba lagi nanti." });
   }
 });
 
@@ -1128,8 +1152,12 @@ Tolong buat Laporan Evaluasi Komparatif Finansial Berbobot Tinggi setingkat CFA 
         text: promptText
       };
 
-      const temp = aiTemperature !== undefined ? Number(aiTemperature) : 0.38;
-      const tokens = aiMaxTokens !== undefined ? Number(aiMaxTokens) : 1200;
+      const validated = validateAiParams(req.body);
+      if (!validated.ok) {
+        return { systemInstruction, pdfParts, textPart, temp: 0.38, tokens: 1200, thinkingVal: mapThinkingLevel(aiThinkingMode), error: validated.err };
+      }
+      const temp = validated.temp;
+      const tokens = validated.tokens;
       const thinkingVal = mapThinkingLevel(aiThinkingMode);
 
       return { systemInstruction, pdfParts, textPart, temp, tokens, thinkingVal };
@@ -1181,7 +1209,7 @@ Tolong buat Laporan Evaluasi Komparatif Finansial Berbobot Tinggi setingkat CFA 
           // category — argument-for-argument identical).
           const mockFileNames = files.map(f => f.fileName);
           const fallback = generateResilientMultiPdfReportFallback(mockFileNames, category);
-          send({ type: "done", analysis: fallback, isFallback: true, errorReason: err?.message || String(err) });
+          send({ type: "done", analysis: fallback, isFallback: true, errorReason: "Gagal menyelesaikan analisis. Silakan coba lagi nanti." });
         }
       });
       return;
@@ -1212,7 +1240,7 @@ Tolong buat Laporan Evaluasi Komparatif Finansial Berbobot Tinggi setingkat CFA 
     log.info("Gemini Multi-PDF Error info (using local multi-PDF comparison report):", err.message || err);
     const mockFileNames = files.map(f => f.fileName);
     const fallback = generateResilientMultiPdfReportFallback(mockFileNames, category);
-    res.json({ analysis: fallback, isFallback: true, errorReason: err.message || String(err) });
+    res.json({ analysis: fallback, isFallback: true, errorReason: "Gagal menyelesaikan analisis. Silakan coba lagi nanti." });
   }
 });
 
@@ -1390,7 +1418,7 @@ Scraper jaringan onchain kami yang menelusuri data ledger resmi (*${onchainMetri
         onchainHealth: sentimentText,
         analysis: localAnalysis
       },
-      { isFallback: true, errorReason: errorMsg }
+      { isFallback: true, errorReason: "Gagal menyelesaikan analisis. Silakan coba lagi nanti." }
     );
 
     geminiCacheSet(cacheKey, JSON.stringify(resultPayload));
@@ -1438,7 +1466,7 @@ Scraper jaringan onchain kami yang menelusuri data ledger resmi (*${onchainMetri
         geminiCacheSet(cacheKey, JSON.stringify(resultPayload));
         send({ type: "done", ...resultPayload, isFallback: false });
       } catch (err: any) {
-        send({ type: "done", ...buildFallbackResult(err?.message || String(err)) });
+        send({ type: "done", ...buildFallbackResult("Gagal menyelesaikan analisis. Silakan coba lagi nanti.") });
       }
     });
     return;
@@ -1473,7 +1501,7 @@ Scraper jaringan onchain kami yang menelusuri data ledger resmi (*${onchainMetri
 
   } catch (err: any) {
     log.info(`[Trade Signal Gemini Log] Using resilient local fallback model:`, err.message || err);
-    return res.json(buildFallbackResult(err.message || String(err)));
+    return res.json(buildFallbackResult("Gagal menyelesaikan analisis. Silakan coba lagi nanti."));
   }
 });
 } // end registerGeminiRoutes

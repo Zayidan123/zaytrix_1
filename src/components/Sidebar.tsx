@@ -59,6 +59,7 @@ export default function Sidebar({
     { id: "dashboard", name: "Dashboard", icon: LayoutDashboard },
     { id: "coins", name: "Coins Rankings", icon: Layers, status: "100 COINS" },
     { id: "news", name: "Newsroom Feed", icon: Newspaper, status: "THE BLOCK" },
+    { id: "data-sources", name: "Data Sources", icon: Radar, status: "NO-KEY API" },
     { id: "assets", name: "Crypto Hub", icon: Coins },
     { id: "whale-tracker", name: "On-Chain Data", icon: Radar, status: "MEMPOOL LIVE" },
     { id: "dex", name: "DEX Radar", icon: CandlestickChart, status: "SCREENER" },
@@ -132,6 +133,7 @@ export default function Sidebar({
               ? (twoFactorEnabled ? "emerald" : "amber")
               : item.id === "ai-signals" ? "violet"
               : item.id === "market-chat" ? "violet"
+              : item.id === "data-sources" ? "cyan"
               : item.id === "whale-tracker" ? "cyan"
               : item.id === "dex" ? "teal"
               : item.id === "paper" ? "emerald"

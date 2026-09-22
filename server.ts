@@ -209,6 +209,18 @@ try {
   log.info("[liveData] router not yet available:", e?.message || e);
 }
 
+// ===========================================================================
+// PUBLIC DATA SOURCES — all free, no API key required (FRED, Alternative.me,
+// Binance, Yahoo Finance, DefiLlama, CoinMetrics, GitHub Trending, etc.).
+// ===========================================================================
+try {
+  const { publicDataRouter } = await import("./src/server/publicDataSources");
+  app.use(publicDataRouter);
+  log.info("[publicData] router mounted successfully.");
+} catch (e: any) {
+  log.info("[publicData] router not yet available:", e?.message || e);
+}
+
 // ─── AI Router (OpenRouter primary + Gemini fallback) ────────────────────
 try {
   const { callAI, callAIStream, getAIUsage, getAIProviderHealth, testOpenRouterConnection, test9RouterConnection, getUserAiQuota } = await import("./src/server/aiRouter");
@@ -236,6 +248,10 @@ try {
   app.post("/api/ai/chat", requireAuth, async (req: any, res) => {
     const { prompt, systemPrompt, maxTokens, temperature, model } = req.body;
     if (!prompt) return res.status(400).json({ success: false, error: "Prompt wajib diisi." });
+    // Prevent token-cost DoS via oversized prompts.
+    if (typeof prompt === "string" && prompt.length > 32000) {
+      return res.status(400).json({ success: false, error: "Prompt terlalu panjang. Maks 32.000 karakter." });
+    }
 
     const result = await callAI({
       prompt,
@@ -261,6 +277,10 @@ try {
   app.post("/api/ai/chat-stream", requireAuth, async (req: any, res) => {
     const { prompt, systemPrompt, maxTokens, temperature, model } = req.body;
     if (!prompt) return res.status(400).json({ success: false, error: "Prompt wajib diisi." });
+    // Prevent token-cost DoS via oversized prompts.
+    if (typeof prompt === "string" && prompt.length > 32000) {
+      return res.status(400).json({ success: false, error: "Prompt terlalu panjang. Maks 32.000 karakter." });
+    }
 
     // QA10-E: kuota AI harian per-user (QA11-F: batas kini PLAN-AWARE).
     // getUserAiQuota fail-open JUJUR (userId kosong / DB error → unlimited:true)
