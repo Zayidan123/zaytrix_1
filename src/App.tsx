@@ -484,7 +484,11 @@ export default function App() {
         icon: LogOut,
         hint: "session",
         keywords: "keluar logout log out signout sesi",
-        action: () => { logoutUser(); },
+        action: () => {
+          logoutUser();
+          setUser(null);
+          localStorage.clear();
+        },
       },
     ];
     return [...navItems, ...themeItems, ...actionItems];
@@ -514,6 +518,7 @@ export default function App() {
         // Map id → uid so components that historically read user.uid
         // (Profile.tsx, Dashboard.tsx) keep working with the new AuthUser shape.
         setUser({ ...u, uid: u.id });
+        setTwoFactorEnabled(Boolean(u.twoFactorEnabled));
         // SEC2-DATA: fetch portfolio/ledger/conversions/alerts from server on login.
         fetchPortfolioFromServer();
       } else {
@@ -1944,8 +1949,10 @@ export default function App() {
         <footer className="h-8 bg-[#0F172A] border-t border-slate-800 px-4 sm:px-6 flex items-center justify-between z-10 text-[10px] text-slate-500 shrink-0 select-none">
           <div className="flex items-center space-x-2 sm:space-x-4">
             <div className="flex items-center space-x-1.5">
-              <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              <span className="uppercase tracking-tighter font-mono">CORE FEED: ONLINE</span>
+              <div className={`w-1.5 h-1.5 rounded-full ${assetsOffline ? "bg-rose-500" : "bg-emerald-500"} animate-pulse`} />
+              <span className="uppercase tracking-tighter font-mono">
+                CORE FEED: {assetsOffline ? "OFFLINE" : "ONLINE"}
+              </span>
             </div>
             <div className="hidden sm:flex items-center space-x-1.5 border-l border-slate-800 pl-4">
               {twoFactorEnabled ? (

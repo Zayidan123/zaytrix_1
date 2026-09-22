@@ -39,7 +39,7 @@ interface GlobalStore {
   solPriceDirection: "up" | "down" | "flat";
   trxPriceDirection: "up" | "down" | "flat";
   hypePriceDirection: "up" | "down" | "flat";
-  tickerSource: "WebSocket" | "HTTP Polling" | "Local Simulation";
+  tickerSource: "WebSocket" | "HTTP Polling";
   
   setPortfolio: (portfolio: PortfolioAsset[]) => void;
   addHolding: (holding: PortfolioAsset) => void;
@@ -61,7 +61,7 @@ interface GlobalStore {
   addLedgerTransaction: (tx: LedgerTransaction) => void;
   updateNotificationConfig: (config: Partial<NotificationChannelConfig>) => void;
   
-  setTickerSource: (source: "WebSocket" | "HTTP Polling" | "Local Simulation") => void;
+  setTickerSource: (source: "WebSocket" | "HTTP Polling") => void;
   updateBtcPrice: (price: number, changePercent?: number, direction?: "up" | "down" | "flat") => void;
   updateEthPrice: (price: number, changePercent?: number, direction?: "up" | "down" | "flat") => void;
   updateBnbPrice: (price: number, changePercent?: number, direction?: "up" | "down" | "flat") => void;

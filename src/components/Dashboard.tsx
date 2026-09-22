@@ -829,7 +829,7 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
     ];
   }, [riskProfile]);
 
-  // Daily performance history simulation
+  // Synthetic visual estimate only — not historical performance.
   const performanceHistory = useMemo(() => {
     // FIX-ALL #11: explicit `any[]` element type so strictNullChecks doesn't
     // narrow to `never[]` after the first push (TS infers never[] when the
@@ -1202,12 +1202,12 @@ export default function Dashboard({ assets, portfolio, onAddHolding, onRemoveHol
             <div>
               <div className="flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
-                <h4 className="text-sm sm:text-base font-bold text-white">Grafik Tren Kinerja Portofolio</h4>
+                <h4 className="text-sm sm:text-base font-bold text-white">Estimasi Tren Kinerja Portofolio</h4>
               </div>
-              <p className="text-xs text-slate-400 mt-1">Total nilai kepemilikan aset dihitung historis berdasarkan interpolasi harian</p>
+              <p className="text-xs text-slate-400 mt-1">Kurva visual ini dibuat dari data sintetis untuk preview UI — bukan riwayat kinerja aktual</p>
             </div>
-            <span className="text-[10px] sm:text-xs font-mono font-bold bg-slate-950 text-blue-400 px-3 py-1 rounded-lg border border-slate-800/60 self-start sm:self-auto">
-              SISTEM SIMULASI HISTORIS
+            <span className="text-[10px] sm:text-xs font-mono font-bold bg-slate-950 text-amber-400 px-3 py-1 rounded-lg border border-amber-500/30 self-start sm:self-auto">
+              DATA SINTETIS / ESTIMASI
             </span>
           </div>
 

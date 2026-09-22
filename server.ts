@@ -467,7 +467,8 @@ async function startServer() {
         // Decode URL to catch encoded bypasses like /server%2emjs or /server.mjs%2emap
         // Express req.path is NOT decoded, so we decode req.url manually.
         const decodedPath = decodeURIComponent(req.url || "").split("?")[0];
-        if (decodedPath === "/server.mjs" || decodedPath === "/server.mjs.map") {
+        const cleaned = decodedPath.replace(/\/+/g, "/");
+        if (cleaned === "/server.mjs" || cleaned === "/server.mjs.map") {
           return res.status(404).json({ success: false, error: "Endpoint tidak ditemukan." });
         }
       } catch {

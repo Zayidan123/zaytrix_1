@@ -25,6 +25,7 @@ import { verifyFirebaseIdToken, findOrCreateUser, isFirebaseConfigured } from ".
 import { getSessionSecret, setSessionCookie, TOKEN_TTL_SECONDS, JWT_ISSUER, JWT_AUDIENCE } from "./authConfig";
 import { prisma } from "./db";
 import { logAudit } from "./audit";
+import { recordSession } from "./auth";
 
 export const firebaseAuthRouter = Router();
 
@@ -70,6 +71,7 @@ firebaseAuthRouter.post("/verify", async (req: Request, res: Response, next: Nex
     );
 
     setSessionCookie(res, token);
+    await recordSession(req, user.id, token);
     await logAudit(user.id, "LOGIN", req, true, { provider: "firebase", isNew: created });
 
     // Public user shape matches auth.ts publicUser() for consistency.

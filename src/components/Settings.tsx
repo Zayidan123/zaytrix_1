@@ -47,6 +47,8 @@ import Profile from "./Profile";
 // QA4-F1: panel operator log terstruktur — baca GET /api/system/logs (QA3-F1).
 import SystemLogsPanel from "./SystemLogsPanel";
 import AiUsagePanel from "./AiUsagePanel";
+// Keamanan 2FA dipindahkan ke SecurityCenter (server-backed, bukan toggle lokal).
+import SecurityCenter from "./SecurityCenter";
 
 export default function Settings() {
   const settings = useGlobalStore(state => state.settings);
@@ -1221,56 +1223,7 @@ export default function Settings() {
             <div className="space-y-6 animate-fade-in" id="settings-hub-security">
               
               {/* Google Authenticator Setup & State */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                
-                {/* 2-Factor Setup */}
-                <div className="bg-[#0A0F1D]/60 border border-slate-800 rounded-xl p-5 space-y-4">
-                  <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                    <h3 className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
-                      <Fingerprint className="w-4 h-4 text-blue-400" />
-                      Google Authenticator (2FA)
-                    </h3>
-                    <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full ${
-                      twoFactorEnabled ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30" : "bg-amber-500/15 text-amber-400 border border-amber-500/30 animate-pulse"
-                    }`}>
-                      {twoFactorEnabled ? "MAKSIMAL AKTIF" : "DIASURANSIKAN"}
-                    </span>
-                  </div>
-
-                  <p className="text-xs text-slate-400 leading-relaxed">
-                    Setiap instruksi eksekusi margin di bursa dan penarikan visual memerlukan otorisasi sandisandi OTP sekuritas 6-digit demi keselamatan aset Anda.
-                  </p>
-
-                  {twoFactorEnabled ? (
-                    <div className="bg-slate-950 p-4 rounded text-center space-y-3">
-                      <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto" />
-                      <span className="text-xs font-bold text-slate-200 block">Perlindungan 2FA Aktif Penuh</span>
-                      <button
-                        onClick={() => {
-                          setTwoFactorEnabled(false);
-                          addExecutionLog("[SECURITY] Otorisasi 2FA dimatikan oleh pengguna.");
-                        }}
-                        className="px-3 py-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 rounded font-semibold text-[10px] uppercase transition-colors cursor-pointer"
-                      >
-                        Matikan Proteksi 2FA
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="bg-slate-950 p-4 rounded text-center space-y-3">
-                      <Lock className="w-8 h-8 text-amber-500 mx-auto animate-bounce" />
-                      <span className="text-xs font-bold text-slate-300 block">Sangat Disarankan Mengaktifkan 2FA</span>
-                      <button
-                        onClick={() => {
-                          setTwoFactorEnabled(true);
-                          addExecutionLog("[SECURITY] Otentikasi Multi-Faktor 2FA diaktifkan secara instan.");
-                        }}
-                        className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded font-bold text-xs uppercase cursor-pointer"
-                      >
-                        Aktifkan 2FA Instan
-                      </button>
-                    </div>
-                  )}
-                </div>
+              <SecurityCenter twoFactorEnabled={twoFactorEnabled} setTwoFactorEnabled={setTwoFactorEnabled} />
 
                 {/* Educational AES-GCM cipher demo (Web Crypto API) — honestly
                     framed as a learning tool, not an application data feature. */}
@@ -1320,8 +1273,6 @@ export default function Settings() {
                     )}
                   </div>
                 </div>
-
-              </div>
 
               {/* Active Sessions Devices List */}
               <div className="p-5 rounded-xl border border-slate-800 bg-[#0A0F1D]/60 space-y-4">

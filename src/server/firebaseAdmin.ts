@@ -74,7 +74,7 @@ export function getFirebaseAuth(): ReturnType<typeof getAuth> | null {
 
 export async function verifyFirebaseIdToken(
   idToken: string
-): Promise<{ uid: string; email: string | null; displayName: string | null; providerId: string } | null> {
+): Promise<{ uid: string; email: string | null; displayName: string | null; emailVerified: boolean; providerId: string } | null> {
   const auth = getFirebaseAuth();
   if (!auth) return null;
 
@@ -84,6 +84,7 @@ export async function verifyFirebaseIdToken(
       uid: decoded.uid,
       email: decoded.email || null,
       displayName: decoded.name || decoded.email || null,
+      emailVerified: !!decoded.email_verified,
       providerId: decoded.firebase?.sign_in_provider || "unknown",
     };
   } catch (err: any) {
@@ -93,7 +94,7 @@ export async function verifyFirebaseIdToken(
 }
 
 export async function findOrCreateUser(
-  firebaseUser: { uid: string; email: string | null; displayName: string | null; providerId: string }
+  firebaseUser: { uid: string; email: string | null; displayName: string | null; emailVerified: boolean; providerId: string }
 ): Promise<{ user: any; created: boolean } | null> {
   const { prisma } = await import("./db");
   if (!firebaseUser.email) return null;
@@ -103,12 +104,19 @@ export async function findOrCreateUser(
     if (user) {
       // Update oauth fields if they were set via another provider.
       if (!user.oauthProvider || user.oauthProvider !== "firebase") {
+        // SEC3-AUTH: never link a Firebase identity to an existing account
+        // unless Firebase confirms the email is verified.
+        if (!firebaseUser.emailVerified) {
+          log("link refused: Firebase email not verified", firebaseUser.email);
+          return null;
+        }
         await prisma.user.update({
           where: { id: user.id },
           data: {
             oauthProvider: "firebase",
             oauthId: firebaseUser.uid,
             displayName: firebaseUser.displayName || user.displayName,
+            emailVerified: user.emailVerified || new Date(),
           },
         });
         user = await prisma.user.findUnique({ where: { id: user.id } });
@@ -123,6 +131,7 @@ export async function findOrCreateUser(
         displayName: firebaseUser.displayName || firebaseUser.email.split("@")[0],
         oauthProvider: "firebase",
         oauthId: firebaseUser.uid,
+        emailVerified: firebaseUser.emailVerified ? new Date() : null,
       },
     });
     return { user, created: true };
