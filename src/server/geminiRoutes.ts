@@ -1081,6 +1081,12 @@ app.post("/api/gemini/analyze-multi-pdf", async (req, res) => {
     return res.status(400).json({ error: "Jumlah maksimum sumber perbandingan yang diizinkan adalah 5." });
   }
 
+  // Validate AI generation parameters early to prevent token-cost DoS.
+  const validatedMultiPdf = validateAiParams(req.body);
+  if (!validatedMultiPdf.ok) {
+    return res.status(400).json({ success: false, error: validatedMultiPdf.err });
+  }
+
   try {
     const selectedCategory = category === "crypto" ? "crypto" : "stock";
 
@@ -1152,12 +1158,8 @@ Tolong buat Laporan Evaluasi Komparatif Finansial Berbobot Tinggi setingkat CFA 
         text: promptText
       };
 
-      const validated = validateAiParams(req.body);
-      if (!validated.ok) {
-        return { systemInstruction, pdfParts, textPart, temp: 0.38, tokens: 1200, thinkingVal: mapThinkingLevel(aiThinkingMode), error: validated.err };
-      }
-      const temp = validated.temp;
-      const tokens = validated.tokens;
+      const temp = validatedMultiPdf.temp;
+      const tokens = validatedMultiPdf.tokens;
       const thinkingVal = mapThinkingLevel(aiThinkingMode);
 
       return { systemInstruction, pdfParts, textPart, temp, tokens, thinkingVal };
@@ -1252,6 +1254,12 @@ app.post("/api/gemini/trading-signals/analyze", async (req, res) => {
     return res.status(400).json({ error: "Simbol instrumen wajib dikirimkan." });
   }
 
+  // Validate AI generation parameters early to prevent token-cost DoS.
+  const validatedSignal = validateAiParams(req.body);
+  if (!validatedSignal.ok) {
+    return res.status(400).json({ success: false, error: validatedSignal.err });
+  }
+
   const upperSymbol = symbol.toUpperCase().trim();
   const asset = liveAssets.find(a => a.symbol === upperSymbol);
   const matchedAsset = asset || {
@@ -1332,8 +1340,8 @@ app.post("/api/gemini/trading-signals/analyze", async (req, res) => {
     systemInstruction = "Anda adalah Leverage Degen Trader Advisor agresif yang menyukai volatilitas ekstrem. Berikan gaya analisis berisiko tinggi bervolume tebal, gunakan istilah perdagangan leverage, dan tekankan aliansi akumulasi agresif institusi.";
   }
 
-  const temp = aiTemperature !== undefined ? Number(aiTemperature) : 0.28;
-  const tokens = aiMaxTokens !== undefined ? Number(aiMaxTokens) : 800;
+  const temp = validatedSignal.temp;
+  const tokens = validatedSignal.tokens;
 
   // QA8-C: shared final payload assembly (success path) — exact same fields,
   // defaults and recordGeneratedSignal side effect as the pre-QA8-C code.
