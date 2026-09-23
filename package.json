@@ -11,7 +11,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js dist/server.cjs",
     "lint": "tsc --noEmit",
-    "test": "NODE_ENV=production ZAYTRIX_TEST_PORT=4170 vitest run",
+    "test": "NODE_ENV=test ZAYTRIX_TEST_PORT=4170 vitest run",
     "test:watch": "vitest",
     "db:push": "prisma db push",
     "db:generate": "prisma generate",

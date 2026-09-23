@@ -468,7 +468,7 @@ async function startServer() {
   // errors). Same-origin HMR also works behind a reverse proxy that forwards
   // a single port, and removes an unnecessary open port from the process.
   const httpServer = http.createServer(app);
-  if (process.env.NODE_ENV !== "production") {
+  if (process.env.NODE_ENV !== "production" && process.env.NODE_ENV !== "test") {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true, hmr: { server: httpServer } },
