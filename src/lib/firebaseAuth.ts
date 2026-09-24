@@ -12,7 +12,7 @@ import {
   signOutFirebase as fbSignOut,
   getIdToken,
   resetPassword as fbResetPassword,
-  sendEmailVerification as fbSendEmailVerification,
+  sendEmailVerificationToCurrentUser as fbSendEmailVerification,
   isConfigured,
 } from "./firebase";
 

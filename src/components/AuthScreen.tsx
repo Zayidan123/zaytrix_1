@@ -1,9 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import {
-  loginUser,
-  registerUser,
-  loginWith2FA,
+import { loginWith2FA,
   fetchCurrentUser,
   forgotPassword,
   resetPassword,
@@ -687,9 +684,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
               ?oauth_error=oauth_tidak_dikonfigurasi when unconfigured). */}
           <button
             type="button"
-            onClick={() => {
-              window.location.assign("/api/auth/google");
-            }}
+            onClick={() => void handleGoogleSignIn()}
             className="w-full bg-slate-800/80 border border-slate-700 hover:bg-slate-700/80 disabled:opacity-50 py-2.5 rounded-lg text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition-all"
           >
             <Chrome className="w-4 h-4" /> Masuk dengan Google Akun
@@ -697,7 +692,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
           </>
           )}
 
-        {/* SEC2-AUTH: 2FA challenge flow — shown when loginUser() returns requiresTwoFactor. */}
+        {/* SEC2-AUTH: 2FA challenge flow — shown when login returns requiresTwoFactor. */}
         {altFlow === "2fa" && (
           <form onSubmit={handleTwoFactorVerify} className="space-y-4">
             <div className="space-y-1">

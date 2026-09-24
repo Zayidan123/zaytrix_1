@@ -24,8 +24,8 @@ import {
   Layers
 } from "lucide-react";
 import { useGlobalStore } from "../store";
-// OPT-7: Firebase removed — call server-side logoutUser() instead of signOut(auth).
-import { logoutUser } from "../lib/auth";
+// SEC3-AUTH: Firebase handles Google sign-in client-side.
+// The old server-side redirect (/api/auth/google) is no longer used.
 import { firebaseLogout } from "../lib/firebaseAuth";
 
 interface SidebarProps {

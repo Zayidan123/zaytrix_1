@@ -66,8 +66,6 @@ import AuthScreen from "./components/AuthScreen";
 import SplashScreen from "./components/SplashScreen";
 // QA5-F2: global Ctrl+K command palette — keyboard-first navigation + actions.
 import CommandPalette, { PaletteItem } from "./components/CommandPalette";
-import { logoutUser } from "./lib/auth";
-import { firebaseLogout } from "./lib/firebaseAuth";
 
 export default function App() {
   const [activeTab, setActiveTab ] = useState("dashboard");
@@ -380,9 +378,8 @@ export default function App() {
   // While it is false, App shows SplashScreen as a LOADING indicator
   // (no auto-login bypass — see the gate near the bottom of this component).
   const [authReady, setAuthReady] = useState(false);
-  // OPT-7: the Firebase onAuthStateChanged listener + firebaseListenerReadyRef
-  // were removed. /api/auth/me (above) is the sole auth source. Sidebar now
-  // calls logoutUser() directly — no DOM click-walker hack needed.
+  // SEC3-AUTH: server-side JWT+Prisma (/api/auth/me) is the sole auth source. Sidebar now
+  // calls firebaseLogout() directly — no DOM click-walker hack needed.
   const portfolio = useGlobalStore(state => state.portfolio);
   const alerts = useGlobalStore(state => state.alerts);
   const twoFactorEnabled = useGlobalStore(state => state.twoFactorEnabled);

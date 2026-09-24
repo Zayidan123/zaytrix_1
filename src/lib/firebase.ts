@@ -17,14 +17,11 @@ import {
   GoogleAuthProvider,
   FacebookAuthProvider,
   GithubAuthProvider,
-  AppleAuthProvider,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signOut,
-  sendEmailVerification,
   sendPasswordResetEmail,
   updateProfile,
-  RecaptchaVerifier,
   type Auth,
   type UserCredential,
 } from "firebase/auth";
@@ -122,10 +119,10 @@ export async function signOutFirebase(): Promise<void> {
 }
 
 /** Send email verification to the current user. */
-export async function sendEmailVerification(): Promise<void> {
+export async function sendEmailVerificationToCurrentUser(): Promise<void> {
   const auth = getFirebaseAuth();
   if (!auth || !auth.currentUser) return;
-  await sendEmailVerification(auth.currentUser);
+  await import("firebase/auth").then(({ sendEmailVerification }) => sendEmailVerification(auth!.currentUser!));
 }
 
 /** Send a password reset email. */
@@ -140,20 +137,4 @@ export async function getIdToken(): Promise<string | null> {
   const auth = getFirebaseAuth();
   if (!auth || !auth.currentUser) return null;
   return auth.currentUser.getIdToken();
-}
-
-/** Initialize reCAPTCHA verifier for phone auth (if needed later). */
-export function initRecaptcha(containerId: string): RecaptchaVerifier | null {
-  if (typeof window === "undefined") return null;
-  const auth = getFirebaseAuth();
-  if (!auth) return null;
-  try {
-    return new RecaptchaVerifier(containerId, {
-      size: "normal",
-      theme: "dark",
-      callback: () => {},
-    }, auth);
-  } catch {
-    return null;
-  }
 }
