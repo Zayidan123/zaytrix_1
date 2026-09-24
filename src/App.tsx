@@ -59,10 +59,8 @@ import CoinsRankings from "./components/CoinsRankings";
 import { motion, AnimatePresence } from "motion/react";
 // OPT-7: Firebase removed — server-side JWT+Prisma (/api/auth/me) is the sole
 // auth source. The previous `auth` import from "./lib/firebase" is deleted.
-import { fetchCurrentUser } from "./lib/auth";
-import { firebaseLogout } from "./lib/firebaseAuth";
+import { logoutUser } from "./lib/auth";
 import { fetchPortfolioFromServer, schedulePortfolioSync, markAlertSynced } from "./lib/portfolioSync";
-import AuthScreen from "./components/AuthScreen";
 import SplashScreen from "./components/SplashScreen";
 // QA5-F2: global Ctrl+K command palette — keyboard-first navigation + actions.
 import CommandPalette, { PaletteItem } from "./components/CommandPalette";
@@ -374,12 +372,9 @@ export default function App() {
   // Connect state declarations with Zustand global store
   const user = useGlobalStore(state => state.user);
   const setUser = useGlobalStore(state => state.setUser);
-  // authReady flips true once the initial /api/auth/me check resolves.
-  // While it is false, App shows SplashScreen as a LOADING indicator
-  // (no auto-login bypass — see the gate near the bottom of this component).
+  // authReady flips true immediately in guest mode; SplashScreen is only the
+  // visual loading phase before the dashboard.
   const [authReady, setAuthReady] = useState(false);
-  // SEC3-AUTH: server-side JWT+Prisma (/api/auth/me) is the sole auth source. Sidebar now
-  // calls firebaseLogout() directly — no DOM click-walker hack needed.
   const portfolio = useGlobalStore(state => state.portfolio);
   const alerts = useGlobalStore(state => state.alerts);
   const twoFactorEnabled = useGlobalStore(state => state.twoFactorEnabled);
@@ -485,8 +480,8 @@ export default function App() {
         hint: "session",
         keywords: "keluar logout log out signout sesi",
         action: () => {
-          firebaseLogout();
-          setUser(null);
+          logoutUser();
+          setUser(guestUser);
           localStorage.clear();
         },
       },
@@ -506,28 +501,23 @@ export default function App() {
   // every 5 seconds. Reset to 0 on a successful ws.onopen.
   const wsRetryCountRef = useRef(0);
 
-  // PRIMARY auth gate: check server-side session via /api/auth/me on mount.
-  // The httpOnly `zaytrix_session` cookie cannot be read by JS, so /api/auth/me
-  // is the single source of truth for auth state. While this fetch is in-flight,
-  // SplashScreen is shown as a loading indicator (no auto-login bypass).
+  // GUEST MODE: user asked to skip login/register — splash → dashboard directly.
+  // No /api/auth/me call, no session cookie, no AuthScreen. We set a guest user
+  // so every component that reads `user.uid` / `user.email` / `user.displayName`
+  // (Dashboard, Profile, Sidebar, SecurityCenter) keeps working without null
+  // guards tripping. The guest user is a plain object — no server session exists.
+  const guestUser = useMemo(() => ({
+    id: "guest",
+    uid: "guest",
+    email: "guest@zaytrix.local",
+    displayName: "Z-Capital Guest",
+    twoFactorEnabled: false,
+  }), []);
   useEffect(() => {
-    let mounted = true;
-    fetchCurrentUser().then((u) => {
-      if (!mounted) return;
-      if (u) {
-        // Map id → uid so components that historically read user.uid
-        // (Profile.tsx, Dashboard.tsx) keep working with the new AuthUser shape.
-        setUser({ ...u, uid: u.id });
-        setTwoFactorEnabled(Boolean(u.twoFactorEnabled));
-        // SEC2-DATA: fetch portfolio/ledger/conversions/alerts from server on login.
-        fetchPortfolioFromServer();
-      } else {
-        setUser(null);
-      }
-      setAuthReady(true);
-    });
-    return () => { mounted = false; };
-  }, [setUser]);
+    setUser(guestUser);
+    setTwoFactorEnabled(false);
+    setAuthReady(true);
+  }, [guestUser, setUser]);
 
   // SEC2-DATA: debounced server sync for portfolio/ledger/conversions.
   // Subscribes to store changes; when user is logged in, pushes data to server
@@ -1056,36 +1046,10 @@ export default function App() {
     }).catch((e) => console.log("[App] Gagal menghapus alert dari server:", e));
   };
 
-  // Auth gate — three possible states:
-  //   1. !authReady        → server-side auth check in-flight → show SplashScreen
-  //                          as a LOADING indicator (its 3s onComplete timer is
-  //                          a no-op here; we re-render past it once authReady
-  //                          flips true). This is NOT the old splash-user bypass.
-  //   2. authReady && !user → no session cookie → show real AuthScreen.
-  //   3. authReady && user  → authenticated → render the dashboard.
-  // FUNC-8 (alert persistence): after any successful login (password, 2FA,
-  // backup code, OAuth, register), pull the server-persisted portfolio data
-  // (holdings/ledger/conversions/alerts) into the store. Previously this only
-  // happened when a session cookie already existed at page load, so a fresh
-  // login never fetched the server-side alerts → alerts "disappeared" after
-  // re-login until the local sync pushed them again.
-  const handleAuthSuccess = (u: any) => {
-    // Map id → uid for legacy components (Profile.tsx, Dashboard.tsx)
-    // that read user.uid.
-    setUser({ ...u, uid: u.id });
-    fetchPortfolioFromServer();
-  };
-
+  // GUEST MODE: skip AuthScreen. SplashScreen → dashboard directly.
+  // The 3-second SplashScreen animation acts as the only "loading" phase.
   if (!authReady) {
-    return <SplashScreen onComplete={() => { /* no-op while auth check in-flight */ }} />;
-  }
-
-  if (!user) {
-    return (
-      <AuthScreen
-        onAuthSuccess={handleAuthSuccess}
-      />
-    );
+    return <SplashScreen onComplete={() => { /* no-op — authReady flips in useEffect above */ }} />;
   }
 
 

@@ -24,9 +24,9 @@ import {
   Layers
 } from "lucide-react";
 import { useGlobalStore } from "../store";
-// SEC3-AUTH: Firebase handles Google sign-in client-side.
-// The old server-side redirect (/api/auth/google) is no longer used.
-import { firebaseLogout } from "../lib/firebaseAuth";
+// GUEST MODE: no session cookie and no AuthScreen. Sidebar logout returns to
+// the same guest user after clearing local state.
+import { logoutUser } from "../lib/auth";
 
 interface SidebarProps {
   activeTab: string;
@@ -46,14 +46,19 @@ export default function Sidebar({
   setIsCollapsed 
 }: SidebarProps) {
   const user = useGlobalStore(state => state.user);
-  // OPT-7: server-side logout. Clears the httpOnly `zaytrix_session` cookie via
-  // POST /api/auth/logout, then nulls the global user + wipes localStorage so
-  // the next mount shows AuthScreen (no stale portfolio/ledger/alerts leak).
+  // GUEST MODE: logout clears the optional server session, then returns to the
+  // guest user so the app stays on the dashboard instead of showing AuthScreen.
   const handleLogout = async () => {
+    await logoutUser();
     try {
-      await firebaseLogout();
+      useGlobalStore.getState().setUser({
+        id: "guest",
+        uid: "guest",
+        email: "guest@zaytrix.local",
+        displayName: "Z-Capital Guest",
+        twoFactorEnabled: false,
+      });
     } catch {}
-    try { useGlobalStore.getState().setUser(null); } catch {}
     try { localStorage.clear(); } catch {}
   };
   const menuItems = [
