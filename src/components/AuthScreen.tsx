@@ -10,6 +10,7 @@ import {
   verifyEmail,
   type AuthUser,
 } from "../lib/auth";
+import { firebaseLogin, firebaseRegister, firebaseGoogleLogin } from "../lib/firebaseAuth";
 import { useGlobalStore } from "../store";
 import { Shield, Mail, Lock, Chrome, AlertCircle, CheckCircle, KeyRound, ArrowLeft, ShieldCheck, Fingerprint, Zap, LifeBuoy } from "lucide-react";
 
@@ -128,7 +129,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
     setSuccessMessage(null);
 
     try {
-      const result = await loginUser(email, password);
+      const result = await firebaseLogin(email, password);
       if (result.success && result.user) {
         addExecutionLog(`[SECURITY] Sesi otentikasi aman terjalin untuk user: ${result.user.email}`);
         onAuthSuccess(result.user);
@@ -142,7 +143,6 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
         setSuccessMessage(result.message || "Masukkan kode 6-digit dari aplikasi authenticator Anda.");
         addExecutionLog(`[SECURITY] 2FA diperlukan untuk user: ${email}`);
       } else {
-        // Backend returns friendly Indonesian error strings; fall back to a generic message.
         setErrMessage(result.error || "Email atau kata sandi salah. Periksa kembali kredensial Anda.");
       }
     } catch (err: any) {
@@ -303,19 +303,14 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
     setSuccessMessage(null);
 
     try {
-      const result = await registerUser(email, password, displayName);
+      const result = await firebaseRegister(email, password, displayName);
       if (result.success && result.user && result.user.id) {
         addExecutionLog(`[SECURITY] Pendaftaran akun baru diverifikasi untuk: ${email}`);
-        setSuccessMessage("Akun berhasil dibuat! Mengalihkan ke Dashboard ZAYTRIX...");
-        onAuthSuccess(result.user);
+        setSuccessMessage("Akun sudah dibuat! Masukkan email dan kata sandi untuk masuk.");
+        setAuthMode("login");
       } else if (result.success && result.user && result.user.id === null) {
-        // FIX (QA ronde 6): email sudah terdaftar → server membalas 201 generik
-        // (anti-enumeration, FIX-C-1) TANPA cookie sesi. Sebelumnya UI tetap
-        // membuka app shell dengan user ter-redact → semua fetch auth 401
-        // (ghost-anonymous shell, ditemukan browser QA). Sekarang: alihkan ke
-        // tab LOGIN + pesan generik yang sama (enumeration tetap mustahil).
         addExecutionLog(`[SECURITY] Registrasi diproses — lanjutkan dengan login: ${email}`);
-        setSuccessMessage(result.message || "Silakan masuk dengan email dan kata sandi Anda untuk melanjutkan.");
+        setSuccessMessage(result.message || "Silakan masuk dengan email dan kata sandi Anda.");
         setAuthMode("login");
         setEmail(email);
       } else {
@@ -334,11 +329,24 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
   // and the callback eventually redirects back to / with the session cookie
   // set. We use window.location.assign so the browser handles the redirects
   // natively (no CORS issues — same origin).
-  const handleGoogleSignIn = () => {
+  const handleGoogleSignIn = async () => {
     setErrMessage(null);
-    setSuccessMessage("Mengarahkan ke Google...");
-    addExecutionLog(`[SECURITY] Memulai aliran OAuth Google.`);
-    window.location.assign("/api/auth/google");
+    setSuccessMessage("Mengarahkan ke Google via Firebase...");
+    setLoading(true);
+    try {
+      const result = await firebaseGoogleLogin();
+      if (result.success && result.user) {
+        addExecutionLog(`[SECURITY] Login Google berhasil untuk: ${result.user.email}`);
+        onAuthSuccess(result.user);
+      } else {
+        setErrMessage(result.error || "Gagal login dengan Google. Silakan coba lagi.");
+      }
+    } catch (err: any) {
+      console.error(err);
+      setErrMessage("Gagal terhubung ke server. Periksa koneksi Anda.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   // FUNC-9 (backup-code login): recover access with a one-time 8-group backup

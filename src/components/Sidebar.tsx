@@ -26,6 +26,7 @@ import {
 import { useGlobalStore } from "../store";
 // OPT-7: Firebase removed — call server-side logoutUser() instead of signOut(auth).
 import { logoutUser } from "../lib/auth";
+import { firebaseLogout } from "../lib/firebaseAuth";
 
 interface SidebarProps {
   activeTab: string;
@@ -50,7 +51,7 @@ export default function Sidebar({
   // the next mount shows AuthScreen (no stale portfolio/ledger/alerts leak).
   const handleLogout = async () => {
     try {
-      await logoutUser();
+      await firebaseLogout();
     } catch {}
     try { useGlobalStore.getState().setUser(null); } catch {}
     try { localStorage.clear(); } catch {}

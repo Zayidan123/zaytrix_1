@@ -60,12 +60,14 @@ import { motion, AnimatePresence } from "motion/react";
 // OPT-7: Firebase removed — server-side JWT+Prisma (/api/auth/me) is the sole
 // auth source. The previous `auth` import from "./lib/firebase" is deleted.
 import { fetchCurrentUser } from "./lib/auth";
+import { firebaseLogout } from "./lib/firebaseAuth";
 import { fetchPortfolioFromServer, schedulePortfolioSync, markAlertSynced } from "./lib/portfolioSync";
 import AuthScreen from "./components/AuthScreen";
 import SplashScreen from "./components/SplashScreen";
 // QA5-F2: global Ctrl+K command palette — keyboard-first navigation + actions.
 import CommandPalette, { PaletteItem } from "./components/CommandPalette";
 import { logoutUser } from "./lib/auth";
+import { firebaseLogout } from "./lib/firebaseAuth";
 
 export default function App() {
   const [activeTab, setActiveTab ] = useState("dashboard");
@@ -486,7 +488,7 @@ export default function App() {
         hint: "session",
         keywords: "keluar logout log out signout sesi",
         action: () => {
-          logoutUser();
+          firebaseLogout();
           setUser(null);
           localStorage.clear();
         },

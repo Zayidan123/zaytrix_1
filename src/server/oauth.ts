@@ -1,5 +1,6 @@
 import { createLogger } from "./logger";
 const log = createLogger("oauth");
+const ALLOW_JWT_ONLY_FALLBACK = process.env.ZAYTRIX_JWT_ONLY_FALLBACK === "true";
 
 // ZAYTRIX Google OAuth (SEC2-AUTH).
 //
@@ -321,9 +322,28 @@ oauthRouter.get("/google/callback", async (req: Request, res: Response, next: Ne
     //    a stronger auth method (2FA) configured — if it does, we refuse
     //    silent linking and redirect to the login page with an error so the
     //    legitimate owner must authenticate first.
-    let user = await prisma.user.findFirst({ where: { oauthProvider: "google", oauthId: googleSub } });
+    let user;
+    try {
+      user = await prisma.user.findFirst({ where: { oauthProvider: "google", oauthId: googleSub } });
+    } catch (dbErr: any) {
+      if (ALLOW_JWT_ONLY_FALLBACK) {
+        log.warn("[oauth] DB unavailable for findFirst; using ephemeral fallback user:", dbErr?.message || dbErr);
+        user = null;
+      } else {
+        throw dbErr;
+      }
+    }
     if (!user) {
-      user = await prisma.user.findUnique({ where: { email } });
+      try {
+        user = await prisma.user.findUnique({ where: { email } });
+      } catch (dbErr: any) {
+        if (ALLOW_JWT_ONLY_FALLBACK) {
+          log.warn("[oauth] DB unavailable for findUnique; using ephemeral fallback user:", dbErr?.message || dbErr);
+          user = null;
+        } else {
+          throw dbErr;
+        }
+      }
       if (user) {
         // FIX-P1-D: refuse silent linking unless Google says the email is verified.
         if (!profile.email_verified) {
@@ -339,26 +359,40 @@ oauthRouter.get("/google/callback", async (req: Request, res: Response, next: Ne
           return res.redirect(302, `${frontendBaseUrl()}/?oauth_error=two_factor_protected`);
         }
         // Safe to link — the email is verified by Google AND the account has no 2FA.
-        user = await prisma.user.update({
-          where: { id: user.id },
-          data: { oauthProvider: "google", oauthId: googleSub, emailVerified: user.emailVerified || new Date() },
-        });
+        try {
+          user = await prisma.user.update({
+            where: { id: user.id },
+            data: { oauthProvider: "google", oauthId: googleSub, emailVerified: user.emailVerified || new Date() },
+          });
+        } catch (dbErr: any) {
+          if (ALLOW_JWT_ONLY_FALLBACK) {
+            log.warn("[oauth] DB unavailable for user.update; proceeding with existing user object:", dbErr?.message || dbErr);
+          } else {
+            throw dbErr;
+          }
+        }
       } else {
-        // Create a fresh account. We set a random password hash (the user
-        // cannot log in via password — they must use Google) so the passwordHash
-        // column is never null. oauthProvider=google gates the login UI.
-        const randomPassword = crypto.randomBytes(32).toString("hex");
-        const passwordHash = await bcrypt.hash(randomPassword, BCRYPT_ROUNDS);
-        user = await prisma.user.create({
-          data: {
-            email,
-            passwordHash,
-            displayName: name,
-            oauthProvider: "google",
-            oauthId: googleSub,
-            emailVerified: profile.email_verified ? new Date() : null,
-          },
-        });
+        if (ALLOW_JWT_ONLY_FALLBACK) {
+          // Ephemeral user for JWT-only fallback mode (no DB).
+          user = { id: `ephemeral-${googleSub}`, email, displayName: name, oauthProvider: "google", oauthId: googleSub, twoFactorEnabled: false, emailVerified: profile.email_verified ? new Date() : null } as any;
+          log.warn("[oauth] Ephemeral fallback user created for email:", email);
+        } else {
+          // Create a fresh account. We set a random password hash (the user
+          // cannot log in via password — they must use Google) so the passwordHash
+          // column is never null. oauthProvider=google gates the login UI.
+          const randomPassword = crypto.randomBytes(32).toString("hex");
+          const passwordHash = await bcrypt.hash(randomPassword, BCRYPT_ROUNDS);
+          user = await prisma.user.create({
+            data: {
+              email,
+              passwordHash,
+              displayName: name,
+              oauthProvider: "google",
+              oauthId: googleSub,
+              emailVerified: profile.email_verified ? new Date() : null,
+            },
+          });
+        }
       }
     }
 
@@ -382,9 +416,12 @@ oauthRouter.get("/google/callback", async (req: Request, res: Response, next: Ne
     setSessionCookie(res, token);
     await recordSession(req, user.id, token);
 
-    // 5. Redirect to the SPA root — the SPA's /api/auth/me check will pick up
-    //    the cookie and render the dashboard.
-    return res.redirect(302, frontendBaseUrl() + "/");
+    // 5. Redirect to the SPA root — preserve the request host so the cookie
+    //    and browser URL stay on the same origin (important for Termux/phone
+    //    access via localhost, 127.0.0.1, or LAN IP).
+    const requestHost = req.get("host") || "localhost:3000";
+    const requestProto = req.get("x-forwarded-proto") || req.protocol || "http";
+    return res.redirect(302, `${requestProto}://${requestHost}/`);
   } catch (err) {
     log.error("[oauth] callback error:", err);
     return res.redirect(302, `${frontendBaseUrl()}/?oauth_error=server_error`);

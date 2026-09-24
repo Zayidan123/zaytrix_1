@@ -17,6 +17,12 @@ const log = createLogger("auth");
 // In production (NODE_ENV=production) the cookie is also Secure (HTTPS only).
 // Token lifetime is 7 days; the 2FA temp-token is 5 minutes.
 //
+// ZAYTRIX_JWT_ONLY_FALLBACK=true lets local Termux/Android installs keep
+// working when Prisma's native engine cannot be loaded. In that mode, sessions
+// are JWT-only: login works, but revocation/session listing is unavailable.
+// Keep this OFF in production.
+const ALLOW_JWT_ONLY_FALLBACK = process.env.ZAYTRIX_JWT_ONLY_FALLBACK === "true";
+//
 // SEC2-AUTH additions (additive, no breaking changes to existing endpoints):
 //   - Login flow: if user.twoFactorEnabled, return {requiresTwoFactor:true, tempToken}
 //     instead of issuing the real session cookie. Frontend calls /login/2fa
@@ -340,6 +346,10 @@ async function validateSession(token: string, userId: string): Promise<boolean> 
       .catch(() => {});
     return true;
   } catch (e: any) {
+    if (ALLOW_JWT_ONLY_FALLBACK) {
+      log.warn("[auth] validateSession DB unavailable; accepting JWT-only session fallback");
+      return true;
+    }
     // SEC-5: fail-closed on DB error. A DB outage is visible in logs and ops
     // dashboards; silently honoring un-verifiable JWTs is NOT an option when
     // the whole point of the Session table is revocation.
